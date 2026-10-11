@@ -1,0 +1,101 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="64" y1="48" x2="448" y2="464" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0A0F1A"/>
+      <stop offset="1" stop-color="#050A12"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="128" y1="96" x2="384" y2="416" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7AF7B5"/>
+      <stop offset="1" stop-color="#2FE3A0"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="186" y1="152" x2="332" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#79F4FF"/>
+      <stop offset="1" stop-color="#4BE0D0"/>
+    </linearGradient>
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="28" fill="url(#bg)"/>
+
+  <!-- subtle grid -->
+  <g opacity="0.18" stroke="#6AF7D0" stroke-width="1">
+    <path d="M48 86H464"/>
+    <path d="M48 146H464"/>
+    <path d="M48 206H464"/>
+    <path d="M48 266H464"/>
+    <path d="M48 326H464"/>
+    <path d="M48 386H464"/>
+    <path d="M86 48V464"/>
+    <path d="M146 48V464"/>
+    <path d="M206 48V464"/>
+    <path d="M266 48V464"/>
+    <path d="M326 48V464"/>
+    <path d="M386 48V464"/>
+  </g>
+
+  <!-- outer hexagonal frame -->
+  <g filter="url(#softGlow)">
+    <path d="M256 72L372 144V288L256 440L140 288V144L256 72Z" stroke="url(#glow)" stroke-width="3" fill="rgba(28,255,168,0.05)"/>
+  </g>
+
+  <!-- circuit lines -->
+  <g opacity="0.8" stroke="#7AF7B5" stroke-width="2">
+    <path d="M88 234H170"/>
+    <path d="M342 234H424"/>
+    <path d="M256 146V72"/>
+    <path d="M256 440V362"/>
+    <path d="M170 170L140 170"/>
+    <path d="M342 170L372 170"/>
+    <path d="M170 342L140 342"/>
+    <path d="M342 342L372 342"/>
+  </g>
+
+  <!-- central microchip / CPU structure -->
+  <g filter="url(#softGlow)">
+    <rect x="176" y="152" width="160" height="208" rx="18" fill="rgba(21, 255, 167, 0.04)" stroke="url(#cyan)" stroke-width="2"/>
+
+    <path d="M205 194H308" stroke="#79F4FF" stroke-width="3"/>
+    <path d="M205 256H308" stroke="#79F4FF" stroke-width="3"/>
+    <path d="M205 318H308" stroke="#79F4FF" stroke-width="3"/>
+
+    <circle cx="188" cy="194" r="7" fill="#7AF7B5"/>
+    <circle cx="188" cy="256" r="7" fill="#7AF7B5"/>
+    <circle cx="188" cy="318" r="7" fill="#7AF7B5"/>
+    <circle cx="324" cy="194" r="7" fill="#7AF7B5"/>
+    <circle cx="324" cy="256" r="7" fill="#7AF7B5"/>
+    <circle cx="324" cy="318" r="7" fill="#7AF7B5"/>
+
+    <path d="M192 194V154H244" stroke="#7AF7B5" stroke-width="2"/>
+    <path d="M320 194V154H268" stroke="#7AF7B5" stroke-width="2"/>
+    <path d="M192 318V358H244" stroke="#7AF7B5" stroke-width="2"/>
+    <path d="M320 318V358H268" stroke="#7AF7B5" stroke-width="2"/>
+  </g>
+
+  <!-- motif: boot command prompt -->
+  <g opacity="0.9">
+    <text x="182" y="110" fill="#7AF7B5" font-family="monospace" font-size="20" font-weight="700">os@kernel:~$</text>
+    <text x="182" y="406" fill="#79F4FF" font-family="monospace" font-size="16" font-weight="700">boot -- init</text>
+  </g>
+
+  <!-- accent bars for system state -->
+  <g opacity="0.85">
+    <rect x="128" y="134" width="72" height="8" rx="4" fill="#7AF7B5"/>
+    <rect x="312" y="134" width="72" height="8" rx="4" fill="#79F4FF"/>
+    <rect x="140" y="366" width="78" height="8" rx="4" fill="#7AF7B5"/>
+    <rect x="294" y="366" width="78" height="8" rx="4" fill="#79F4FF"/>
+  </g>
+
+  <!-- small binary noise -->
+  <g fill="#7AF7B5" opacity="0.7" font-family="monospace" font-size="11" font-weight="700">
+    <text x="118" y="196">0101</text>
+    <text x="370" y="196">1010</text>
+    <text x="120" y="288">1100</text>
+    <text x="372" y="288">0011</text>
+  </g>
+</svg>
