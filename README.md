@@ -88,6 +88,15 @@ Drivers / I/O
 
 ---
 
+## 学习入口
+
+- [Roadmap](ROADMAP.md)：全局学习路线
+- [Learning Plan](LEARNING_PLAN.md)：分阶段任务清单
+- [Learning Journey](docs/LEARNING_JOURNEY.md)：学习日志与记录
+- [Project Overview](docs/PROJECT_OVERVIEW.md)：技术概览
+
+---
+
 ## 技术栈与方向
 
 - 汇编（x86 / NASM / BIOS）
@@ -107,7 +116,7 @@ Drivers / I/O
 +---------------------+
           ↓
 +---------------------+
-| OS Abstractions      |
+| OS Abstractions     |
 | Processes / Memory  |
 | Files / Drivers      |
 +---------------------+
@@ -129,8 +138,10 @@ Drivers / I/O
 ## 文档入口
 
 - `README.md`：项目首页
+- `ROADMAP.md`：长期学习路线
+- `LEARNING_PLAN.md`：阶段任务管理
 - `docs/PROJECT_OVERVIEW.md`：技术概览
-- `docs/LEARNING_JOURNEY.md`：学习记录与成长日志
+- `docs/LEARNING_JOURNEY.md`：学习日志
 - `docs/README_PERSONAL_JOURNEY.md`：个人学习版说明
 
 ---
@@ -237,6 +248,15 @@ Current status: building the core understanding needed for the next layers of OS
 
 ---
 
+## Learning Entry Points
+
+- [Roadmap](ROADMAP.md) — full learning route
+- [Learning Plan](LEARNING_PLAN.md) — phase-based task list
+- [Learning Journey](docs/LEARNING_JOURNEY.md) — notes and progress log
+- [Project Overview](docs/PROJECT_OVERVIEW.md) — technical overview
+
+---
+
 ## Technical Focus
 
 - x86 Assembly
@@ -278,9 +298,11 @@ The purpose of this project is to understand how an operating system is built fr
 ## Documentation
 
 - `README.md` — project homepage
+- `ROADMAP.md` — full learning roadmap
+- `LEARNING_PLAN.md` — concrete task plan
 - `docs/PROJECT_OVERVIEW.md` — technical overview
-- `docs/LEARNING_JOURNEY.md` — learning log and milestones
-- `docs/README_PERSONAL_JOURNEY.md` — personal journey version
+- `docs/LEARNING_JOURNEY.md` — learning log
+- `docs/README_PERSONAL_JOURNEY.md` — personal journey notes
 
 ---
 
