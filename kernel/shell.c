@@ -4,6 +4,7 @@
 #include "memory.h"
 #include "io.h"
 #include "types.h"
+#include "task.h"
 
 #define MAX_INPUT 256
 #define MAX_HISTORY 10
@@ -85,6 +86,9 @@ static void cmd_help() {
     vga_puts("  date     - Show current time (CMOS)\n\r");
     vga_puts("  reboot   - Reboot the system\n\r");
     vga_puts("  version  - Show OS version\n\r");
+    vga_puts("  ps       - Show running tasks\n\r");
+    vga_puts("  start    - Start multitasking demo\n\r");
+    vga_puts("  stop     - Stop multitasking demo\n\r");
 }
 
 // 2. echo 命令 (支持参数)
@@ -142,6 +146,14 @@ static void execute_command() {
         cmd_version();
     } else if (shell_strcmp(input_buffer, "reboot") == 0) {
         cmd_reboot();
+    } else if (shell_strcmp(input_buffer, "start") == 0) {
+        multitasking_enabled = 1;
+        vga_puts("\n\rMultitasking STARTED. You will see A and B.\n\r");
+    } else if (shell_strcmp(input_buffer, "stop") == 0) {
+        multitasking_enabled = 0;
+        vga_puts("\n\rMultitasking STOPPED.\n\r");
+    } else if (shell_strcmp(input_buffer, "ps") == 0) {
+        task_print_status();
     } else if (shell_strcmp(input_buffer, "date") == 0) {
         cmd_date();
     } else if (input_buffer[0] == 'e' && input_buffer[1] == 'c' && input_buffer[2] == 'h' && input_buffer[3] == 'o' && input_buffer[4] == ' ') {
