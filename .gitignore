@@ -1,0 +1,20 @@
+# 编译产物
+build/
+*.o
+*.bin
+*.elf
+*.img
+
+# 备份目录（昨天那种土法备份）
+kernel_backup_*/
+*.backup
+
+# 编辑器/系统文件
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# GDB 历史
+.gdb_history
