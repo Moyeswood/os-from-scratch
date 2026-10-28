@@ -51,7 +51,7 @@ Shell 的命令分发在 `keyboard_handler`（IRQ1）里完成——回车触发
 5. ESC → BDA 0x449 = 0x03 ✓
 6. Shell 回归（help 全屏 2000 字符）+ testmode 往返 ✓
 
-测试脚本：`/tmp/analyze-tetris.py`（monitor socket 驱动，可复用）。
+测试脚本：`tools/analyze-tetris.py`（monitor socket 驱动，可复用）。
 
 ### 边界注意
 
