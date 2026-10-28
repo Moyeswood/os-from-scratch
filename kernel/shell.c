@@ -6,6 +6,8 @@
 #include "types.h"
 #include "task.h"
 #include "realmode.h"
+#include "graphics.h"
+#include "tetris.h"
 
 #define MAX_INPUT 256
 #define MAX_HISTORY 10
@@ -61,51 +63,6 @@ static uint8_t cmos_read(uint8_t reg) {
     return inb(0x71);
 }
 
-// ================= 图形模式测试 (临时, 下一阶段整理成 graphics.c) =================
-
-// 设置 VGA DAC 调色板: 模式 13h 有 256 色, 每通道 6 位 (0~63)
-// 流程: 先写 0x3C8 选择颜色索引, 再连续写 3 次 0x3C9 (R/G/B)
-static void gfx_set_dac(uint8_t idx, uint8_t r, uint8_t g, uint8_t b) {
-    outb(0x3C8, idx);
-    outb(0x3C9, r);
-    outb(0x3C9, g);
-    outb(0x3C9, b);
-}
-
-// 在模式 13h 下画测试图案: 8x8 色块渐变 + 白色边框
-static void gfx_test_pattern() {
-    gfx_set_dac(0, 0, 0, 0);       // 0 = 黑
-    gfx_set_dac(1, 63, 0, 0);      // 1 = 红
-    gfx_set_dac(2, 63, 32, 0);     // 2 = 橙
-    gfx_set_dac(3, 63, 63, 0);     // 3 = 黄
-    gfx_set_dac(4, 0, 63, 0);      // 4 = 绿
-    gfx_set_dac(5, 0, 63, 63);     // 5 = 青
-    gfx_set_dac(6, 0, 0, 63);      // 6 = 蓝
-    gfx_set_dac(7, 32, 0, 63);     // 7 = 紫
-    for (int i = 8; i < 16; i++) {
-        gfx_set_dac(i, 63, 63, 63);
-    }
-
-    uint8_t* fb = (uint8_t*)0xA0000;   // 模式 13h 线性显存: 1 字节 = 1 像素
-
-    // 每 40x40 像素一个色块, 颜色 = (块行列和 % 8) + 1
-    for (int y = 0; y < 200; y++) {
-        for (int x = 0; x < 320; x++) {
-            fb[y * 320 + x] = (uint8_t)((x / 40 + y / 40) % 8 + 1);
-        }
-    }
-
-    // 白色边框 (顺便验证矩形填充)
-    for (int x = 0; x < 320; x++) {
-        fb[0 * 320 + x] = 15;
-        fb[199 * 320 + x] = 15;
-    }
-    for (int y = 0; y < 200; y++) {
-        fb[y * 320 + 0] = 15;
-        fb[y * 320 + 319] = 15;
-    }
-}
-
 // 重新打印当前输入行（用于历史记录切换）
 static void redraw_input_line() {
     vga_puts("\rOS> "); 
@@ -136,6 +93,7 @@ static void cmd_help() {
     vga_puts("  start    - Start multitasking demo\n\r");
     vga_puts("  stop     - Stop multitasking demo\n\r");
     vga_puts("  testmode - Test graphics mode round trip (BIOS INT 10h)\n\r");
+    vga_puts("  tetris   - Play Tetris (ESC to exit)\n\r");
 }
 
 // 2. echo 命令 (支持参数)
@@ -208,7 +166,7 @@ static void execute_command() {
         rm_switch_mode(0x13);
         serial_puts("[RM] Mode 13h set, back in protected mode!\n\r");
 
-        gfx_test_pattern();
+        gfx_demo();   // 图形库自测: 调色板/渐变/矩形/字体/精灵
         serial_puts("[RM] Press any key to return to text mode...\n\r");
 
         // 【关键】等待一个"新鲜"的按键。
@@ -231,6 +189,28 @@ static void execute_command() {
         vga_clear();
         vga_puts("MyQwen-OS v1.0.0\n\r");
         vga_puts("[RM] Round-trip test PASSED!\n\r");
+    } else if (shell_strcmp(input_buffer, "tetris") == 0) {
+        vga_puts("\n\r[GAME] Entering TETRIS... (ESC to exit)\n\r");
+
+        // 切到模式 13h, 跑游戏, 再切回文本模式
+        rm_switch_mode(0x13);
+        serial_puts("[GAME] Mode 13h set, starting tetris...\n\r");
+        gfx_init();     // 默认调色板 + 清屏 (游戏会再设自己的配色)
+        tetris_run();
+        serial_puts("[GAME] Tetris exited\n\r");
+
+        // 【关键】排空 8042: 退出游戏的 ESC 键, 它的"释放码"还在缓冲区里,
+        // 不排空的话会留到下一个"等按键"逻辑里被误读 (和 testmode 同款坑)
+        do {
+            while (inb(0x64) & 1) { inb(0x60); }   // 清空 8042 输出缓冲区
+            for (volatile int i = 0; i < 20000000; i++);  // 给释放码留到达时间
+        } while (inb(0x64) & 1);                   // 又来了字节 → 再清一轮
+
+        rm_switch_mode(0x03);
+        serial_puts("[GAME] Text mode restored\n\r");
+
+        vga_clear();
+        vga_puts("MyQwen-OS v1.0.0\n\r");
     } else if (shell_strcmp(input_buffer, "date") == 0) {
         cmd_date();
     } else if (input_buffer[0] == 'e' && input_buffer[1] == 'c' && input_buffer[2] == 'h' && input_buffer[3] == 'o' && input_buffer[4] == ' ') {

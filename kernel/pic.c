@@ -19,7 +19,7 @@ void pic_remap() {
     outb(PIC1_DATA, 0x01);
     outb(PIC2_DATA, 0x01);
 
-    // 【修复】屏蔽 IRQ0，只开放 IRQ1 (键盘)
-    outb(PIC1_DATA, 0xFD);  // 11111101 - 只开放 IRQ1
+    // 开放 IRQ0 (定时器) 和 IRQ1 (键盘)
+    outb(PIC1_DATA, 0xFC);  // 11111100 - 开放 IRQ0 + IRQ1
     outb(PIC2_DATA, 0xFF);
 }

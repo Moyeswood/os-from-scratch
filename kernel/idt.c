@@ -4,6 +4,7 @@
 struct idt_entry idt_entries[256];
 struct idt_ptr idtp;
 
+extern void irq0_handler();
 extern void irq1_handler();
 
 void idt_init() {
@@ -14,7 +15,8 @@ void idt_init() {
         idt_set_gate(i, 0, 0, 0);
     }
 
-    // 设置 IRQ1 (键盘) 的中断门
+    // 设置 IRQ0 (定时器) 和 IRQ1 (键盘) 的中断门
+    idt_set_gate(32, (uint32_t)irq0_handler, 0x08, 0x8E);
     idt_set_gate(33, (uint32_t)irq1_handler, 0x08, 0x8E);
 
     __asm__ volatile("lidt (%0)" : : "r"(&idtp));

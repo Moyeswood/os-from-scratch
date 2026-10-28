@@ -22,9 +22,12 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
               $(KERNEL_DIR)/pic.o \
               $(KERNEL_DIR)/irq.o \
               $(KERNEL_DIR)/keyboard.o \
+              $(KERNEL_DIR)/timer.o \
               $(KERNEL_DIR)/memory.o \
               $(KERNEL_DIR)/paging.o \
               $(KERNEL_DIR)/shell.o \
+              $(KERNEL_DIR)/graphics.o \
+              $(KERNEL_DIR)/tetris.o \
               $(KERNEL_DIR)/task.o \
               $(KERNEL_DIR)/switch.o \
               $(KERNEL_DIR)/realmode.o \

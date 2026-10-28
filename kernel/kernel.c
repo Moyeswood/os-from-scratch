@@ -6,6 +6,7 @@
 #include "shell.h"
 #include "task.h"
 #include "realmode.h"
+#include "timer.h"
 #include "types.h"
 
 extern void pic_remap();
@@ -17,6 +18,7 @@ void kernel_main() {
     paging_init();
     idt_init();
     pic_remap();
+    timer_init();   // PIT 通道 0: ~18.2 Hz 滴答 (游戏计时/蜂鸣超时用)
 
     __asm__ volatile("sti");
 
