@@ -8,6 +8,7 @@
 #include "realmode.h"
 #include "graphics.h"
 #include "tetris.h"
+#include "mario.h"
 
 #define MAX_INPUT 256
 #define MAX_HISTORY 10
@@ -63,6 +64,16 @@ static uint8_t cmos_read(uint8_t reg) {
     return inb(0x71);
 }
 
+// 【关键】排空 8042 输出缓冲区: 触发命令的那个键, 它的"释放码"一定会
+// 晚到并残留在缓冲区里, 不排空的话会污染接下来的"等按键"逻辑。
+// 所以: 清空 → 等释放码到达 → 还有字节就再清, 直到缓冲区安静。
+static void kbd_drain() {
+    do {
+        while (inb(0x64) & 1) { inb(0x60); }           // 清空输出缓冲区
+        for (volatile int i = 0; i < 20000000; i++);   // 给释放码留到达时间
+    } while (inb(0x64) & 1);                           // 又来了字节 → 再清一轮
+}
+
 // 重新打印当前输入行（用于历史记录切换）
 static void redraw_input_line() {
     vga_puts("\rOS> "); 
@@ -94,6 +105,7 @@ static void cmd_help() {
     vga_puts("  stop     - Stop multitasking demo\n\r");
     vga_puts("  testmode - Test graphics mode round trip (BIOS INT 10h)\n\r");
     vga_puts("  tetris   - Play Tetris (ESC to exit)\n\r");
+    vga_puts("  mario    - Play Super Mario (ESC to exit)\n\r");
 }
 
 // 2. echo 命令 (支持参数)
@@ -202,11 +214,25 @@ static void execute_command() {
         serial_puts("[GAME] Tetris exited\n\r");
 
         // 【关键】排空 8042: 退出游戏的 ESC 键, 它的"释放码"还在缓冲区里,
-        // 不排空的话会留到下一个"等按键"逻辑里被误读 (和 testmode 同款坑)
-        do {
-            while (inb(0x64) & 1) { inb(0x60); }   // 清空 8042 输出缓冲区
-            for (volatile int i = 0; i < 20000000; i++);  // 给释放码留到达时间
-        } while (inb(0x64) & 1);                   // 又来了字节 → 再清一轮
+        // 不排空的话会留到下一个"等按键"逻辑里被误读 (testmode 同款坑)
+        kbd_drain();
+
+        rm_switch_mode(0x03);
+        serial_puts("[GAME] Text mode restored\n\r");
+
+        vga_clear();
+        vga_puts("MyQwen-OS v1.0.0\n\r");
+    } else if (shell_strcmp(input_buffer, "mario") == 0) {
+        vga_puts("\n\r[GAME] Entering SUPER MARIO... (ESC to exit)\n\r");
+
+        // 切到模式 13h, 跑游戏, 再切回文本模式 (和 tetris 同一套流程)
+        rm_switch_mode(0x13);
+        serial_puts("[GAME] Mode 13h set, starting mario...\n\r");
+        gfx_init();     // 默认调色板 + 清屏 (游戏会再设自己的配色)
+        mario_run();
+        serial_puts("[GAME] Mario exited\n\r");
+
+        kbd_drain();    // 排空 ESC 释放码 (见 tetris 分支注释)
 
         rm_switch_mode(0x03);
         serial_puts("[GAME] Text mode restored\n\r");

@@ -28,6 +28,7 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
               $(KERNEL_DIR)/shell.o \
               $(KERNEL_DIR)/graphics.o \
               $(KERNEL_DIR)/tetris.o \
+              $(KERNEL_DIR)/mario.o \
               $(KERNEL_DIR)/task.o \
               $(KERNEL_DIR)/switch.o \
               $(KERNEL_DIR)/realmode.o \
