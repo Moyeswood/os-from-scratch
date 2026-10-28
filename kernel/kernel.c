@@ -5,6 +5,7 @@
 #include "paging.h"
 #include "shell.h"
 #include "task.h"
+#include "realmode.h"
 #include "types.h"
 
 extern void pic_remap();
@@ -23,6 +24,7 @@ void kernel_main() {
     vga_puts("Type 'help' for available commands.\n\r\n\r");
     
     shell_init();
+    rm_load_trampoline();   // 【新增】：把实模式跳板装入低内存 0x6000
     task_init();
     
     // 【关键】：Kernel 作为任务 0，主动参与轮转调度

@@ -9,11 +9,11 @@ KERNEL_DIR = kernel
 BUILD_DIR = build
 
 BOOT_BIN = $(BUILD_DIR)/boot.bin
+TRAMP_BIN = $(BUILD_DIR)/rm_trampoline.bin
 KERNEL_ELF = $(BUILD_DIR)/kernel.elf
 KERNEL_BIN = $(BUILD_DIR)/kernel.bin
 OS_IMG = $(BUILD_DIR)/os.img
 
-# 仅保留已验证成功的核心模块
 KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
               $(KERNEL_DIR)/kernel.o \
               $(KERNEL_DIR)/serial.o \
@@ -26,11 +26,18 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
               $(KERNEL_DIR)/paging.o \
               $(KERNEL_DIR)/shell.o \
               $(KERNEL_DIR)/task.o \
-              $(KERNEL_DIR)/switch.o
+              $(KERNEL_DIR)/switch.o \
+              $(KERNEL_DIR)/realmode.o \
+              $(KERNEL_DIR)/rm_entry.o \
+              $(KERNEL_DIR)/rm_embed.o
 
 all: $(OS_IMG)
 
 $(BOOT_BIN): $(BOOT_DIR)/boot.asm
+	mkdir -p $(BUILD_DIR)
+	$(ASM) -f bin $< -o $@
+
+$(TRAMP_BIN): $(KERNEL_DIR)/rm_trampoline.asm
 	mkdir -p $(BUILD_DIR)
 	$(ASM) -f bin $< -o $@
 
@@ -41,6 +48,12 @@ $(KERNEL_DIR)/irq.o: $(KERNEL_DIR)/irq.asm
 	$(ASM) -f elf32 $< -o $@
 
 $(KERNEL_DIR)/switch.o: $(KERNEL_DIR)/switch.asm
+	$(ASM) -f elf32 $< -o $@
+
+$(KERNEL_DIR)/rm_entry.o: $(KERNEL_DIR)/rm_entry.asm
+	$(ASM) -f elf32 $< -o $@
+
+$(KERNEL_DIR)/rm_embed.o: $(KERNEL_DIR)/rm_embed.asm $(TRAMP_BIN)
 	$(ASM) -f elf32 $< -o $@
 
 $(KERNEL_DIR)/%.o: $(KERNEL_DIR)/%.c
