@@ -8,7 +8,11 @@
 extern volatile uint32_t g_ticks;
 
 void timer_init();     // 初始化 PIT 通道 0 (~18.2 Hz)
-void timer_handler();  // IRQ0 处理: 滴答 +1, 蜂鸣超时自动关闭
+
+// IRQ0 处理: 滴答 +1, 蜂鸣超时自动关闭, 抢占式调度 (task_timer_tick)
+// 参数 esp = 当前任务的上下文帧指针 (见 irq.asm irq0_handler)
+// 返回 = 下一个要恢复任务的帧指针
+uint32_t timer_handler(uint32_t esp);
 
 // PC 扬声器发声. divisor = PIT 分频值, 频率 = 1193182 / divisor
 // (实模式版用的频率: 5423=220Hz 落地, 1808=660Hz 暂存, 905=1318Hz 升级,

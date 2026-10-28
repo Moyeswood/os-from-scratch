@@ -16,7 +16,7 @@
   - PIT 定时器（IRQ0，约 18.2 Hz 滴答）+ PC 扬声器蜂鸣。
   - 模式 13h（320×200×256 色）图形库：调色板/画点/矩形/精灵/8x8 点阵文字。
 - **交互接口**：内置轻量级 Shell，支持基础命令解析与输入历史。
-- **多任务调度**：实现基于上下文切换（Context Switch）的**协作式多任务**（Cooperative Multitasking）。
+- **多任务调度**：协作式（yield）+ **抢占式**（PIT IRQ0 时间片轮转）多任务，统一 44 字节上下文帧格式，两种切换路径产出的帧可互相恢复。
 - **🎮 俄罗斯方块**：`tetris` 命令。从 1435 行实模式汇编版 1:1 移植的 C 版（7-bag 随机、wall kick、锁定延迟、暂存、消行闪烁动画、5 套主题配色、蜂鸣音效），ESC 退出回 Shell。
 - **调试支持**：完美适配 QEMU + GDB 源码级远程调试。
 
@@ -91,10 +91,10 @@ make run
 - [x] 物理与虚拟内存管理
 - [x] 中断系统与键盘驱动
 - [x] 协作式多任务 (Cooperative Multitasking)
+- [x] 抢占式多任务 (Preemptive Multitasking with PIT)
 - [x] 实模式往返 (BIOS INT 10h 视频模式切换)
 - [x] 图形库 + PIT 定时器
 - [x] 俄罗斯方块 (tetris 命令)
-- [ ] 抢占式多任务 (Preemptive Multitasking with PIT)
 - [ ] 用户态与内核态隔离 (Ring 3)
 - [ ] 简单的文件系统 (VFS)
 - [ ] 超级马里奥 (复用 graphics.c 图形库)

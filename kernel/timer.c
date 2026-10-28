@@ -1,5 +1,6 @@
 #include "timer.h"
 #include "io.h"
+#include "task.h"
 
 volatile uint32_t g_ticks = 0;
 
@@ -14,7 +15,7 @@ void timer_init() {
     outb(0x40, 0x00);
 }
 
-void timer_handler() {
+uint32_t timer_handler(uint32_t esp) {
     g_ticks++;
 
     // 蜂鸣响满 2 个滴答就关扬声器 (对应实模式版主循环里的 beep_service)
@@ -22,6 +23,9 @@ void timer_handler() {
         outb(0x61, inb(0x61) & 0xFC);   // 清 bit0 (定时器门控) + bit1 (扬声器使能)
         beep_on = 0;
     }
+
+    // 抢占式调度: 返回下一个任务的帧指针 (未启用时原样返回)
+    return task_timer_tick(esp);
 }
 
 void beep(uint16_t divisor) {

@@ -153,7 +153,9 @@ static void execute_command() {
         cmd_reboot();
     } else if (shell_strcmp(input_buffer, "start") == 0) {
         multitasking_enabled = 1;
-        vga_puts("\n\rMultitasking STARTED. You will see A and B.\n\r");
+        vga_puts("\n\rMultitasking STARTED. You will see A, B and C.\n\r");
+        vga_puts("(C is a busy-loop task that never yields - only\n\r");
+        vga_puts(" preemptive scheduling can interrupt it.)\n\r");
     } else if (shell_strcmp(input_buffer, "stop") == 0) {
         multitasking_enabled = 0;
         vga_puts("\n\rMultitasking STOPPED.\n\r");
