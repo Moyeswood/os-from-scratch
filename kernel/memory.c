@@ -52,6 +52,27 @@ void memory_init() {
     serial_puts("[Memory] Memory manager ready!\n\r");
 }
 
+// 连续分配 n 个物理页 (VM 内存池等需要连续地址的场景)
+uint32_t alloc_pages(uint32_t n) {
+    if (n == 0) return 0;
+    uint32_t run_start = 0;
+    uint32_t run = 0;
+    for (uint32_t i = 0; i < bitmap_size * 8; i++) {
+        if (!(bitmap[i / 8] & (1 << (i % 8)))) {
+            if (run == 0) run_start = i;
+            run++;
+            if (run == n) {
+                for (uint32_t j = run_start; j < run_start + n; j++)
+                    bitmap[j / 8] |= (1 << (j % 8));
+                return run_start * PAGE_SIZE;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    return 0;
+}
+
 uint32_t alloc_page() {
     for (uint32_t i = 0; i < bitmap_size; i++) {
         if (bitmap[i] != 0xFF) {

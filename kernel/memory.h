@@ -5,6 +5,7 @@
 
 void memory_init();
 uint32_t alloc_page();
+uint32_t alloc_pages(uint32_t n);  // 连续分配 n 页 (地址连续)
 void free_page(uint32_t addr);
 
 // 新增：获取内存统计信息
