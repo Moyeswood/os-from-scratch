@@ -14,8 +14,18 @@
 ;    0x5406: CR3   (页目录地址)
 ;    0x540A: 返回地址 (跳板最后 jmp dword [0x540A] 回到这里)
 ;    0x540E: ESP   (内核栈指针)
-;    0x5412: 视频模式号 (第一个参数, 跳板里 INT 10h 用)
+;    0x5412: 视频模式号 (参数, INT 10h AH=00h 用)
 ;    0x5414: IDTR (6 字节: limit + base)
+;    0x541C: EBP   (【关键】BIOS 调用会破坏 C 被调用者保存寄存器!)
+;    0x5420: EBX
+;    0x5424: ESI
+;    0x5428: EDI
+;
+;  ★为什么必须保存 EBP/EBX/ESI/EDI: SeaVGABIOS 处理 INT 10h 时会
+;  短暂进入 32 位保护模式, 随意使用这些寄存器。C 编译器 (gcc -m32)
+;  默认用 EBP 当栈帧指针, 从 BIOS 返回后函数还会通过 [ebp+N] 访问
+;  局部变量 — EBP 一坏就野指针 (实测: font_apply 里 idiv 读到 h=0
+;  直接三重故障复位循环)。旧代码没炸只是因为调用点从不访问局部变量。
 ;
 ;  注意: 该函数不走 ret 返回 — 跳板直接跳回保存的返回地址,
 ;  对 C 调用者来说表现和普通函数完全一样。
@@ -42,6 +52,12 @@ serial_out:
 
 rm_switch_mode:
     cli                     ; 【关键】往返期间 IF=0, 任何 IRQ 都不会打扰
+
+    ; 【关键】先保存 C 被调用者保存寄存器 — BIOS 会破坏它们 (见头部注释)
+    mov [0x541C], ebp
+    mov [0x5420], ebx
+    mov [0x5424], esi
+    mov [0x5428], edi
 
     mov bl, 'A'             ; 打点: 外壳启动, 开始保存状态
     call serial_out

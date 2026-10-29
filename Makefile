@@ -29,6 +29,12 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
               $(KERNEL_DIR)/graphics.o \
               $(KERNEL_DIR)/tetris.o \
               $(KERNEL_DIR)/mario.o \
+              $(KERNEL_DIR)/font.o \
+              $(KERNEL_DIR)/fs.o \
+              $(KERNEL_DIR)/editor.o \
+              $(KERNEL_DIR)/cc.o \
+              $(KERNEL_DIR)/splash.o \
+              $(KERNEL_DIR)/splash_asm.o \
               $(KERNEL_DIR)/task.o \
               $(KERNEL_DIR)/switch.o \
               $(KERNEL_DIR)/realmode.o \
@@ -52,6 +58,9 @@ $(KERNEL_DIR)/irq.o: $(KERNEL_DIR)/irq.asm
 	$(ASM) -f elf32 $< -o $@
 
 $(KERNEL_DIR)/switch.o: $(KERNEL_DIR)/switch.asm
+	$(ASM) -f elf32 $< -o $@
+
+$(KERNEL_DIR)/splash_asm.o: $(KERNEL_DIR)/splash.asm
 	$(ASM) -f elf32 $< -o $@
 
 $(KERNEL_DIR)/rm_entry.o: $(KERNEL_DIR)/rm_entry.asm

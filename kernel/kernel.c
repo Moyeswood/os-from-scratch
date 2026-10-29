@@ -7,6 +7,9 @@
 #include "task.h"
 #include "realmode.h"
 #include "timer.h"
+#include "font.h"
+#include "fs.h"
+#include "splash.h"
 #include "types.h"
 
 extern void pic_remap();
@@ -22,11 +25,16 @@ void kernel_main() {
 
     __asm__ volatile("sti");
 
+    rm_load_trampoline();   // 把实模式跳板装入低内存 0x6000
+    font_apply(16);         // 加载 Terminus 8x16 漂亮字体 + 硬件自测 (串口报 [FONT])
+    fs_init();              // 格式化并挂载内存文件系统 (串口报 [FS] + 自测)
+    splash_run();           // 开机画面 (任意键跳过, 串口报 [SP] done/skipped)
+    shell_reset_input();    // 跳过画面的按键别留到 shell 输入里
+
     vga_puts("MyQwen-OS v1.0.0\n\r");
     vga_puts("Type 'help' for available commands.\n\r\n\r");
-    
+
     shell_init();
-    rm_load_trampoline();   // 【新增】：把实模式跳板装入低内存 0x6000
     task_init();
     
     // 【关键】：Kernel 作为任务 0，主动参与轮转调度

@@ -21,6 +21,10 @@
 ;    0x540E: 内核 ESP   (返回时恢复栈)
 ;    0x5412: 请求的视频模式号 (实模式里 INT 10h 用)
 ;    0x5414: 内核 IDTR (6 字节, 返回时恢复)
+;    0x541C: 内核 EBP   (BIOS 会破坏, 返回前恢复)
+;    0x5420: 内核 EBX
+;    0x5424: 内核 ESI
+;    0x5428: 内核 EDI
 ;
 ;  与 boot.asm 的约定 (低内存 0x580):
 ;    0x580: BIOS 的 GDTR (boot.asm 进保护模式前保存)
@@ -202,8 +206,13 @@ entry32:
     jmp .flush              ; 跳转刷新流水线, 让分页生效
 
 .flush:
-    ; 恢复内核栈、开中断, 跳回 rm_entry.asm 保存的返回地址
+    ; 恢复内核栈、C 被调用者保存寄存器 (BIOS 会破坏它们, 见 rm_entry.asm 注释)
     mov esp, [0x540E]
+    mov ebp, [0x541C]
+    mov ebx, [0x5420]
+    mov esi, [0x5424]
+    mov edi, [0x5428]
+    cld                     ; ABI 要求 DF=0, BIOS 可能留下 DF=1 让 rep movs 倒着走
     sti
     jmp dword [0x540A]
 
