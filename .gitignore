@@ -4,6 +4,7 @@ build/
 *.bin
 *.elf
 *.img
+boot.bin
 
 # 备份目录（昨天那种土法备份）
 kernel_backup_*/
