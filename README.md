@@ -1,4 +1,4 @@
-# 🚀 NewOS (MyQwen-OS)
+# 🚀 NewOS
 
 <p align="center">
   <em>一个从零开始、纯手写的 32 位 x86 微型操作系统</em><br>
