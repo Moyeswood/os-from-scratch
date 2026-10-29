@@ -6,6 +6,17 @@
 </p>
 
 <p align="center">
+  <a href="README.en.md">English</a> · 中文
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
+  <img src="https://img.shields.io/badge/Milestones-9%2F9%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-140%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
+</p>
+
+<p align="center">
   <img src="note/splash-mid.png" width="480" alt="开机画面"/>
 </p>
 
@@ -120,6 +131,12 @@ fd = open("/data.txt", 0); buf = malloc(32);
 n = read(fd, buf, 31); buf[n] = 0;
 printf("read %d: %s\n", n, buf); return 0; }
 ```
+
+## 📷 截图
+
+| 文件系统操作 | 内置编辑器 | C 编译运行 |
+|---|---|---|
+| <img src="note/shell-fs.png" width="240" alt="文件系统操作"/> | <img src="note/editor.png" width="240" alt="内置编辑器"/> | <img src="note/cc-demo.png" width="240" alt="C 编译运行"/> |
 
 ## 🧪 自动化测试
 
