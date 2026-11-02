@@ -16,9 +16,11 @@
 //    rows-1:      消息行 (反显): 保存结果/警告等
 //
 //  键位: 方向键/Home/End/PgUp/PgDn 导航, Enter 换行,
-//  Backspace/Delete 删除, Tab = 4 空格, Ctrl+S 保存, Ctrl+X 退出。
+//  Backspace/Delete 删除, Tab = 4 空格, Ctrl+S 保存,
+//  Ctrl+X 退出 (有修改时询问: Y=保存退出 N=丢弃 Esc=取消)。
 //
-//  串口标记 (测试预言机): [ED] new/open/saved/modified warning/exit/fail
+//  串口标记 (测试预言机): [ED] new/open/saved/save prompt/
+//  exit(saved/discarded/cancelled)/fail
 // ============================================================
 
 #include "editor.h"
@@ -39,7 +41,6 @@ static char ed_buf[ED_MAX];
 static uint32_t ed_len;          // 缓冲长度 (字节)
 static uint32_t ed_cur;          // 光标 (字节偏移)
 static int ed_modified;
-static int ed_warn_quit;         // 有修改时第一次 ^X → 警告
 static char ed_msg[64];          // 消息行文本
 static uint32_t ed_inum;         // 文件 inode
 static char ed_path[FS_PATH_MAX];
@@ -85,7 +86,6 @@ static int ed_insert(uint32_t off, char c) {
     ed_len++;
     ed_cur = off + 1;
     ed_modified = 1;
-    ed_warn_quit = 0;
     return 0;
 }
 
@@ -95,7 +95,6 @@ static void ed_delete_at(uint32_t off) {
     for (uint32_t i = off; i < ed_len - 1; i++) ed_buf[i] = ed_buf[i + 1];
     ed_len--;
     ed_modified = 1;
-    ed_warn_quit = 0;
 }
 
 // ---------- 光标移动 ----------
@@ -228,7 +227,7 @@ static int ed_poll(void) {
 // ---------- 主入口 ----------
 void editor_run(const char* path) {
     k_strcpy(ed_path, path);
-    ed_len = 0; ed_cur = 0; ed_modified = 0; ed_warn_quit = 0;
+    ed_len = 0; ed_cur = 0; ed_modified = 0;
     ed_msg[0] = '\0';
     ed_top_line = 0; ed_left_col = 0;
     ed_rows = vga_get_rows();
@@ -288,18 +287,36 @@ void editor_run(const char* path) {
         if (ctrl) {
             if (k == 0x1F) { ed_save(); ed_render(); continue; }     // Ctrl+S
             if (k == 0x2D) {                                        // Ctrl+X
-                if (ed_modified && !ed_warn_quit) {
-                    ed_warn_quit = 1;
-                    k_strcpy(ed_msg, "File modified! Press ^X again to quit without saving");
-                    serial_puts("[ED] modified warning\n\r");
-                    ed_render();
-                    continue;
+                if (!ed_modified) break;                            // 未修改 → 直接退出
+                // 有修改 → nano 式询问: Y=保存退出 N=丢弃退出 其他键=取消
+                k_strcpy(ed_msg, "Save before exit? (Y=save+exit  N=discard  Esc=cancel)");
+                serial_puts("[ED] save prompt\n\r");
+                ed_render();
+                int save_exit = 0, discard_exit = 0, done = 0;
+                while (!done) {
+                    int sc2 = ed_poll();
+                    if (sc2 < 0) { __asm__ volatile("hlt"); continue; }
+                    if (sc2 == 0xE0) continue;                       // 吞掉扩展键前缀
+                    int rel2 = (sc2 & 0x80) != 0;
+                    uint8_t k2 = (uint8_t)(sc2 & 0x7F);
+                    if (k2 == SC_LSHIFT || k2 == SC_RSHIFT || k2 == SC_CTRL || k2 == SC_CAPS) continue;
+                    if (rel2) continue;                              // 忽略释放码 (含 ^X 自己的)
+                    char ans = (shift ^ caps) ? keymap_shift[k2] : keymap_normal[k2];
+                    if (ans == 'y' || ans == 'Y') { save_exit = 1; done = 1; }
+                    else if (ans == 'n' || ans == 'N') { discard_exit = 1; done = 1; }
+                    else {
+                        k_strcpy(ed_msg, "Cancelled");
+                        serial_puts("[ED] exit: cancelled\n\r");
+                        ed_render();
+                        done = 1;
+                    }
                 }
-                break;
+                if (save_exit) { ed_save(); break; }                 // 保存并退出
+                if (discard_exit) break;                             // 丢弃修改并退出
+                continue;                                            // 取消 → 继续编辑
             }
             continue;                               // 其他 Ctrl 组合忽略
         }
-        ed_warn_quit = 0;
 
         if (e0) {
             e0 = 0;

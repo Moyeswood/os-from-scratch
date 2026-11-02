@@ -204,14 +204,40 @@ check("save tab", save_exit())
 time.sleep(0.6)
 check("cat tab", run_cmd("cat /tab.txt", "[SH] cat:     a", name="cat-tab"))
 
-# ---------- 8. 修改警告: ^X → 警告 → ^X → 丢弃 ----------
+# ---------- 8. ^X 保存询问: N 丢弃退出 ----------
 check("edit for warn", run_edit("/t.txt"))
 type_text("X")
 mark_serial_base()
 press("ctrl-x", wait=0.4)
-check("first ^X warns", wait_for(lambda: "[ED] modified warning" in serial_since(), name="warn"))
+check("^X prompts save", wait_for(lambda: "[ED] save prompt" in serial_since(), name="prompt"))
+press("n", wait=0.4)
+check("N discards and exits", wait_for(lambda: "[ED] exit: discarded" in serial_since(), name="discard"))
+time.sleep(0.6)
+check("content unchanged after N", run_cmd("cat /t.txt", "[SH] cat: hello editor!", name="cat-after-n"))
+
+# ---------- 9. ^X 保存询问: Y 保存并退出 (nano 式保存退出) ----------
+check("edit for save-exit", run_edit("/t.txt"))
+press("end", wait=0.4)           # 光标到文件尾
+type_text("Z")
+mark_serial_base()
 press("ctrl-x", wait=0.4)
-check("second ^X discards", wait_for(lambda: "[ED] exit: discarded" in serial_since(), name="discard"))
+check("^X prompts save (Y)", wait_for(lambda: "[ED] save prompt" in serial_since(), name="prompt2"))
+press("y", wait=0.6)
+check("Y saves and exits", wait_for(lambda: "[ED] exit: saved" in serial_since(), name="save-exit"))
+time.sleep(0.6)
+check("cat shows saved Z", run_cmd("cat /t.txt", "[SH] cat: hello editor!Z", name="cat-z"))
+
+# ---------- 10. ^X 保存询问: Esc 取消, 继续编辑 ----------
+check("edit for cancel", run_edit("/t.txt"))
+type_text("Q")
+mark_serial_base()
+press("ctrl-x", wait=0.4)
+check("^X prompts save (esc)", wait_for(lambda: "[ED] save prompt" in serial_since(), name="prompt3"))
+press("esc", wait=0.4)
+check("Esc cancels exit", wait_for(lambda: "[ED] exit: cancelled" in serial_since(), name="cancel"))
+press("ctrl-x", wait=0.4)
+press("n", wait=0.4)
+check("then N exits", wait_for(lambda: "[ED] exit: discarded" in serial_since(), name="discard2"))
 time.sleep(0.6)
 check("content unchanged", run_cmd("cat /t.txt", "[SH] cat: hello editor!", name="cat-unchanged"))
 
@@ -245,7 +271,7 @@ time.sleep(1.5)
 ok_bar = False
 for _ in range(4):
     time.sleep(1.5)
-    r = send("xp /80bx 0xb8e60", wait=0.05)   # 第 23 行 (状态栏, 25 行屏幕)
+    r = send("xp /80bx 0xb8c80", wait=0.05)   # 第 21 行 (状态栏, 22 行屏幕/默认 font 18)
     chars = ""
     for line in r.splitlines():
         if ':' not in line or '\x1b' in line: continue

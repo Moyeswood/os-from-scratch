@@ -47,6 +47,15 @@ void vga_putc(char c) {
         cursor_y++;
     } else if (c == '\r') {
         cursor_x = 0;
+    } else if (c == '\b') {
+        // 退格: 光标左移 (行首则回上一行行尾) — 不写字符,
+        // shell 用 "\b \b" 序列擦除 (旧版把 0x08 当普通字符打印, 退格失灵)
+        if (cursor_x > 0) {
+            cursor_x--;
+        } else if (cursor_y > 0) {
+            cursor_y--;
+            cursor_x = 79;
+        }
     } else {
         int offset = cursor_y * 80 + cursor_x;
         vga_buffer[offset] = (0x0F << 8) | c;
