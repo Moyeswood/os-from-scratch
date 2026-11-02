@@ -85,10 +85,16 @@ static void font_write_plane2(const uint8_t* tbl, uint8_t h) {
     // SR2: Map Mask = 0x04 (只写平面 2)
     outb(0x3C4, 2); outb(0x3C5, 0x04);
 
-    // 写字体: 256 字形 × h 字节, 逐字节写到 A0000 窗口 (平面 2 偏移 0)
+    // 写字体: 256 字形, VGA 字符发生器按【每字形 32 字节】步长取
+    // (QEMU vga_draw_glyph9: font_ptr += 32*4*ch, 行 y 读 +4*y —
+    // 即平面 2 内 ch*32 + row)。连续写会在屏幕上渲染出 ch*2 的字形
+    // (屏幕乱码根因): 平面 2 读回自测与写入布局一致所以永远 OK。
     volatile uint8_t* plane2 = (volatile uint8_t*)0xA0000;
-    for (int i = 0; i < 256 * h; i++) {
-        plane2[i] = tbl[i];
+    for (int i = 0; i < 256 * 32; i++) plane2[i] = 0;   // 先清零整个 8K
+    for (int ch = 0; ch < 256; ch++) {
+        for (int row = 0; row < h; row++) {
+            plane2[ch * 32 + row] = tbl[ch * h + row];
+        }
     }
 
     // 恢复现场
@@ -134,20 +140,23 @@ static int font_selftest(const uint8_t* tbl, uint8_t h) {
     outb(0x3CE, 6); outb(0x3CF, (gr6 & ~(0x0C | 0x02)) | 0x04);
 
     volatile uint8_t* plane2 = (volatile uint8_t*)0xA0000;
-    int n = 256 * h;
     int bad = 0;
     int first_bad = -1;
-    for (int i = 0; i < n; i++) {
-        if (plane2[i] != tbl[i]) {
-            if (first_bad < 0) first_bad = i;
-            bad++;
+    for (int ch = 0; ch < 256; ch++) {
+        for (int row = 0; row < h; row++) {
+            uint8_t got = plane2[ch * 32 + row];      // 32 字节步长 (与写入/取址一致)
+            uint8_t exp = tbl[ch * h + row];
+            if (got != exp) {
+                if (first_bad < 0) first_bad = ch * h + row;
+                bad++;
+            }
         }
     }
     if (bad > 0) {
         // 诊断: 第一个不匹配字节 + 平面 2 开头 8 字节 vs 期望
         serial_puts(" first_bad="); serial_put_hex(first_bad);
         serial_puts(" exp=");        serial_put_hex(tbl[first_bad]);
-        serial_puts(" got=");        serial_put_hex(plane2[first_bad]);
+        serial_puts(" got=");        serial_put_hex(plane2[(first_bad / h) * 32 + (first_bad % h)]);
         for (int i = 0; i < 4; i++) {
             serial_puts(i == 0 ? " p2[0..3]=" : ",");
             serial_put_hex(plane2[i]);
