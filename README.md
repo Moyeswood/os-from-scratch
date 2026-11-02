@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-9%2F9%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-140%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-10%2F10%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-233%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -20,16 +20,22 @@
   <img src="note/splash-mid.png" width="480" alt="开机画面"/>
 </p>
 
-NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编从零编写，在 QEMU 中运行。它走完了操作系统学习的完整链路：**引导 → 保护模式 → 中断 → 内存管理 → 多任务 → 图形 → 文件系统 → 编辑器 → C 编译器**——最终你可以在它里面用自带的编辑器写 C 程序、用自带的编译器编译、直接运行。
+NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编从零编写，在 QEMU 中运行。它走完了操作系统学习的完整链路：**引导 → 保护模式 → 中断 → 内存管理 → 多任务 → 图形 → 文件系统 → 编辑器 → C 编译器 → Ring 3 用户态**——最终你可以在它里面用自带的编辑器写 C 程序、用自带的编译器编译、直接运行，还能让程序跑在用户态、看它越界被内核抓个正着。
 
 ## ✨ 核心特性
 
 ### 🖥️ 底层基础
-- **引导加载器**：512 字节手写引导扇区，从软盘加载内核（100KB 上限，含 64KB 段回绕处理）
+- **引导加载器**：512 字节手写引导扇区，从软盘加载内核（150KB 上限，含 64KB 段回绕处理）
 - **保护模式**：GDT 段机制、A20 门、32 位保护模式切换
-- **内存管理**：位图物理页分配器（含连续多页分配 `alloc_pages`）+ 分页（32MB 恒等映射）
-- **中断系统**：完整 IDT、8259A PIC 重映射、PS/2 键盘中断驱动
+- **内存管理**：位图物理页分配器（含连续多页分配 `alloc_pages`）+ 分页（32MB 内核恒等映射 + 4MB 用户区）
+- **中断系统**：完整 IDT（32 个异常处理器 + IRQ + 系统调用门）、8259A PIC 重映射、PS/2 键盘中断驱动
 - **实模式往返**：随时降级回实模式调 BIOS（切视频模式），用完自动回保护模式——跳板寄存器全套保存恢复
+
+### 🛡️ Ring 3 用户态
+- **特权级隔离**：TSS 内核栈切换、用户代码/数据段（DPL3）、页表 U/S 位保护——用户程序碰内核内存直接 #PF
+- **系统调用**：`int 0x80`（门 DPL3）——putc/puts/read_key/get_ticks/exit，内核校验用户传入的指针必须落在用户区
+- **异常处理**：32 个异常处理器打印完整现场（EIP/CS/EFLAGS/ESP/CR2 + 页错误码 P/W/U 位解读），用户态异常杀进程回 shell，内核态异常 panic
+- **6 个内嵌演示程序**（宿主 gcc 编译 → incbin → `run` 命令载入）：`hello`（最小用户进程）、`count`（用户态下定时器照常滴答）、`crash`（写 0xB8000 → #PF 现场）、`div0`（除零 → #DE）、`echo`（键盘回显）、`badptr`（系统调用参数校验）
 
 ### ⏱️ 多任务与设备
 - **抢占式多任务**：PIT IRQ0（18.2Hz）时间片轮转，协作式/抢占式统一上下文帧可互恢复，带"恶霸任务"演示
@@ -94,6 +100,7 @@ nano 风格的 `edit` 命令：
 | `df` | 文件系统用量 |
 | `edit file` | 打开编辑器（^S 保存，^X 退出时询问保存） |
 | `cc file.c [args...]` | 编译并运行 C 程序（参数传给 main） |
+| `run prog` | 在 Ring 3 运行用户程序（hello/count/crash/div0/echo/badptr） |
 | `splash` | 重放开机画面 |
 
 ## 🚀 快速开始
@@ -139,17 +146,27 @@ printf("read %d: %s\n", n, buf); return 0; }
 |---|---|---|
 | <img src="note/shell-fs.png" width="240" alt="文件系统操作"/> | <img src="note/editor.png" width="240" alt="内置编辑器"/> | <img src="note/cc-demo.png" width="240" alt="C 编译运行"/> |
 
+| Ring 3 用户态 | 用户态越界被内核抓获 |
+|---|---|
+| <img src="note/ring3-hello.png" width="360" alt="Ring 3 用户态"/> | <img src="note/ring3-crash.png" width="360" alt="页错误现场"/> |
+
 ## 🧪 自动化测试
 
-5 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**共 140 项**：
+8 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**共 233 项**：
 
 ```bash
 python3 tools/test-splash.py   # 开机画面 (14 项)
-python3 tools/test-font.py     # 字体/字号 (29 项)
-python3 tools/test-fs.py       # 文件系统 (39 项)
-python3 tools/test-edit.py     # 编辑器   (38 项)
-python3 tools/test-cc.py       # C 编译器 (26 项)
+python3 tools/test-font.py     # 字体/字号 (30 项)
+python3 tools/test-fs.py       # 文件系统 (43 项)
+python3 tools/test-edit.py     # 编辑器   (50 项)
+python3 tools/test-cc.py       # C 编译器 (41 项)
+python3 tools/test-preempt.py  # 抢占调度 (7 项)
+python3 tools/test-mario.py    # 马里奥   (12 项)
+python3 tools/test-user.py     # Ring 3 用户态 (36 项)
 ```
+
+> test-preempt / test-mario 是附着式测试（argv[1]=monitor socket），请用
+> `python3 tools/run-attached-tests.py` 启动（自动起 QEMU → 等开机画面结束 → 依次运行）。
 
 ## 📂 目录结构
 
@@ -159,9 +176,12 @@ python3 tools/test-cc.py       # C 编译器 (26 项)
 ├── kernel/             # 内核源码 (C + 汇编)
 │   ├── kernel.c        # 内核入口
 │   ├── memory.c/h      # 位图物理内存分配
-│   ├── paging.c/h      # 分页
+│   ├── paging.c/h      # 分页 (内核恒等映射 + 用户区)
+│   ├── gdt.c/h         # 内核 GDT (用户段 + TSS)
 │   ├── idt.c/h pic.c   # 中断与 8259A
 │   ├── irq.asm         # IRQ 汇编桩
+│   ├── exc.c exc_asm.asm    # 异常处理器 (32 个向量)
+│   ├── user.c/h user_asm.asm user_progs.c user_embed.asm  # Ring 3 用户态
 │   ├── keyboard.c      # PS/2 键盘
 │   ├── timer.c/h       # PIT 滴答 + 蜂鸣
 │   ├── vga.c/h         # 文本模式显示
@@ -177,8 +197,12 @@ python3 tools/test-cc.py       # C 编译器 (26 项)
 │   ├── task.c/h switch.asm   # 多任务
 │   ├── realmode.c/h rm_*.asm  # 实模式往返跳板
 │   └── keymap.h string.h      # 扫描码映射 / 字符串工具
+├── user/               # 用户态演示程序 (宿主 gcc 编译后 incbin 进内核)
+│   ├── lib.h           # 系统调用封装 (int 0x80)
+│   ├── linker.ld       # 链接到 0x2000000 (用户区)
+│   └── hello.c count.c crash.c div0.c echo.c badptr.c
 ├── tetris/             # 原始实模式汇编版 (移植蓝本)
-├── tools/              # 字体转换 + 5 套测试脚本
+├── tools/              # 字体转换 + 8 套测试脚本
 ├── note/               # 开发记录 + 截图
 └── Makefile
 ```
@@ -196,6 +220,7 @@ python3 tools/test-cc.py       # C 编译器 (26 项)
 | 7 | nano 风格内置编辑器 |
 | 8 | c4 迷你 C 编译器（写 C → 编译 → 运行闭环） |
 | 9 | 开机画面（用户 hello.asm 的 32 位移植美化版） |
+| 10 | Ring 3 用户态（TSS + 页表 U/S 保护 + int 0x80 系统调用 + 异常处理） |
 
 每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
 
