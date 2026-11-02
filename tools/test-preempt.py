@@ -50,11 +50,11 @@ def check(name, ok, detail=""):
 
 drain(2.5)
 
-# 0. 启动 sanity
+# 0. 启动 sanity (默认 font 18/22 行屏, help 开头几行会滚掉, 查末行)
 type_text("help\n")
 time.sleep(0.5)
 t = vga_text()
-check("boot+shell OK", "Available" in t)
+check("boot+shell OK", "cc f.c" in t)
 
 # 1. start → 恶霸 C 上场
 type_text("start\n")

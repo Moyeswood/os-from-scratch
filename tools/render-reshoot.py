@@ -83,25 +83,30 @@ if not wait_pat(r"\[SP\] (done|skipped)"): print("TIMEOUT [SP]"); sys.exit(1)
 time.sleep(1.0)
 shot("splash-shell")
 
-# 3. font 16 help
+# 3. font 18 help (默认字号)
+type_text("help\n", wait=0.1)
+shot("font18")
+
+# 4. font 16 help
+type_text("font 16\n", wait=0.1)
 type_text("help\n", wait=0.1)
 shot("font16")
 
-# 4. font 12 提示符
+# 5. font 12 提示符
 type_text("font 12\n", wait=0.1)
 shot("font12")
 
-# 5. font 12 help
+# 6. font 12 help
 type_text("help\n", wait=0.1)
 shot("font12-help")
 
-# 6. font 14 help
+# 7. font 14 help
 type_text("font 14\n", wait=0.1)
 type_text("help\n", wait=0.1)
 shot("font14-help")
 
-# 7. 文件系统操作 (font 16)
-type_text("font 16\n", wait=0.1)
+# 8. 文件系统操作 (font 18 默认)
+type_text("font 18\n", wait=0.1)
 type_text("mkdir demo\n", wait=0.1)
 type_text("echo hello from NewOS > demo/a.txt\n", wait=0.1)
 type_text("ls demo\n", wait=0.1)
@@ -109,7 +114,7 @@ type_text("cat demo/a.txt\n", wait=0.1)
 type_text("df\n", wait=0.1)
 shot("shell-fs")
 
-# 8. 编辑器
+# 9. 编辑器
 type_text("edit demo/a.txt\n", wait=0.15)
 wait_pat(r"\[ED\] (new|open):", timeout=10)
 time.sleep(1.2)
@@ -121,7 +126,7 @@ shot("editor")
 press("ctrl-x", wait=0.5)
 wait_pat(r"\[ED\] exit", timeout=8)
 
-# 9. C 编译运行
+# 10. C 编译运行
 type_text("edit /hello.c\n", wait=0.15)
 wait_pat(r"\[ED\] (new|open):", timeout=10)
 time.sleep(1.2)

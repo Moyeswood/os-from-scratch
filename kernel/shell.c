@@ -147,7 +147,7 @@ static void cmd_help() {
     vga_puts("  testmode - Test graphics mode round trip (BIOS INT 10h)\n\r");
     vga_puts("  tetris   - Play Tetris (ESC to exit)\n\r");
     vga_puts("  mario    - Play Super Mario (ESC to exit)\n\r");
-    vga_puts("  font N   - Change font size: 12 (33 lines), 14 (28), 16 (25)\n\r");
+    vga_puts("  font N   - Change font size (rows): 12(33) 14(28) 16(25) 18(22) 20(20)\n\r");
     vga_puts("  pwd      - Print working directory\n\r");
     vga_puts("  ls [d]   - List directory\n\r");
     vga_puts("  cd [d]   - Change directory (no arg = root)\n\r");
@@ -207,12 +207,12 @@ static void cmd_font(int argc, char** argv) {
         vga_putc('0' + rows / 10);
         vga_putc('0' + rows % 10);
         vga_puts(" lines)\n\r");
-        vga_puts("Usage: font 12 | 14 | 16\n\r");
-    } else if (h == 12 || h == 14 || h == 16) {
+        vga_puts("Usage: font 12 | 14 | 16 | 18 | 20\n\r");
+    } else if (h == 12 || h == 14 || h == 16 || h == 18 || h == 20) {
         font_apply(h);              // 加载字体 + 自测 (串口报 [FONT] OK/FAIL)
         vga_puts("MyQwen-OS v1.0.0\n\r");
     } else {
-        vga_puts("\n\rUsage: font 12 | 14 | 16\n\r");
+        vga_puts("\n\rUsage: font 12 | 14 | 16 | 18 | 20\n\r");
     }
 }
 

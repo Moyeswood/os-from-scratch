@@ -108,11 +108,11 @@ def wait_for(cond, timeout=5.0, name=""):
     print(f"  [wait_for:{name}] timeout: buf={len(serial_buf)}B since={len(serial_since())}B tail={serial_log()[-100:]!r}", flush=True)
     return False
 
-# ---------- 1. 启动: 自动加载 8x16 Terminus ----------
+# ---------- 1. 启动: 自动加载 8x18 Terminus (8x16 垂直放大) ----------
 time.sleep(3.0)
 dbg = serial_log()
-check("boot: font16 loaded (plane2 readback + CRTC)",
-      wait_font_marker(0x10, 0x0F, timeout=1.0))
+check("boot: font18 loaded (plane2 readback + CRTC)",
+      wait_font_marker(0x12, 0x11, timeout=1.0))
 # 等开机画面结束再检查 banner (banner 在 splash 之后才打印)
 check("boot: splash done", wait_for(
     lambda: "[SP] done" in serial_log() or "[SP] skipped" in serial_log(),
@@ -143,7 +143,7 @@ check("font 12: shell rows=33", "(33 lines)" in read_screen())
 # ---------- 4. 非法参数 ----------
 type_text("font 99\n")
 time.sleep(0.5)
-check("font 99: usage shown", "Usage: font 12 | 14 | 16" in read_screen())
+check("font 99: usage shown", "Usage: font 12 | 14 | 16 | 18 | 20" in read_screen())
 
 # ---------- 5. 回到 16 + help 回归 ----------
 mark_serial_base()
@@ -210,6 +210,20 @@ check("font12 survives tetris: rows=33", "(33 lines)" in read_screen())
 mark_serial_base()
 type_text("font 16\n")
 check("step9: back to 16", wait_font_marker(0x10, 0x0F))
+
+# ---------- 10. font 18 / 20 (8x16 垂直放大, 行复制) ----------
+mark_serial_base()
+type_text("font 18\n")
+check("font 18: hardware applied", wait_font_marker(0x12, 0x11))
+type_text("font\n")
+time.sleep(0.5)
+check("font 18: shell rows=22", "(22 lines)" in read_screen())
+mark_serial_base()
+type_text("font 20\n")
+check("font 20: hardware applied", wait_font_marker(0x14, 0x13))
+type_text("font\n")
+time.sleep(0.5)
+check("font 20: shell rows=20", "(20 lines)" in read_screen())
 
 try:
     qemu.terminate()

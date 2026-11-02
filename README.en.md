@@ -35,7 +35,7 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 - **Preemptive multitasking**: PIT IRQ0 (18.2 Hz) round-robin scheduling; cooperative and preemptive context frames are mutually restorable; includes a "bully task" demo
 - **Device drivers**: VGA text/graphics, COM1 serial, PS/2 keyboard, PIT timer, PC speaker beep
 - **Graphics library**: mode 13h (320×200×256) palette/pixel/rect/sprite/font
-- **🎨 Adjustable fonts**: pure VGA hardware programming to load **Terminus** bitmap fonts (writing character-generator plane 2 + CRTC row reprogramming); `font` command with 3 sizes (25/28/33 lines), hardware-level self-test on every load
+- **🎨 Adjustable fonts**: pure VGA hardware programming to load **Terminus** bitmap fonts (writing character-generator plane 2 + CRTC row reprogramming); `font` command with 5 sizes (12/14/16/18/20 → 33/28/25/22/20 lines, default 18; 18/20 vertically scaled from 8x16), hardware-level self-test on every load
 
 ### 📁 Filesystem
 xv6-style teaching implementation (in-memory, 1 MB / 256 blocks, 64 inodes):
@@ -82,7 +82,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `ps` / `start` / `stop` | Task status / start-stop the multitasking demo |
 | `testmode` | Graphics-mode real-mode round-trip test |
 | `tetris` / `mario` | Games (ESC to exit) |
-| `font 12\|14\|16` | Font size (33/28/25 lines) |
+| `font 12\|14\|16\|18\|20` | Font size (33/28/25/22/20 lines, default 18) |
 | `pwd` | Print working directory |
 | `ls [dir]` | List directory (`<DIR>` marks directories) |
 | `cd [dir]` | Change directory (no arg = root) |
@@ -91,7 +91,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `cat file` | Show file contents |
 | `rm path` | Remove a file or empty directory |
 | `df` | Filesystem usage |
-| `edit file` | Open the editor (^S save, ^X exit) |
+| `edit file` | Open the editor (^S save, ^X asks to save on exit) |
 | `cc file.c [args...]` | Compile and run a C program (args go to main) |
 | `splash` | Replay the boot screen |
 
@@ -146,7 +146,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 python3 tools/test-splash.py   # boot screen  (14 checks)
 python3 tools/test-font.py     # fonts        (23 checks)
 python3 tools/test-fs.py       # filesystem   (39 checks)
-python3 tools/test-edit.py     # editor       (38 checks)
+python3 tools/test-edit.py     # editor       (49 checks)
 python3 tools/test-cc.py       # C compiler   (26 checks)
 ```
 

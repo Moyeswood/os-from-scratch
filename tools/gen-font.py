@@ -57,7 +57,14 @@ def load_psf(path):
 def main():
     src, out_h = sys.argv[1], sys.argv[2]
     name = sys.argv[sys.argv.index('--name') + 1] if '--name' in sys.argv else 'font_data'
+    vscale = int(sys.argv[sys.argv.index('--vscale') + 1]) if '--vscale' in sys.argv else 0
     width, height, length, charsize, glyphs, utable = load_psf(src)
+
+    if width > 8:
+        # VGA 平面 2 每行只有 8 位 — 10 宽字体会在 0x%02X 截断成垃圾字形
+        sys.exit(f"error: {os.path.basename(src)} is {width}-wide, only 8-wide fonts fit plane 2")
+    if vscale and vscale < height:
+        sys.exit(f"error: --vscale {vscale} < source height {height}")
 
     char_to_glyph = {i: i for i in range(min(length, 256))}
     if utable:
@@ -67,16 +74,18 @@ def main():
                     char_to_glyph[cp] = gi
 
     nbytes_row = (width + 7) // 8
+    out_height = vscale if vscale else height
+    src_note = "" if not vscale else f" ({width}x{height} 垂直放大, 行复制)"
     lines = [
-        f"// 由 {os.path.basename(src)} 生成: {width}x{height} 点阵字体 (Terminus)",
-        f"// 256 个字形 (码位 0..255), 每字形 {height} 字节, 每字节一行, MSB=最左像素",
-        f"// 生成命令: python3 tools/gen-font.py <源psf> {os.path.basename(out_h)} --name {name}",
+        f"// 由 {os.path.basename(src)} 生成: {width}x{out_height} 点阵字体 (Terminus){src_note}",
+        f"// 256 个字形 (码位 0..255), 每字形 {out_height} 字节, 每字节一行, MSB=最左像素",
+        f"// 生成命令: python3 tools/gen-font.py <源psf> {os.path.basename(out_h)} --name {name}" + (f" --vscale {vscale}" if vscale else ""),
         f"#ifndef {name.upper()}_H",
         f"#define {name.upper()}_H",
         "",
         '#include "types.h"',
         "",
-        f"static const uint8_t {name}[256][{height}] = {{",
+        f"static const uint8_t {name}[256][{out_height}] = {{",
     ]
     for c in range(256):
         gi = char_to_glyph.get(c, 0)
@@ -87,11 +96,14 @@ def main():
             for b in range(nbytes_row):
                 v = (v << 8) | g[r * nbytes_row + b]
             rows.append(v >> (nbytes_row * 8 - width))
+        if vscale:
+            # 垂直放大: 目标行 r 取源行 floor(r*height/vscale) (最近邻, 保持点阵锐利)
+            rows = [rows[r * height // vscale] for r in range(vscale)]
         lines.append('    {%s},  /* 0x%02X */' % (', '.join('0x%02X' % x for x in rows), c))
     lines += ["};", "", "#endif", ""]
     with open(out_h, 'w') as f:
         f.write('\n'.join(lines))
-    print(f"OK: {os.path.basename(src)} {width}x{height} ({length} glyphs) -> {out_h}")
+    print(f"OK: {os.path.basename(src)} {width}x{height} ({length} glyphs) -> {out_h} ({width}x{out_height})")
 
 if __name__ == '__main__':
     main()

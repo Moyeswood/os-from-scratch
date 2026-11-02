@@ -1,9 +1,9 @@
 // ============================================================
 //  VGA 字符发生器字体管理 (纯硬件编程, 不依赖 BIOS)
 //
-//  字体数据: font12.h / font14.h / font16.h (由 Terminus PSF 生成,
-//  见 tools/gen-font.py)。每套 256 个字形 (码位 0..255),
-//  每字形 height 字节, 每字节一行, MSB = 最左像素 —
+//  字体数据: font12.h / font14.h / font16.h / font18.h / font20.h
+//  (由 Terminus PSF 生成, 见 tools/gen-font.py)。每套 256 个字形
+//  (码位 0..255), 每字形 height 字节, 每字节一行, MSB = 最左像素 —
 //  与 VGA 字符发生器 RAM (平面 2) 的存储格式完全一致。
 //
 //  为什么不用 BIOS INT 10h AX=1100h: SeaVGABIOS 没实现它
@@ -34,11 +34,13 @@
 #include "font12.h"
 #include "font14.h"
 #include "font16.h"
+#include "font18.h"
+#include "font20.h"
 #include "vga.h"
 #include "serial.h"
 #include "io.h"
 
-static uint8_t current_height = 16;
+static uint8_t current_height = 18;
 
 uint8_t font_current(void) {
     return current_height;
@@ -47,7 +49,9 @@ uint8_t font_current(void) {
 static const uint8_t* font_table(uint8_t h) {
     if (h == 12) return &font12[0][0];
     if (h == 14) return &font14[0][0];
-    return &font16[0][0];
+    if (h == 16) return &font16[0][0];
+    if (h == 18) return &font18[0][0];
+    return &font20[0][0];
 }
 
 static void crtc_write(uint8_t reg, uint8_t val) {
@@ -176,7 +180,7 @@ static int font_selftest(const uint8_t* tbl, uint8_t h) {
 }
 
 void font_apply(uint8_t h) {
-    if (h != 12 && h != 14 && h != 16) return;
+    if (h != 12 && h != 14 && h != 16 && h != 18 && h != 20) return;
     const uint8_t* tbl = font_table(h);
 
     // 1. 写字符发生器平面 2
