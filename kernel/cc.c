@@ -170,7 +170,7 @@ int *e, *le,       // current position in emitted code
 // tokens and classes (operators last and in precedence order)
 enum {
   Num = 128, Fun, Sys, Glo, Loc, Id,
-  Char, Else, Enum, If, Int, Return, Sizeof, While,
+  Char, Else, Enum, If, Int, Return, Sizeof, While, Do, For, Break, Continue,
   Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Mod, Inc, Dec, Brak
 };
 
@@ -411,9 +411,23 @@ void expr(int lev)
   }
 }
 
+// for 增量子句先在这里编译, 循环体后拷回代码流。按嵌套深度分层 —
+// 内层 for 会递归使用更深一层, 互不覆盖。
+// ★局限: 暂存代码里的跳转 (&& || ?:) 目标指向暂存区, 拷回后会失效 —
+// 教学版约定: for 增量表达式里不要用 && || ?:。
+static int cc_scratch[32][256];
+static int cc_scratch_depth;
+// break/continue 的 JMP 操作数补丁槽 (循环嵌套用计数保存/恢复)
+static int cc_brk[32], cc_brk_n;
+static int cc_cnt[32], cc_cnt_n;
+// 全局初始化代码 (编译期累积, 解析完后拷到代码流末尾作为执行入口)
+static int cc_ginit[512];
+static int cc_ginit_n;
+
 void stmt()
 {
   int *a, *b;
+  int i, save_brk, save_cnt;
 
   if (tk == If) {
     next();
@@ -431,6 +445,7 @@ void stmt()
   }
   else if (tk == While) {
     next();
+    save_brk = cc_brk_n; save_cnt = cc_cnt_n;
     a = e + 1;
     if (tk == '(') next(); else { printf("%d: open paren expected\n", line); exit(-1); }
     expr(Assign);
@@ -439,6 +454,72 @@ void stmt()
     stmt();
     *++e = JMP; *++e = (int)a;
     *b = (int)(e + 1);
+    while (cc_brk_n > save_brk) { cc_brk_n--; *(int *)cc_brk[cc_brk_n] = (int)(e + 1); }
+    while (cc_cnt_n > save_cnt) { cc_cnt_n--; *(int *)cc_cnt[cc_cnt_n] = (int)a; }
+  }
+  else if (tk == Do) {
+    next();
+    save_brk = cc_brk_n; save_cnt = cc_cnt_n;
+    a = e + 1;                                   // 循环体起点
+    stmt();
+    if (tk != While) { printf("%d: while expected after do body\n", line); exit(-1); }
+    next();
+    if (tk == '(') next(); else { printf("%d: open paren expected\n", line); exit(-1); }
+    b = e + 1;                                   // 条件起点 (continue 目标)
+    expr(Assign);
+    if (tk == ')') next(); else { printf("%d: close paren expected\n", line); exit(-1); }
+    *++e = BNZ; *++e = (int)a;                   // 条件真 → 回循环体
+    while (cc_brk_n > save_brk) { cc_brk_n--; *(int *)cc_brk[cc_brk_n] = (int)(e + 1); }
+    while (cc_cnt_n > save_cnt) { cc_cnt_n--; *(int *)cc_cnt[cc_cnt_n] = (int)b; }
+    if (tk == ';') next(); else { printf("%d: semicolon expected\n", line); exit(-1); }
+  }
+  else if (tk == For) {
+    next();
+    if (tk == '(') next(); else { printf("%d: open paren expected\n", line); exit(-1); }
+    if (tk != ';') expr(Assign);                 // 初始化子句 (进循环前跑一次)
+    if (tk == ';') next(); else { printf("%d: semicolon expected\n", line); exit(-1); }
+    a = e + 1;                                   // 条件重估位置
+    if (tk != ';') expr(Assign);                 // 条件
+    if (tk == ';') next(); else { printf("%d: semicolon expected\n", line); exit(-1); }
+    *++e = BZ; b = ++e;                          // 条件假 → 循环尾 (槽在 b)
+    save_brk = cc_brk_n; save_cnt = cc_cnt_n;
+    if (cc_scratch_depth >= 32) { printf("%d: for nested too deep\n", line); exit(-1); }
+    {
+      // 增量表达式: 代码暂存到本层 scratch (语法在前, 代码要放到循环体后)
+      // ★e 从 sc-1 起: *++e 的第一笔写落在 sc[0], 长度/拷贝才对齐;
+      // ★depth 在 body 解析期间保持占用: 内层 for 用更深一层, 不会覆盖本层暂存
+      int *sc = cc_scratch[cc_scratch_depth++];
+      int *save = e;
+      int *sbase = sc - 1;
+      e = sbase;
+      if (tk != ')') expr(Assign);
+      i = (int)(e - sbase);                      // 增量代码字数
+      e = save;
+      if (tk == ')') next(); else { printf("%d: close paren expected\n", line); exit(-1); }
+      stmt();                                    // 循环体
+      cc_scratch_depth--;                        // 释放本层
+      {
+        int *incr = e + 1;                       // 增量起点 (= continue 目标)
+        int j;
+        for (j = 0; j < i; j++) *++e = sc[j];    // 拷回增量代码
+        *++e = JMP; *++e = (int)a;               // 回条件
+        *b = (int)(e + 1);                       // 条件假 → 循环尾
+        while (cc_brk_n > save_brk) { cc_brk_n--; *(int *)cc_brk[cc_brk_n] = (int)(e + 1); }
+        while (cc_cnt_n > save_cnt) { cc_cnt_n--; *(int *)cc_cnt[cc_cnt_n] = (int)incr; }
+      }
+    }
+  }
+  else if (tk == Break) {
+    next();
+    if (cc_brk_n >= 32) { printf("%d: break nested too deep\n", line); exit(-1); }
+    *++e = JMP; cc_brk[cc_brk_n++] = (int)(e + 1); *++e = 0;
+    if (tk == ';') next(); else { printf("%d: semicolon expected\n", line); exit(-1); }
+  }
+  else if (tk == Continue) {
+    next();
+    if (cc_cnt_n >= 32) { printf("%d: continue nested too deep\n", line); exit(-1); }
+    *++e = JMP; cc_cnt[cc_cnt_n++] = (int)(e + 1); *++e = 0;
+    if (tk == ';') next(); else { printf("%d: semicolon expected\n", line); exit(-1); }
   }
   else if (tk == Return) {
     next();
@@ -493,6 +574,7 @@ int cc_run(const char* path, int argc, char** argv)
   memset(e,    0, poolsz);
   memset(data, 0, poolsz);
   for (i = 0; i < 64; i++) cc_fd_off[i] = 0;
+  cc_scratch_depth = 0; cc_brk_n = 0; cc_cnt_n = 0; cc_ginit_n = 0;
 
   // 从文件系统读源文件
   serial_puts("[CC] compile: "); serial_puts(path); serial_puts("\n\r");
@@ -512,9 +594,9 @@ int cc_run(const char* path, int argc, char** argv)
     p = cc_srcbuf;
   }
 
-  p = "char else enum if int return sizeof while "
+  p = "char else enum if int return sizeof while do for break continue "
       "open read close printf malloc free memset memcmp exit void main";
-  i = Char; while (i <= While) { next(); id[Tk] = i++; } // add keywords to symbol table
+  i = Char; while (i <= Continue) { next(); id[Tk] = i++; } // add keywords to symbol table
   i = OPEN; while (i <= EXIT) { next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++; } // add library to symbol table
   next(); id[Tk] = Char; // handle void type
   next(); idmain = id; // keep track of main
@@ -578,6 +660,9 @@ int cc_run(const char* path, int argc, char** argv)
         if (tk != '{') { printf("%d: bad function definition\n", line); exit(-1); }
         loc = ++i;
         next();
+        // ★ENT 必须在声明解析前发出: 声明初始化代码要落在函数入口之后
+        // (否则初始化会在 ENT 建帧前执行, 写到调用者的栈上)。
+        *++e = ENT; *++e = 0; t = e;               // 局部数占位, 声明完后回填
         while (tk == Int || tk == Char) {
           bt = (tk == Int) ? INT : CHAR;
           next();
@@ -590,11 +675,21 @@ int cc_run(const char* path, int argc, char** argv)
             id[HType]  = id[Type];  id[Type] = ty;
             id[HVal]   = id[Val];   id[Val] = ++i;
             next();
+            if (tk == Assign) {
+              // 局部声明初始化: LEA 取地址 → PSH → 值 → SC/SI 存回
+              // ★先存槽位/类型: next() 越过 '=' 会把 id/ty 重解析成右侧表达式
+              int v = id[Val];
+              int dty = ty;
+              next();
+              *++e = LEA; *++e = loc - v; *++e = PSH;
+              expr(Assign);
+              *++e = (dty == CHAR) ? SC : SI;
+            }
             if (tk == ',') next();
           }
           next();
         }
-        *++e = ENT; *++e = i - loc;
+        *t = i - loc;                              // 回填 ENT 的局部数
         while (tk != '}') stmt();
         *++e = LEV;
         id = sym; // unwind symbol table locals
@@ -612,12 +707,44 @@ int cc_run(const char* path, int argc, char** argv)
         id[Val] = (int)data;
         data = data + sizeof(int);
       }
+      if (tk == Assign) {
+        // 全局初始化: 代码暂存到 scratch, 解析完后拷到代码流末尾
+        // (执行入口设在那里: 跑完初始化 JMP main)。局限同 for 增量。
+        // ★e 从 sc-1 起: *++e 的第一笔写落在 sc[0], 长度/拷贝才对齐;
+        // ★先存地址/类型: next() 越过 '=' 会把 id/ty 重解析成右侧表达式
+        int *save = e;
+        int *sbase = cc_scratch[0] - 1;
+        int gaddr = id[Val];
+        int dty = ty;
+        e = sbase;
+        next();
+        *++e = IMM; *++e = gaddr; *++e = PSH;
+        expr(Assign);
+        *++e = (dty == CHAR) ? SC : SI;
+        i = (int)(e - sbase);                    // 初始化代码字数
+        e = save;
+        {
+          int j;
+          for (j = 0; j < i; j++) cc_ginit[cc_ginit_n + j] = cc_scratch[0][j];
+          cc_ginit_n += i;
+        }
+      }
       if (tk == ',') next();
     }
     next();
   }
 
   if (!(pc = (int *)idmain[Val])) { printf("main() not defined\n"); cc_pfree_all(); return -1; }
+
+  // 全局初始化: 拷到代码流末尾, 执行入口设在这里 (跑完 JMP main)。
+  // main 的 LEV 照常弹出 EXIT 返回地址 → 退出路径不变。
+  if (cc_ginit_n > 0) {
+    int *gstart = e + 1;
+    int j;
+    for (j = 0; j < cc_ginit_n; j++) *++e = cc_ginit[j];
+    *++e = JMP; *++e = (int)pc;
+    pc = gstart;
+  }
 
   // setup stack
   bp = sp = (int *)((int)sp + poolsz);

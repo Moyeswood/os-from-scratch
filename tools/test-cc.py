@@ -163,6 +163,79 @@ check("write fib.c", write_source("/fib.c", [
     'int main() { printf("fib(10)=%d\\n", fib(10)); return 0; }']))
 check("cc fib.c = 55", run_cc("/fib.c", "fib(10)=55", name="cc-fib"))
 
+# ---------- 2.5 声明初始化 (2026-11-02 新增) ----------
+check("write init.c", write_source("/init.c", [
+    "int main() {",
+    "  int a = 5;",
+    "  int b = a + 7;",
+    "  char c = 65;",
+    "  printf(\"init %d %d %d\\n\", a, b, c);",
+    "  return 0;",
+    "}",
+]))
+check("cc init.c", run_cc("/init.c", "init 5 12 65", name="cc-init"))
+
+check("write ginit.c", write_source("/ginit.c", [
+    "int g = 21;",
+    "int main() {",
+    "  int a = g + 21;",
+    "  printf(\"ginit %d\\n\", a);",
+    "  return 0;",
+    "}",
+]))
+check("cc ginit.c (global init)", run_cc("/ginit.c", "ginit 42", name="cc-ginit"))
+
+# ---------- 2.6 for/do-while/break/continue (2026-11-02 新增) ----------
+check("write for.c", write_source("/for.c", [
+    "int main() {",
+    "  int i; int s = 0;",
+    "  for (i = 1; i <= 10; i = i + 1) { s = s + i; }",
+    "  printf(\"for=%d\\n\", s);",
+    "  return 0;",
+    "}",
+]))
+check("cc for.c = 55", run_cc("/for.c", "for=55", name="cc-for"))
+
+check("write brk.c", write_source("/brk.c", [
+    "int main() {",
+    "  int i; int j; int s = 0;",
+    "  for (i = 0; i < 10; i = i + 1) {",
+    "    if (i == 2) { continue; }",
+    "    if (i == 5) { break; }",
+    "    s = s + i;",
+    "  }",
+    "  for (i = 0; i < 3; i = i + 1) {",
+    "    for (j = 0; j < 3; j = j + 1) {",
+    "      if (j == 1) { continue; }",
+    "      s = s + j;",
+    "    }",
+    "  }",
+    "  printf(\"brk=%d\\n\", s);",
+    "  return 0;",
+    "}",
+]))
+check("cc brk.c (break/continue/嵌套)", run_cc("/brk.c", "brk=14", name="cc-brk"))
+
+check("write dow.c", write_source("/dow.c", [
+    "int main() {",
+    "  int n = 0;",
+    "  do { n = n + 1; } while (n < 5);",
+    "  printf(\"do=%d\\n\", n);",
+    "  return 0;",
+    "}",
+]))
+check("cc dow.c (do-while)", run_cc("/dow.c", "do=5", name="cc-do"))
+
+check("write wbrk.c", write_source("/wbrk.c", [
+    "int main() {",
+    "  int i = 0;",
+    "  while (1) { i = i + 1; if (i == 4) { break; } }",
+    "  printf(\"wbrk=%d\\n\", i);",
+    "  return 0;",
+    "}",
+]))
+check("cc wbrk.c (while+break)", run_cc("/wbrk.c", "wbrk=4", name="cc-wbrk"))
+
 # ---------- 5. 指针 + malloc + 字符串 + sizeof ----------
 check("write str.c", write_source("/str.c", [
     "int main() { char *s; s = malloc(16);",

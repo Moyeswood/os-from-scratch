@@ -57,10 +57,11 @@ nano 风格的 `edit` 命令：
 | 支持 | 说明 |
 |---|---|
 | 类型 | `char`、`int`、指针、一维数组、`enum`、`sizeof` |
-| 语句 | `if/else`、`while`、`return`、表达式、函数调用（含递归） |
+| 声明 | 可带初始化：`int a = 5;`（全局/局部均支持，全局初始化在进入 main 前执行） |
+| 语句 | `if/else`、`while`、`do/while`、`for`、`break/continue`、`return`、表达式、函数调用（含递归） |
 | 注释 | `//` 和 `/* */` |
 | 内建 | `printf` `open` `read` `close` `malloc` `free` `memset` `memcmp` `exit` |
-| 不支持 | struct/union、float、for/do/switch、break/continue、预处理 |
+| 不支持 | struct/union、float、switch、goto、预处理；for 增量/全局初始化表达式里勿用 `&&` `\|\|` `?:`（代码暂存后拷回的局限） |
 
 **`open/read` 对接本 OS 文件系统**——C 程序能直接读取 OS 里的文件！编译错误带行号，死循环可 ESC 中断。
 

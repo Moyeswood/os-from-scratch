@@ -57,10 +57,11 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | Supported | Notes |
 |---|---|
 | Types | `char`, `int`, pointers, 1-D arrays, `enum`, `sizeof` |
-| Statements | `if/else`, `while`, `return`, expressions, function calls (incl. recursion) |
+| Declarations | May have initializers: `int a = 5;` (global & local; globals run before `main`) |
+| Statements | `if/else`, `while`, `do/while`, `for`, `break/continue`, `return`, expressions, function calls (incl. recursion) |
 | Comments | `//` and `/* */` |
 | Builtins | `printf` `open` `read` `close` `malloc` `free` `memset` `memcmp` `exit` |
-| Not supported | struct/union, float, for/do/switch, break/continue, preprocessor |
+| Not supported | struct/union, float, switch, goto, preprocessor; avoid `&&` `\|\|` `?:` in for-increment / global-initializer expressions (deferred-codegen limitation) |
 
 **`open/read` talk to the OS's own filesystem** — C programs can read files inside the OS! Compile errors include line numbers; runaway loops can be interrupted with ESC.
 
