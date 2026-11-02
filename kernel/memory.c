@@ -96,6 +96,17 @@ void free_page(uint32_t addr) {
     }
 }
 
+// 里程碑 10: 把一段物理地址保留 (标记已分配)。
+// 用户区 32~36MB 是固定地址 (用户程序链接在 0x2000000),
+// 不保留的话 alloc_pages 迟早把它发给别人。
+void memory_reserve(uint32_t addr, uint32_t bytes) {
+    uint32_t start = addr / PAGE_SIZE;
+    uint32_t pages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+    for (uint32_t p = start; p < start + pages && p < total_pages; p++) {
+        bitmap[p / 8] |= (1 << (p % 8));
+    }
+}
+
 uint32_t get_total_pages() {
     return total_pages;
 }

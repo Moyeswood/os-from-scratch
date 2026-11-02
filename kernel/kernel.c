@@ -10,6 +10,8 @@
 #include "font.h"
 #include "fs.h"
 #include "splash.h"
+#include "gdt.h"
+#include "user.h"
 #include "types.h"
 
 extern void pic_remap();
@@ -19,6 +21,7 @@ void kernel_main() {
     vga_init();
     memory_init();
     paging_init();
+    gdt_init();     // 里程碑 10: 换内核自己的 GDT (用户段 + TSS)
     idt_init();
     pic_remap();
     timer_init();   // PIT 通道 0: ~18.2 Hz 滴答 (游戏计时/蜂鸣超时用)
@@ -28,6 +31,7 @@ void kernel_main() {
     rm_load_trampoline();   // 把实模式跳板装入低内存 0x6000
     font_apply(18);         // 加载 Terminus 8x18 字体 (22 行) + 硬件自测 (串口报 [FONT])
     fs_init();              // 格式化并挂载内存文件系统 (串口报 [FS] + 自测)
+    user_init();            // 里程碑 10: 用户区映射 + 程序表 (串口报 [USER])
     splash_run();           // 开机画面 (任意键跳过, 串口报 [SP] done/skipped)
     shell_reset_input();    // 跳过画面的按键别留到 shell 输入里
 

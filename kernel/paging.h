@@ -21,4 +21,11 @@ typedef struct {
 // 初始化分页机制
 void paging_init();
 
+// 用户区常量 (32~36MB, 代码在 USER_BASE, 栈顶 USER_BASE+USER_SIZE)
+#define USER_BASE 0x2000000
+#define USER_SIZE 0x400000
+
+// 里程碑 10: 把用户区 (32~36MB) 映射为 USER 页 (Ring 3 可访问)
+void paging_map_user_region();
+
 #endif

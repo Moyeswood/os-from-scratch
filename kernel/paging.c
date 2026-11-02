@@ -11,6 +11,8 @@
 #define PAGE_TABLE_5_ADDR 0x1006000
 #define PAGE_TABLE_6_ADDR 0x1007000
 #define PAGE_TABLE_7_ADDR 0x1008000
+#define PAGE_TABLE_8_ADDR 0x1009000   // 里程碑 10: 用户区页表 (32~36MB)
+// 用户区范围常量在 paging.h (USER_BASE/USER_SIZE)
 
 void paging_init() {
     serial_puts("\n\r[Paging] Init (32MB map, tables at 16MB)...\n\r");
@@ -48,6 +50,30 @@ void paging_init() {
     __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
     cr0 |= 0x80000000; 
     __asm__ volatile("mov %0, %%cr0" : : "r"(cr0));
-    
+
     serial_puts("[Paging] ENABLED!\n\r");
+}
+
+// ============================================================
+//  用户区映射 (里程碑 10: Ring 3 用户态)
+//
+//  页目录第 8 项 → 页表 8 → 物理 32~36MB, 每条目都带 PAGE_USER。
+//  ★两级都要 U/S=1: CPU 检查页目录项和页表项, 有一级是 supervisor
+//  用户态访问就 #PF。
+//
+//  共享地址空间设计: 内核 0~32MB (supervisor, 用户态碰了 #PF),
+//  用户 32~36MB (USER)。不切 CR3 — 用户态发生中断/系统调用时
+//  内核页都还在, 处理器无需切换页表。真实 OS 会给每个进程
+//  独立页目录 (隔离更彻底), 这里作为下一步的引子。
+// ============================================================
+void paging_map_user_region() {
+    uint32_t* page_dir = (uint32_t*)PAGE_DIR_ADDR;
+    uint32_t* pt8 = (uint32_t*)PAGE_TABLE_8_ADDR;
+
+    for (int i = 0; i < 1024; i++) {
+        pt8[i] = (USER_BASE + (uint32_t)i * 4096)
+               | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+    }
+    // PDE 也要 PAGE_USER (见函数头注释)
+    page_dir[8] = (uint32_t)pt8 | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
 }

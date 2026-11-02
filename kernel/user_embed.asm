@@ -1,0 +1,40 @@
+; ============================================================
+;  用户程序镜像嵌入 (里程碑 10)
+;
+;  user/*.c 由主机 gcc -m32 编译链接成 flat bin (入口 0x2000000),
+;  这里 incbin 进内核, run 命令再拷到用户区执行。
+;  (和 rm_embed.asm 内嵌实模式跳板同一手法。)
+; ============================================================
+
+[BITS 32]
+section .rodata
+
+global user_hello_start
+user_hello_start: incbin "build/hello.bin"
+global user_hello_end
+user_hello_end:
+
+global user_count_start
+user_count_start: incbin "build/count.bin"
+global user_count_end
+user_count_end:
+
+global user_crash_start
+user_crash_start: incbin "build/crash.bin"
+global user_crash_end
+user_crash_end:
+
+global user_div0_start
+user_div0_start: incbin "build/div0.bin"
+global user_div0_end
+user_div0_end:
+
+global user_echo_start
+user_echo_start: incbin "build/echo.bin"
+global user_echo_end
+user_echo_end:
+
+global user_badptr_start
+user_badptr_start: incbin "build/badptr.bin"
+global user_badptr_end
+user_badptr_end:

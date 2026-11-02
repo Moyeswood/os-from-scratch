@@ -15,6 +15,7 @@
 #include "editor.h"
 #include "cc.h"
 #include "splash.h"
+#include "user.h"
 
 #define MAX_INPUT 256
 #define MAX_HISTORY 10
@@ -159,6 +160,7 @@ static void cmd_help() {
     vga_puts("  edit f   - Edit file (^S save, ^X exit)\n\r");
     vga_puts("  cc f.c   - Compile and run C program (c4 subset)\n\r");
     vga_puts("  splash   - Replay the boot screen animation\n\r");
+    vga_puts("  run p    - Run user program in Ring 3 (hello/count/crash/div0/echo/badptr)\n\r");
 }
 
 // 2. date 命令 (读取 CMOS)
@@ -546,6 +548,17 @@ static void execute_command() {
             // 编译并运行 C 程序 (argv[0] = 源文件, 其余传给 main)
             cc_run(argv[1], argc - 1, &argv[1]);
             kbd_drain();   // 排空运行期间/ESC 中断的残留扫描码
+        }
+    } else if (k_strcmp(argv[0], "run") == 0) {
+        if (argc < 2) {
+            vga_puts("\n\rUsage: run <hello|count|crash|div0|echo|badptr>\n\r");
+            vga_puts("  hello  - first user process    count  - timer ticks in ring 3\n\r");
+            vga_puts("  crash  - page fault demo       div0   - divide error demo\n\r");
+            vga_puts("  echo   - keyboard echo (ESC)   badptr - syscall arg validation\n\r");
+        } else {
+            // 用户进程跑在 IRQ1 处理链里 (和游戏同款架构),
+            // 进程结束/被杀后 user_run 内部会排空 8042 并清输入缓冲
+            user_run(argv[1]);
         }
     } else if (k_strcmp(argv[0], "splash") == 0) {
         kbd_drain();               // 触发命令的回车释放码会"跳过"动画, 先排空

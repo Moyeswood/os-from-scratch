@@ -39,7 +39,18 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
               $(KERNEL_DIR)/switch.o \
               $(KERNEL_DIR)/realmode.o \
               $(KERNEL_DIR)/rm_entry.o \
-              $(KERNEL_DIR)/rm_embed.o
+              $(KERNEL_DIR)/rm_embed.o \
+              $(KERNEL_DIR)/gdt.o \
+              $(KERNEL_DIR)/exc.o \
+              $(KERNEL_DIR)/exc_asm.o \
+              $(KERNEL_DIR)/user.o \
+              $(KERNEL_DIR)/user_asm.o \
+              $(KERNEL_DIR)/user_progs.o \
+              $(KERNEL_DIR)/user_embed.o
+
+# 里程碑 10: 用户程序 (宿主 gcc 编译 → 链接到 0x2000000 → flat bin → incbin)
+USER_PROGS = hello count crash div0 echo badptr
+USER_BINS  = $(patsubst %,$(BUILD_DIR)/%.bin,$(USER_PROGS))
 
 all: $(OS_IMG)
 
@@ -68,6 +79,22 @@ $(KERNEL_DIR)/rm_entry.o: $(KERNEL_DIR)/rm_entry.asm
 
 $(KERNEL_DIR)/rm_embed.o: $(KERNEL_DIR)/rm_embed.asm $(TRAMP_BIN)
 	$(ASM) -f elf32 $< -o $@
+
+$(KERNEL_DIR)/exc_asm.o: $(KERNEL_DIR)/exc_asm.asm
+	$(ASM) -f elf32 $< -o $@
+
+$(KERNEL_DIR)/user_asm.o: $(KERNEL_DIR)/user_asm.asm
+	$(ASM) -f elf32 $< -o $@
+
+$(KERNEL_DIR)/user_embed.o: $(KERNEL_DIR)/user_embed.asm $(USER_BINS)
+	$(ASM) -f elf32 $< -o $@
+
+# 用户程序: 独立编译成 flat binary, 入口 0x2000000 (见 user/linker.ld)
+$(BUILD_DIR)/%.bin: user/%.c user/lib.h user/linker.ld
+	mkdir -p $(BUILD_DIR)
+	$(CC) -m32 -O2 -ffreestanding -fno-pie -fno-stack-protector -nostdlib -c $< -o $(BUILD_DIR)/$*.o
+	$(LD) -m elf_i386 -T user/linker.ld $(BUILD_DIR)/$*.o -o $(BUILD_DIR)/$*.elf
+	$(OBJCOPY) -O binary $(BUILD_DIR)/$*.elf $@
 
 $(KERNEL_DIR)/%.o: $(KERNEL_DIR)/%.c
 	$(CC) -m32 -g -ffreestanding -fno-pie -fno-stack-protector -nostdlib -c $< -o $@
