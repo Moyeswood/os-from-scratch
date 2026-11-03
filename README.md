@@ -150,6 +150,10 @@ printf("read %d: %s\n", n, buf); return 0; }
 |---|---|
 | <img src="note/ring3-hello.png" width="360" alt="Ring 3 用户态"/> | <img src="note/ring3-crash.png" width="360" alt="页错误现场"/> |
 
+| fork 独立地址空间 (子改 200 父仍 100) | 后台进程 + ps 进程表 |
+|---|---|
+| <img src="note/proc-forkdemo.png" width="360" alt="fork 独立地址空间"/> | <img src="note/proc-ps.png" width="360" alt="后台进程与进程表"/> |
+
 ## 🧪 自动化测试
 
 10 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**共 284 项**：
