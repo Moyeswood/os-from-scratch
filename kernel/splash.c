@@ -18,6 +18,7 @@
 #include "timer.h"
 #include "serial.h"
 #include "io.h"
+#include "keyboard.h"
 #include "types.h"
 
 extern void splash_glyph(int x, int y, char c, int color, int scale);
@@ -73,9 +74,9 @@ static void splash_shuffle(void) {
 }
 
 // ---------- 按键/计时 ----------
+// 里程碑 11a: 任意键 = 环形缓冲里有任何字节 (IRQ1 处理器负责推进)
 static int splash_anykey(void) {
-    if (inb(0x64) & 1) { inb(0x60); return 1; }
-    return 0;
+    return kbd_pop() >= 0;
 }
 
 // 等到 target 滴答, 期间任意键 → 返回 1 (跳过)

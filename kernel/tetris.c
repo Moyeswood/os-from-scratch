@@ -27,6 +27,7 @@
 #include "graphics.h"
 #include "timer.h"
 #include "io.h"
+#include "keyboard.h"
 #include "types.h"
 
 // ---------- 常量 (与原版一致) ----------
@@ -298,12 +299,13 @@ static void init_game() {
 
 // ---------- 键盘 ----------
 
-// 轮询 8042 取一个"按下"事件, 返回 set 1 扫描码; 无按键/释放事件返回 -1
-// (为什么轮询而不是键盘中断: 见文件头部"架构要点")
+// 从键盘环形缓冲取一个"按下"事件, 返回 set 1 扫描码; 无按键/释放事件返回 -1
+// (里程碑 11a: 老版轮询 8042 — 那时游戏跑在 IRQ1 处理链里, 键盘中断被
+// 屏蔽, 只能直接读硬件; 现在 IRQ1 处理器把扫描码推进环形缓冲, 游戏从这里读)
 static int game_key() {
-    if (!(inb(0x64) & 1)) return -1;    // 状态端口 bit0 = 输出缓冲区有数据
-    uint8_t sc = inb(0x60);
-    if (sc & 0x80) return -1;           // 释放事件: 读走但不处理
+    int sc = kbd_pop();
+    if (sc < 0) return -1;
+    if (sc & 0x80) return -1;           // 释放事件: 消费但不处理
     return sc;
 }
 

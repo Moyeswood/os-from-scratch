@@ -30,6 +30,7 @@
 #include "string.h"
 #include "serial.h"
 #include "shell.h"
+#include "keyboard.h"
 #include "io.h"
 #include "types.h"
 
@@ -218,10 +219,13 @@ static void ed_save(void) {
     serial_puts(" ("); serial_put_hex((uint32_t)r); serial_puts(" bytes)\n\r");
 }
 
-// ---------- 按键轮询 (游戏同款) ----------
+// ---------- 按键轮询 (里程碑 11a: 键盘环形缓冲) ----------
+// 老版直接轮询 8042 (编辑器跑在 IRQ1 处理链里的年代);
+// 现在 IRQ1 处理器独占 8042 并把扫描码推进环形缓冲, 这里消费。
+// 原始字节语义不变: 0xE0 前缀 / 按下 <0x80 / 释放 >=0x80,
+// 编辑器自己的 Shift/Ctrl/Caps/0xE0 跟踪逻辑原样保留。
 static int ed_poll(void) {
-    if (!(inb(0x64) & 1)) return -1;
-    return inb(0x60);
+    return kbd_pop();
 }
 
 // ---------- 主入口 ----------

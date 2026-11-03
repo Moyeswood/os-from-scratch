@@ -16,6 +16,7 @@
 // ============================================================
 
 #include "cc.h"
+#include "keyboard.h"
 #include "string.h"
 #include "fs.h"
 #include "vga.h"
@@ -759,13 +760,13 @@ int cc_run(const char* path, int argc, char** argv)
   while (1) {
     i = *pc++; ++cycle;
 
-    // ★ESC 失控保护: 每 16384 条指令查一次键盘
-    if ((cycle & 0x3FFF) == 0 && (inb(0x64) & 1)) {
-      if (inb(0x60) == 0x01) {
+    // ★ESC 失控保护: 每 16384 条指令查一次键盘环形缓冲
+    // (里程碑 11a: 老版直接读 8042 会吃掉用户的其它按键;
+    // 新版本非破坏扫描, ESC 之外的键留给 shell 做 type-ahead)
+    if ((cycle & 0x3FFF) == 0 && kbd_check_esc()) {
         printf("interrupted at cycle %d\n", cycle);
         cc_pfree_all();
         return -2;
-      }
     }
 
     if      (i == LEA) a = (int)(bp + *pc++);                             // load local address

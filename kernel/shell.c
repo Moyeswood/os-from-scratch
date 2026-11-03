@@ -5,6 +5,7 @@
 #include "io.h"
 #include "types.h"
 #include "task.h"
+#include "keyboard.h"
 #include "realmode.h"
 #include "graphics.h"
 #include "tetris.h"
@@ -104,15 +105,10 @@ static uint8_t cmos_read(uint8_t reg) {
     return inb(0x71);
 }
 
-// 【关键】排空 8042 输出缓冲区: 触发命令的那个键, 它的"释放码"一定会
-// 晚到并残留在缓冲区里, 不排空的话会污染接下来的"等按键"逻辑。
-// 所以: 清空 → 等释放码到达 → 还有字节就再清, 直到缓冲区安静。
-void kbd_drain() {
-    do {
-        while (inb(0x64) & 1) { inb(0x60); }           // 清空输出缓冲区
-        for (volatile int i = 0; i < 20000000; i++);   // 给释放码留到达时间
-    } while (inb(0x64) & 1);                           // 又来了字节 → 再清一轮
-}
+// 【里程碑 11a】kbd_drain 移到了 keyboard.c (环形缓冲版, 零延时):
+// 老实现在这里轮询 8042 + 空转延时等释放码; 新架构里 IRQ1 处理器
+// 独占 8042, 释放码天然不会进环形缓冲, "排空"只是清零游标。
+// 调用点语义不变: 丢光排队中的按键, 别让它们污染下一个"等按键"逻辑。
 
 // 重新打印当前输入行（用于历史记录切换）
 static void redraw_input_line() {
@@ -424,11 +420,13 @@ static void execute_command() {
         cmd_reboot();
     } else if (k_strcmp(argv[0], "start") == 0) {
         multitasking_enabled = 1;
+        task_start_demo();
         vga_puts("\n\rMultitasking STARTED. You will see A, B and C.\n\r");
         vga_puts("(C is a busy-loop task that never yields - only\n\r");
         vga_puts(" preemptive scheduling can interrupt it.)\n\r");
     } else if (k_strcmp(argv[0], "stop") == 0) {
         multitasking_enabled = 0;
+        task_stop_demo();
         vga_puts("\n\rMultitasking STOPPED.\n\r");
     } else if (k_strcmp(argv[0], "ps") == 0) {
         task_print_status();
@@ -442,29 +440,14 @@ static void execute_command() {
         gfx_demo();   // 图形库自测: 调色板/渐变/矩形/字体/精灵
         serial_puts("[RM] Press any key to return to text mode...\n\r");
 
-        // 【关键】等待一个"新鲜"的按键。
-        // 触发本命令的回车键, 它的"释放码"可能会晚到 (8042 输出缓冲区排队),
-        // 直接等待会把它误当成"按任意键", 图形模式一闪而过。
-        // 所以: 清空 → 等释放码到达 → 还有字节就再清, 直到缓冲区安静。
-        do {
-            while (inb(0x64) & 1) { inb(0x60); }   // 清空 8042 输出缓冲区
-            for (volatile int i = 0; i < 20000000; i++);  // 给释放码留到达时间
-        } while (inb(0x64) & 1);                   // 又来了字节 → 再清一轮
+        // 【里程碑 11a】等一个"新鲜"的按下事件: 环形缓冲版。
+        // 老代码在这里轮询 8042 + 延时排空释放码 + 只收按下码 +
+        // 事后还要再排空 (IRQ1 挂起重投递会污染 shell 输入);
+        // 新架构里释放码根本不进缓冲, 一次 drain + 一次阻塞读
+        // 就完成同样的事。
+        kbd_pop_blocking_press();
 
-        // 现在等真正的下一个按键 (轮询 8042 状态端口 bit0 = 缓冲区有数据)。
-        // ★只接受"按下码" (<0x80): 残留的释放码 (回车/之前按键) 不算数,
-        // 否则释放码会被误当"任意键"提前切回文本模式。
-        while (1) {
-            if (inb(0x64) & 1) {
-                uint8_t sc = inb(0x60);   // 读走扫描码
-                if (sc < 0x80) break;     // 按下码 → 继续
-            }
-        }
-
-        // ★【关键】再排空一次: 该按键的 IRQ1 在 PIC 里挂起 (触发本命令的
-        // 回车处理器还没 EOI), EOI 后 IRQ1 会带着残留/重发的按下码再次
-        // 投递, 键盘处理器会把重复码送进 shell 输入缓冲污染下一条命令
-        // (实测: "font 12" 变成 "afont 12" → Unknown command)。
+        // 该按键的释放码 + 演示期间按的其它键: 一起清掉
         kbd_drain();
 
         // 第二次往返: 切回文本模式
@@ -595,6 +578,23 @@ static void execute_command() {
 
 void shell_init() {
     shell_prompt();
+}
+
+// ============================================================
+//  里程碑 11a: shell 主循环 — 内核线程版
+//
+//  老架构: keyboard_handler 直接调 shell_handle_char, 整个 shell
+//  跑在 IRQ1 处理链里。新架构: shell 是调度器的任务 1, 阻塞在
+//  kbd_getchar_blocking 上 (没输入时 SLEEPING, 键盘事件把它叫醒,
+//  下一个 IRQ0 把它切上 CPU)。命令执行期间按的键在环形缓冲里
+//  排队 (type-ahead), 命令结束后续打进输入行。
+// ============================================================
+void shell_main() {
+    shell_init();
+    while (1) {
+        int c = kbd_getchar_blocking(0);   // 0 = shell 语义: ESC 无映射
+        if (c > 0) shell_handle_char(c);
+    }
 }
 
 // 清空 shell 输入缓冲 (开机画面跳过键等场景, 别把杂键带进命令)

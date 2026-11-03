@@ -4,11 +4,9 @@
 #include "serial.h"
 #include "vga.h"
 #include "timer.h"
-#include "io.h"
+#include "keyboard.h"
 #include "string.h"
 #include "shell.h"
-
-#include "keymap.h"
 
 // ============================================================
 //  Ring 3 用户态 (里程碑 10) — 进程运行 + 系统调用分发
@@ -61,31 +59,11 @@ static int sys_puts(const char* s) {
 }
 
 // SYS_GETKEY: 读一个键 (阻塞到有按下事件)。
-// 为什么内核替用户轮询 8042: 用户进程跑在 IRQ1 处理链里,
-// 同优先级的 IRQ1 不会被投递 (和 tetris/mario 同款架构),
-// 只能直接读 8042 硬件。hlt 等待时 IRQ0 会来唤醒 (最多 55ms 延迟)。
-static int user_shift = 0;
+// 【里程碑 11a】从键盘环形缓冲读 (IRQ1 处理器负责把扫描码推进去),
+// 不再轮询 8042 — 那会和 IRQ1 处理器抢字节。阻塞 = 当前任务睡到
+// 键盘事件 (IRQ1 唤醒, 下一个 IRQ0 切上 CPU, 至多 55ms 延迟)。
 static int sys_getkey(void) {
-    while (1) {
-        if (!(inb(0x64) & 1)) {
-            // ★必须 sti 再 hlt: int 0x80 是中断门, 进来时 IF 被 CPU 清了。
-            // 不开门就睡, 连 IRQ0 都进不来, hlt 永远不醒 (死锁)。
-            // 开门睡 → IRQ0 每 55ms 唤醒一次, 醒了再查缓冲区。
-            __asm__ volatile("sti; hlt");
-            continue;
-        }
-        uint8_t sc = inb(0x60);
-        uint8_t key = sc & 0x7F;
-        if (key == 0x2A || key == 0x36) {        // 左右 Shift
-            user_shift = !(sc & 0x80);
-            continue;
-        }
-        if (sc & 0x80) continue;                 // 释放码不是"按键"
-        if (key == 0x01) return 27;              // ESC: keymap 里是 0 (shell 不消费
-                                                 // ESC 字符), 用户程序按 27 处理
-        char c = user_shift ? keymap_shift[key] : keymap_normal[key];
-        if (c) return c;
-    }
+    return kbd_getchar_blocking(1);   // 1 = 用户语义: ESC → 27
 }
 
 // SYS_GETTICKS: 读滴答计数 — 证明用户态期间 IRQ0 定时器照常走
@@ -198,8 +176,11 @@ void user_run(const char* name) {
             }
             vga_puts("\n\r");
         }
-        kbd_drain();             // 排空回车释放码/运行期间残留按键
-        shell_reset_input();     // 别把运行期间按的键带进下一条命令
+        // 【里程碑 11a】不再排空键盘: 老架构要排是因为"触发命令的
+        // 回车释放码"会残留在 8042 里; 新架构 IRQ1 处理器吞掉所有
+        // 释放码, 运行期间按的键在环形缓冲里排队 (type-ahead),
+        // 进程结束后它们正常续打进 shell 输入行。
+        shell_reset_input();     // 行缓冲此刻本就是空的, 保险起见清一次
         return;
     }
 

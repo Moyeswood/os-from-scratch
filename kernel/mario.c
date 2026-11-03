@@ -16,6 +16,7 @@
 #include "graphics.h"
 #include "timer.h"
 #include "io.h"
+#include "keyboard.h"
 #include "types.h"
 
 // ---------- 常量 ----------
@@ -571,10 +572,11 @@ static void init_game() {
 }
 
 // ---------- 键盘 ----------
-// 轮询 8042: 返回原始字节 (按下 <0x80, 释放 >=0x80), 无按键返回 -1
+// 里程碑 11a: 从键盘环形缓冲取原始字节 (按下 <0x80, 释放 >=0x80),
+// 无按键返回 -1。老版轮询 8042 (游戏跑在 IRQ1 处理链里的年代);
+// 现在 IRQ1 处理器把扫描码推进环形缓冲, 这里消费。
 static int mario_key() {
-    if (!(inb(0x64) & 1)) return -1;
-    return inb(0x60);
+    return kbd_pop();
 }
 
 static void handle_key(int sc) {
