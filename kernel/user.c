@@ -1,4 +1,5 @@
 #include "user.h"
+#include "proc.h"
 #include "paging.h"
 #include "memory.h"
 #include "serial.h"
@@ -7,27 +8,22 @@
 #include "keyboard.h"
 #include "string.h"
 #include "shell.h"
+#include "task.h"
 
 // ============================================================
-//  Ring 3 用户态 (里程碑 10) — 进程运行 + 系统调用分发
+//  Ring 3 用户态 (里程碑 10) + 多进程 (里程碑 11b)
 //
-//  用户进程生命周期:
-//    user_run()           查表 → 拷镜像到 USER_BASE → setjmp → enter_user
-//    (Ring 3 执行)        输出/读键/计时全走 int 0x80
-//    exit 系统调用        → longjmp 回 setjmp 点 (退出码)
-//    用户态异常 (#PF/#DE) → exc.c → user_fault_kill → 同一条 longjmp
+//  里程碑 10 的生命周期 (setjmp/longjmp + enter_user 一套) 已被
+//  里程碑 11b 取代: 用户进程现在是真正的调度任务 —
+//    run <p>     proc_spawn → 独立页目录/用户区/内核栈 → 前台 proc_wait
+//    run <p> &   后台: spawn 完就回 shell, 进程和 shell 并发跑
+//    exit        → proc_exit: 变 ZOMBIE 切走 (不再 longjmp)
+//    异常        → exc.c → proc_fault_kill: 同上, 退出码 -1
+//    fork        → proc_fork: 复制地址空间 + 现场, 子进程返回 0
 //
-//  为什么能用 longjmp: enter_user 把 TSS.esp0 设成"当时"的内核栈,
-//  中断/系统调用/异常都落在那条栈上, 栈是连续的, longjmp 一收
-//  就回到 shell 命令的执行链里 (cc.c 编译器错误退出同款手法)。
+//  系统调用是用户程序唯一的内核大门 (int 0x80, 门 DPL=3),
+//  调用约定: eax=调用号, ebx/ecx/edx=参数, 返回值写回帧的 eax 槽。
 // ============================================================
-
-static void* user_jmp[8];       // setjmp 缓冲区 (cc.c 同款模式)
-static int user_active = 0;     // 防御: 没跑用户进程时 fault 不该 kill
-static int user_killed = 0;
-static uint32_t user_exit_code = 0;
-
-extern void enter_user(uint32_t entry, uint32_t esp_user);  // user_asm.asm
 
 // ---------- 系统调用实现 (内核侧) ----------
 
@@ -59,9 +55,9 @@ static int sys_puts(const char* s) {
 }
 
 // SYS_GETKEY: 读一个键 (阻塞到有按下事件)。
-// 【里程碑 11a】从键盘环形缓冲读 (IRQ1 处理器负责把扫描码推进去),
-// 不再轮询 8042 — 那会和 IRQ1 处理器抢字节。阻塞 = 当前任务睡到
-// 键盘事件 (IRQ1 唤醒, 下一个 IRQ0 切上 CPU, 至多 55ms 延迟)。
+// 从键盘环形缓冲读 (IRQ1 处理器负责把扫描码推进去)。阻塞 =
+// 当前任务 (用户进程自己) 睡到键盘事件: IRQ1 唤醒, 下一个
+// IRQ0 把它切上 CPU, 至多 55ms 延迟。
 static int sys_getkey(void) {
     return kbd_getchar_blocking(1);   // 1 = 用户语义: ESC → 27
 }
@@ -72,14 +68,10 @@ static uint32_t sys_getticks(void) {
 }
 
 // ---------- int 0x80 分发 ----------
-// 调用约定: eax=调用号, ebx=参数1, ecx=参数2, edx=参数3;
-// 返回值写回帧的 eax 槽 (popa 时恢复进 EAX)。
 void syscall_dispatch(user_frame_t* f) {
     switch (f->eax) {
     case SYS_EXIT:
-        user_exit_code = f->ebx;
-        user_killed = 0;
-        __builtin_longjmp(user_jmp, 1);      // 直接回 user_run 的 setjmp 点
+        proc_exit((int)f->ebx);            // 永不返回 (变 ZOMBIE 切走)
     case SYS_PUTC:
         f->eax = (uint32_t)sys_putc((char)f->ebx);
         break;
@@ -92,6 +84,16 @@ void syscall_dispatch(user_frame_t* f) {
     case SYS_GETTICKS:
         f->eax = sys_getticks();
         break;
+    case SYS_FORK:
+        f->eax = (uint32_t)proc_fork(f);   // 父进程得子 pid, 子进程 (新任务) 得 0
+        break;
+    case SYS_GETPID:
+        f->eax = (uint32_t)task_current()->pid;
+        break;
+    case SYS_SLEEP:
+        task_sleep_ticks(f->ebx);          // 睡 ebx 个滴答 (~55ms 每滴答)
+        f->eax = 0;
+        break;
     default:
         serial_puts("[SYS] unknown syscall #");
         serial_put_hex(f->eax);
@@ -101,17 +103,12 @@ void syscall_dispatch(user_frame_t* f) {
     }
 }
 
-// ---------- 异常杀进程 ----------
-void user_fault_kill(void) {
-    if (!user_active) return;                // 防御: 不该发生
-    user_killed = 1;
-    __builtin_longjmp(user_jmp, 1);
-}
-
 // ---------- 内核初始化 ----------
 void user_init() {
     // 用户区物理页是"预占"的固定地址 (程序链接在 0x2000000),
-    // 先保留, 别让分配器把它们发给 VM 内存池/FS 块
+    // 先保留, 别让分配器把它们发给 VM 内存池/FS 块。
+    // (里程碑 11b: 每进程有自己的物理页, 内核页目录里的这份
+    //  恒等映射只作调试后门, 32~36MB 物理区保持预留。)
     memory_reserve(USER_BASE, USER_SIZE);
     paging_map_user_region();
     user_progs_init();
@@ -123,7 +120,20 @@ void user_init() {
 }
 
 // ---------- run 命令入口 ----------
-void user_run(const char* name) {
+// 前台: 建进程 → 睡到它退出 → 打印退出码 (旧格式, 测试兼容)
+// 后台: 建进程 → 打印 pid → 立刻回 shell (进程和 shell 并发)
+static void vga_put_dec(uint32_t n) {
+    if (n == 0) { vga_putc('0'); return; }
+    char tmp[12];
+    int pos = 0;
+    while (n) {
+        tmp[pos++] = (char)('0' + n % 10);
+        n /= 10;
+    }
+    while (pos) vga_putc(tmp[--pos]);
+}
+
+void user_run(const char* name, int background) {
     const user_prog_t* p = 0;
     for (int i = 0; i < user_prog_count; i++) {
         if (k_strcmp(user_progs[i].name, name) == 0) { p = &user_progs[i]; break; }
@@ -134,7 +144,7 @@ void user_run(const char* name) {
         serial_puts("\n\r");
         vga_puts("\n\rUnknown program: ");
         vga_puts(name);
-        vga_puts("  (try: run hello | count | crash | div0 | echo | badptr)\n\r");
+        vga_puts("  (try: run hello | count | crash | div0 | echo | badptr | forkdemo | spinner)\n\r");
         return;
     }
     if (p->size > USER_SIZE - 4096) {
@@ -143,51 +153,44 @@ void user_run(const char* name) {
         return;
     }
 
-    // 把内嵌镜像拷进用户区 (内核写 USER 页合法: CPL0 不看 U/S)
-    k_memcpy((void*)USER_BASE, p->data, p->size);
-
-    serial_puts("[USER] run ");
-    serial_puts(name);
-    serial_puts(" (size=");
-    serial_put_hex(p->size);
-    serial_puts(", entry=0x02000000, esp=0x02400000)\n\r");
-
-    // exit / 异常杀进程都从这里返回 (值 != 0)
-    if (__builtin_setjmp(user_jmp) != 0) {
-        user_active = 0;
-        // 恢复内核数据段: 用户态里 DS/ES/FS/GS 被 enter_user 换成了
-        // 0x23 (DPL3), 内核代码得挂回自己的 0x10
-        __asm__ volatile(
-            "movw $0x10, %%ax; movw %%ax, %%ds; movw %%ax, %%es; "
-            "movw %%ax, %%fs; movw %%ax, %%gs" : : : "ax");
-        if (user_killed) {
-            serial_puts("[USER] process killed, back to shell\n\r");
-            vga_puts("\n\r[USER] process killed (exception) — back to shell\n\r");
-        } else {
-            serial_puts("[USER] exit code=");
-            serial_put_hex(user_exit_code);
-            serial_puts("\n\r");
-            vga_puts("\n\r[USER] exit code=");
-            // 屏幕上也打 (vga_put_hex 在 shell.c 是 static, 用简易版)
-            vga_puts("0x");
-            for (int i = 28; i >= 0; i -= 4) {
-                uint8_t nib = (user_exit_code >> i) & 0xF;
-                vga_putc((char)(nib < 10 ? '0' + nib : 'A' + nib - 10));
-            }
-            vga_puts("\n\r");
-        }
-        // 【里程碑 11a】不再排空键盘: 老架构要排是因为"触发命令的
-        // 回车释放码"会残留在 8042 里; 新架构 IRQ1 处理器吞掉所有
-        // 释放码, 运行期间按的键在环形缓冲里排队 (type-ahead),
-        // 进程结束后它们正常续打进 shell 输入行。
-        shell_reset_input();     // 行缓冲此刻本就是空的, 保险起见清一次
+    int pid = proc_spawn(name);
+    if (pid < 0) {
+        serial_puts("[USER] spawn failed\n\r");
+        vga_puts("\n\rrun: spawn failed (no task slots or out of memory)\n\r");
         return;
     }
 
-    user_active = 1;
-    serial_puts("[USER] entering ring 3...\n\r");
-    enter_user(USER_BASE, USER_BASE + USER_SIZE);
-    // 不该到这里: exit 走 longjmp, 异常也走 longjmp
-    serial_puts("[USER] ERROR: enter_user returned!\n\r");
-    while (1) { __asm__ volatile("hlt"); }
+    serial_puts("[USER] run ");
+    serial_puts(name);
+    serial_puts(" (pid=");
+    serial_put_hex((uint32_t)pid);
+    serial_puts(background ? ") in background\n\r" : ")\n\r");
+
+    if (background) {
+        vga_puts("\n\r[USER] started ");
+        vga_puts(name);
+        vga_puts(" (pid=");
+        vga_put_dec((uint32_t)pid);
+        vga_puts(") in background\n\r");
+        return;
+    }
+
+    // 前台: 等它退出 (exit 或被杀都从这里返回)
+    int code = proc_wait(pid);
+    if (code == -1) {
+        serial_puts("[USER] process killed, back to shell\n\r");
+        vga_puts("\n\r[USER] process killed (exception) — back to shell\n\r");
+    } else {
+        serial_puts("[USER] exit code=");
+        serial_put_hex((uint32_t)code);
+        serial_puts("\n\r");
+        vga_puts("\n\r[USER] exit code=0x");
+        for (int i = 28; i >= 0; i -= 4) {
+            uint8_t nib = ((uint32_t)code >> i) & 0xF;
+            vga_putc((char)(nib < 10 ? '0' + nib : 'A' + nib - 10));
+        }
+        vga_puts("\n\r");
+    }
+    // 进程期间按的键在环形缓冲里排队 (type-ahead), 正常续打进 shell
+    shell_reset_input();
 }

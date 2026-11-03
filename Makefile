@@ -44,12 +44,14 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
               $(KERNEL_DIR)/exc.o \
               $(KERNEL_DIR)/exc_asm.o \
               $(KERNEL_DIR)/user.o \
+              $(KERNEL_DIR)/proc.o \
               $(KERNEL_DIR)/user_asm.o \
               $(KERNEL_DIR)/user_progs.o \
               $(KERNEL_DIR)/user_embed.o
 
-# 里程碑 10: 用户程序 (宿主 gcc 编译 → 链接到 0x2000000 → flat bin → incbin)
-USER_PROGS = hello count crash div0 echo badptr
+# 用户程序 (宿主 gcc 编译 → 链接到 0x2000000 → flat bin → incbin)
+# 里程碑 11b: + forkdemo (fork/独立地址空间) + spinner (后台进程演示)
+USER_PROGS = hello count crash div0 echo badptr forkdemo spinner
 USER_BINS  = $(patsubst %,$(BUILD_DIR)/%.bin,$(USER_PROGS))
 
 all: $(OS_IMG)

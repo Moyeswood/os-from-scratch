@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-10%2F10%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-233%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-11%2F11%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-284%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -20,7 +20,7 @@
   <img src="note/splash-mid.png" width="480" alt="开机画面"/>
 </p>
 
-NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编从零编写，在 QEMU 中运行。它走完了操作系统学习的完整链路：**引导 → 保护模式 → 中断 → 内存管理 → 多任务 → 图形 → 文件系统 → 编辑器 → C 编译器 → Ring 3 用户态**——最终你可以在它里面用自带的编辑器写 C 程序、用自带的编译器编译、直接运行，还能让程序跑在用户态、看它越界被内核抓个正着。
+NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编从零编写，在 QEMU 中运行。它走完了操作系统学习的完整链路：**引导 → 保护模式 → 中断 → 内存管理 → 多任务 → 图形 → 文件系统 → 编辑器 → C 编译器 → Ring 3 用户态**——最终你可以在它里面用自带的编辑器写 C 程序、用自带的编译器编译、直接运行，还能让程序跑在用户态、看它越界被内核抓个正着；也能 fork 出子进程、后台跑多个用户程序、用 ps/kill 管理它们。
 
 ## ✨ 核心特性
 
@@ -100,7 +100,7 @@ nano 风格的 `edit` 命令：
 | `df` | 文件系统用量 |
 | `edit file` | 打开编辑器（^S 保存，^X 退出时询问保存） |
 | `cc file.c [args...]` | 编译并运行 C 程序（参数传给 main） |
-| `run prog` | 在 Ring 3 运行用户程序（hello/count/crash/div0/echo/badptr） |
+| `run prog [&]` | 在 Ring 3 运行用户程序（& = 后台；forkdemo/spinner 见下） |
 | `splash` | 重放开机画面 |
 
 ## 🚀 快速开始
@@ -152,7 +152,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 自动化测试
 
-8 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**共 233 项**：
+10 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**共 284 项**：
 
 ```bash
 python3 tools/test-splash.py   # 开机画面 (14 项)
@@ -163,6 +163,8 @@ python3 tools/test-cc.py       # C 编译器 (41 项)
 python3 tools/test-preempt.py  # 抢占调度 (7 项)
 python3 tools/test-mario.py    # 马里奥   (12 项)
 python3 tools/test-user.py     # Ring 3 用户态 (36 项)
+python3 tools/test-sched.py    # PCB 调度器 + 键盘缓冲 (15 项)
+python3 tools/test-proc.py     # 多进程/fork/后台/kill (36 项)
 ```
 
 > test-preempt / test-mario 是附着式测试（argv[1]=monitor socket），请用
@@ -202,7 +204,7 @@ python3 tools/test-user.py     # Ring 3 用户态 (36 项)
 │   ├── linker.ld       # 链接到 0x2000000 (用户区)
 │   └── hello.c count.c crash.c div0.c echo.c badptr.c
 ├── tetris/             # 原始实模式汇编版 (移植蓝本)
-├── tools/              # 字体转换 + 8 套测试脚本
+├── tools/              # 字体转换 + 10 套测试脚本
 ├── note/               # 开发记录 + 截图
 └── Makefile
 ```
@@ -221,6 +223,7 @@ python3 tools/test-user.py     # Ring 3 用户态 (36 项)
 | 8 | c4 迷你 C 编译器（写 C → 编译 → 运行闭环） |
 | 9 | 开机画面（用户 hello.asm 的 32 位移植美化版） |
 | 10 | Ring 3 用户态（TSS + 页表 U/S 保护 + int 0x80 系统调用 + 异常处理） |
+| 11 | 多进程（PCB 调度器 + 键盘环形缓冲 + 每进程独立地址空间 + fork + 后台进程） |
 
 每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
 

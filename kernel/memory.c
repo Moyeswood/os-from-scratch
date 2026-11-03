@@ -96,6 +96,18 @@ void free_page(uint32_t addr) {
     }
 }
 
+// 里程碑 11b: 批量释放连续 n 页 (进程退出回收页目录+页表+用户区)
+void free_pages(uint32_t addr, uint32_t n) {
+    uint32_t page = addr / PAGE_SIZE;
+    for (uint32_t i = 0; i < n && page + i < total_pages; i++) {
+        uint32_t byte_idx = (page + i) / 8;
+        uint8_t bit_idx = (page + i) % 8;
+        if (byte_idx < bitmap_size) {
+            bitmap[byte_idx] &= ~(1 << bit_idx);
+        }
+    }
+}
+
 // 里程碑 10: 把一段物理地址保留 (标记已分配)。
 // 用户区 32~36MB 是固定地址 (用户程序链接在 0x2000000),
 // 不保留的话 alloc_pages 迟早把它发给别人。

@@ -1,5 +1,5 @@
 ; ============================================================
-;  用户程序镜像嵌入 (里程碑 10)
+;  用户程序镜像嵌入 (里程碑 10; 里程碑 11b: + forkdemo/spinner)
 ;
 ;  user/*.c 由主机 gcc -m32 编译链接成 flat bin (入口 0x2000000),
 ;  这里 incbin 进内核, run 命令再拷到用户区执行。
@@ -38,3 +38,13 @@ global user_badptr_start
 user_badptr_start: incbin "build/badptr.bin"
 global user_badptr_end
 user_badptr_end:
+
+global user_forkdemo_start
+user_forkdemo_start: incbin "build/forkdemo.bin"
+global user_forkdemo_end
+user_forkdemo_end:
+
+global user_spinner_start
+user_spinner_start: incbin "build/spinner.bin"
+global user_spinner_end
+user_spinner_end:

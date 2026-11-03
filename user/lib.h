@@ -27,8 +27,11 @@ static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 #define SYS_PUTS     2   // 输出字符串 (指针必须指向用户区, 内核会校验)
 #define SYS_GETKEY   3   // 读一个键 (阻塞; ESC 返回 27)
 #define SYS_GETTICKS 4   // 读系统滴答 (IRQ0 定时器计数)
+#define SYS_FORK     5   // 里程碑 11b: 复制地址空间+现场, 父得子 pid, 子得 0
+#define SYS_GETPID   6   // 里程碑 11b: 读自己的 pid
+#define SYS_SLEEP    7   // 里程碑 11b: 睡 N 个滴答 (~55ms 每滴答)
 
-// exit 不会返回 (内核 longjmp 回 shell); 写个死循环兜底
+// exit 不会返回 (进程变 ZOMBIE 被切走); 写个死循环兜底
 static inline void exit(int code) {
     syscall1(SYS_EXIT, (uint32_t)code);
     for (;;) {}
@@ -38,6 +41,9 @@ static inline void putc(char c) { syscall1(SYS_PUTC, (uint32_t)(uint8_t)c); }
 static inline int  puts(const char* s) { return (int)syscall1(SYS_PUTS, (uint32_t)s); }
 static inline int  getkey(void) { return (int)syscall1(SYS_GETKEY, 0); }
 static inline uint32_t ticks(void) { return syscall0(SYS_GETTICKS); }
+static inline int  fork(void) { return (int)syscall0(SYS_FORK); }
+static inline int  getpid(void) { return (int)syscall0(SYS_GETPID); }
+static inline void sleep(uint32_t n) { syscall1(SYS_SLEEP, n); }
 
 // 十六进制打印 (8 位定宽, 和内核 serial_put_hex 同款格式, 测试好匹配)
 static void puthex(uint32_t n) {

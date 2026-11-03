@@ -1,10 +1,10 @@
 #include "exc.h"
 #include "serial.h"
 #include "vga.h"
-#include "user.h"
+#include "proc.h"
 
 // ============================================================
-//  异常处理 (里程碑 10: Ring 3 用户态)
+//  异常处理 (里程碑 10: Ring 3 用户态; 里程碑 11b: 杀进程走调度器)
 //
 //  帧布局 (exc.asm 统一, 从低到高):
 //    [0..7]  edi,esi,ebp,esp_orig,ebx,edx,ecx,eax (pusha)
@@ -14,10 +14,11 @@
 //    [13]    ESP   [14] SS   (仅用户态异常: 特权级切换时 CPU 压的)
 //
 //  策略:
-//    用户态异常 (CS.RPL=3) → 打印现场 → 杀掉进程回 shell
+//    用户态异常 (CS.RPL=3) → 打印现场 → 杀掉进程 (proc_fault_kill)
 //    内核态异常            → 打印现场 → panic (hlt 死循环)
-//  之前 0~31 号全是空门: 用户态代码一崩就是 #GP→三重故障→复位循环,
-//  现在至少能看清是谁在什么地址犯了什么错。
+//  里程碑 11b: "杀进程"不再是 longjmp 回 shell, 而是把当前任务
+//  标 ZOMBIE 并切走 — 异常发生在进程自己的内核栈上 (TSS.esp0),
+//  调度器换帧后这条栈连同异常帧一起被抛弃。
 // ============================================================
 
 static const char* exc_names[32] = {
@@ -92,7 +93,7 @@ void exc_dispatch(uint32_t* f) {
         put_hex32(esp);
         print_both(" (user)\n\r");
         print_both("[EXC] fault in user mode -> killing process\n\r");
-        user_fault_kill();          // longjmp 回 user_run, 不会返回
+        proc_fault_kill();          // 当前进程变 ZOMBIE 并切走, 不会返回
         print_both("[EXC] ERROR: kill failed\n\r");
     } else {
         print_both("[EXC] fault in KERNEL -> panic, system halted\n\r");

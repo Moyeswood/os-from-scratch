@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-10%2F10%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-233%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-11%2F11%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-284%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 

@@ -17,6 +17,7 @@
 #include "cc.h"
 #include "splash.h"
 #include "user.h"
+#include "proc.h"
 
 #define MAX_INPUT 256
 #define MAX_HISTORY 10
@@ -156,7 +157,9 @@ static void cmd_help() {
     vga_puts("  edit f   - Edit file (^S save, ^X exit)\n\r");
     vga_puts("  cc f.c   - Compile and run C program (c4 subset)\n\r");
     vga_puts("  splash   - Replay the boot screen animation\n\r");
-    vga_puts("  run p    - Run user program in Ring 3 (hello/count/crash/div0/echo/badptr)\n\r");
+    vga_puts("  run p    - Run user program in Ring 3 (hello/count/crash/div0/echo/badptr/forkdemo/spinner)\n\r");
+    vga_puts("  run p &  - Run in background (shell stays usable)\n\r");
+    vga_puts("  kill n   - Kill a user process by pid (see ps)\n\r");
 }
 
 // 2. date 命令 (读取 CMOS)
@@ -534,14 +537,33 @@ static void execute_command() {
         }
     } else if (k_strcmp(argv[0], "run") == 0) {
         if (argc < 2) {
-            vga_puts("\n\rUsage: run <hello|count|crash|div0|echo|badptr>\n\r");
-            vga_puts("  hello  - first user process    count  - timer ticks in ring 3\n\r");
-            vga_puts("  crash  - page fault demo       div0   - divide error demo\n\r");
-            vga_puts("  echo   - keyboard echo (ESC)   badptr - syscall arg validation\n\r");
+            vga_puts("\n\rUsage: run <program> [&]\n\r");
+            vga_puts("  hello    - first user process    count  - timer ticks in ring 3\n\r");
+            vga_puts("  crash    - page fault demo       div0   - divide error demo\n\r");
+            vga_puts("  echo     - keyboard echo (ESC)   badptr - syscall arg validation\n\r");
+            vga_puts("  forkdemo - fork + own address space demo\n\r");
+            vga_puts("  spinner  - endless dot printer (for 'run spinner &' + kill)\n\r");
+            vga_puts("  &        - run in background (shell stays usable, use ps/kill)\n\r");
         } else {
-            // 用户进程跑在 IRQ1 处理链里 (和游戏同款架构),
-            // 进程结束/被杀后 user_run 内部会排空 8042 并清输入缓冲
-            user_run(argv[1]);
+            // 里程碑 11b: 用户进程是独立任务, 不再跑在 shell 的调用链里。
+            // 后台 = 建完进程就回 shell, 两个 (或更多) 进程并发跑。
+            int bg = (argc >= 3 && k_strcmp(argv[2], "&") == 0);
+            user_run(argv[1], bg);
+        }
+    } else if (k_strcmp(argv[0], "kill") == 0) {
+        if (argc < 2) {
+            vga_puts("\n\rUsage: kill <pid>  (see ps)\n\r");
+        } else {
+            // 简易十进制解析 (shell 里没有 atoi, 就地算)
+            uint32_t pid = 0;
+            const char* q = argv[1];
+            while (*q >= '0' && *q <= '9') { pid = pid * 10 + (uint32_t)(*q - '0'); q++; }
+            if (proc_kill((int)pid) < 0) {
+                serial_puts("[SH] kill fail\n\r");
+                vga_puts("\n\rkill: no such user process\n\r");
+            } else {
+                vga_puts("\n\r[USER] process killed (see ps)\n\r");
+            }
         }
     } else if (k_strcmp(argv[0], "splash") == 0) {
         kbd_drain();               // 触发命令的回车释放码会"跳过"动画, 先排空

@@ -74,9 +74,17 @@ static void splash_shuffle(void) {
 }
 
 // ---------- 按键/计时 ----------
-// 里程碑 11a: 任意键 = 环形缓冲里有任何字节 (IRQ1 处理器负责推进)
+// 里程碑 11a/11b: 任意键 = 环形缓冲里有"按下"事件。
+// ★只认按下码 (<0x80): 触发 splash 命令的回车, 它的释放码还在
+// 8042 传输途中 (drain 不再空转等待), 会晚到环形缓冲 — 释放码
+// 不是"按键", 不能跳过动画 (老架构靠 kbd_drain 延时舞步解决,
+// 新架构靠这里过滤)。
 static int splash_anykey(void) {
-    return kbd_pop() >= 0;
+    int sc;
+    while ((sc = kbd_pop()) >= 0) {
+        if (sc < 0x80) return 1;
+    }
+    return 0;
 }
 
 // 等到 target 滴答, 期间任意键 → 返回 1 (跳过)

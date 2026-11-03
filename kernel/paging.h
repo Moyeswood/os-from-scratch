@@ -18,6 +18,9 @@ typedef struct {
     uint32_t entries[1024];
 } page_directory_t;
 
+// 内核页目录/页表物理地址 (paging.c; task.c 初始化 PCB.cr3 用)
+#define PAGE_DIR_ADDR 0x1000000
+
 // 初始化分页机制
 void paging_init();
 
@@ -27,5 +30,12 @@ void paging_init();
 
 // 里程碑 10: 把用户区 (32~36MB) 映射为 USER 页 (Ring 3 可访问)
 void paging_map_user_region();
+
+// 里程碑 11b: 草稿窗口 — 把连续物理页临时映到虚拟 0x7800000
+// (120MB, 4MB 大), 供内核写新进程的页目录/页表/用户区。
+// ★全局共享: 调用者必须在关中断下成对使用 (见 paging.c 注释)
+#define WINDOW_BASE 0x7800000
+void window_map(uint32_t phys_base, uint32_t n_pages);
+void window_unmap(void);
 
 #endif

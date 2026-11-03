@@ -4,12 +4,13 @@
 #include "types.h"
 
 // ============================================================
-//  Ring 3 用户态 (里程碑 10)
+//  Ring 3 用户态 (里程碑 10) + 多进程 (里程碑 11b)
 //
-//  架构: 共享地址空间, 内核 0~32MB (supervisor), 用户 32~36MB
-//  (USER 页, 见 paging.c)。用户程序链接在 USER_BASE, 栈顶
-//  USER_BASE+USER_SIZE。用户进程跑在 shell 的键盘中断处理链
-//  里 (和游戏同款架构), 期间 IRQ0 照常滴答但调度器跳过抢占。
+//  用户程序链接在 USER_BASE (32MB), 栈顶 USER_BASE+USER_SIZE。
+//  里程碑 11b 起每个用户进程 = 一个调度任务: 独立页目录
+//  (虚拟 32~36MB → 自己的一整块物理内存) + 独立内核栈
+//  (TSS.esp0)。进程管理在 proc.c, 本文件保留: 程序表、
+//  系统调用号、int 0x80 帧布局。
 // ============================================================
 
 // 用户程序描述: 名字 → 内嵌镜像 (user_embed.asm incbin, 见 user_progs.c)
@@ -27,16 +28,14 @@ void user_progs_init(void);   // 运行时填程序表 (blob 大小是链接期�
 // 内核初始化: 保留用户区物理页 + 映射 USER 页表
 void user_init();
 
-// run 命令入口: 把内嵌镜像拷进用户区, iret 进 Ring 3;
-// 进程 exit 或被异常杀掉后从这里返回到 shell
-void user_run(const char* name);
-
-// 异常处理调用: 用户态异常 → 杀掉当前用户进程 (longjmp 回 user_run)
-void user_fault_kill(void);
+// run 命令入口 (shell.c 调): 建进程; 前台 = 等它退出, 后台 = 立刻返回
+void user_run(const char* name, int background);
 
 // syscall 帧 (user_asm.asm pusha 顺序 + iret 返回帧):
 //   [0]=edi [1]=esi [2]=ebp [3]=esp(进入时) [4]=ebx [5]=edx [6]=ecx [7]=eax
 //   [8]=eip [9]=cs [10]=eflags [11]=esp(用户态) [12]=ss(用户态)
+//   (里程碑 11b: 这个布局恰好 = 用户任务的 52 字节上下文帧,
+//    fork 直接把它抄到子进程内核栈, 改 eax=0 即可)
 typedef struct {
     uint32_t edi, esi, ebp, esp_orig, ebx, edx, ecx, eax;
     uint32_t eip, cs, eflags, esp_user, ss_user;
@@ -48,5 +47,8 @@ typedef struct {
 #define SYS_PUTS     2
 #define SYS_GETKEY   3
 #define SYS_GETTICKS 4
+#define SYS_FORK     5   // 里程碑 11b: 复制地址空间 + 现场, 父得子 pid, 子得 0
+#define SYS_GETPID   6   // 里程碑 11b: 读自己的 pid
+#define SYS_SLEEP    7   // 里程碑 11b: 睡 ebx 个滴答
 
 #endif
