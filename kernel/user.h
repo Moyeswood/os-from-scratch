@@ -50,5 +50,7 @@ typedef struct {
 #define SYS_FORK     5   // 里程碑 11b: 复制地址空间 + 现场, 父得子 pid, 子得 0
 #define SYS_GETPID   6   // 里程碑 11b: 读自己的 pid
 #define SYS_SLEEP    7   // 里程碑 11b: 睡 ebx 个滴答
+#define SYS_SBRK     8   // 里程碑 12: 调整用户堆顶, 返回旧断点 (失败 -1)
+#define SYS_WAITPID  9   // 里程碑 12: 等子进程, ebx=pid/-1, ecx=状态指针
 
 #endif

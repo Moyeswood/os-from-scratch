@@ -50,8 +50,8 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
               $(KERNEL_DIR)/user_embed.o
 
 # 用户程序 (宿主 gcc 编译 → 链接到 0x2000000 → flat bin → incbin)
-# 里程碑 11b: + forkdemo (fork/独立地址空间) + spinner (后台进程演示)
-USER_PROGS = hello count crash div0 echo badptr forkdemo spinner
+# 里程碑 12: + memdemo (用户堆 + fork 堆隔离 + waitpid)
+USER_PROGS = hello count crash div0 echo badptr forkdemo spinner memdemo
 USER_BINS  = $(patsubst %,$(BUILD_DIR)/%.bin,$(USER_PROGS))
 
 all: $(OS_IMG)

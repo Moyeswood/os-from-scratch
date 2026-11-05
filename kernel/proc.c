@@ -30,10 +30,9 @@
 #define PROC_STACK_SIZE  4096
 
 // 教学简化: 用户区 4MB 全映射, 但只初始化程序实际用到的部分 —
-//   spawn: 清零低 16KB (镜像 + BSS 预算)
-//   fork:  复制低 16KB + 栈区 (顶部 64KB)
-// 中段页保持未初始化 (真实 OS 用按需零页/写时复制, 这里留作引子)。
-#define PROC_ZERO_BYTES      16384   // 镜像 + BSS 预算
+//   spawn: 清零低 64KB (镜像 + BSS 预算)
+//   fork:  复制低 64KB + 已用堆 + 栈区 (顶部 64KB)
+// 未用中段页保持未初始化 (真实 OS 用按需零页/写时复制, 这里留作引子)。
 #define PROC_STACK_COPY_BYTES 65536  // 栈预算 (fork 时复制顶部这一段)
 
 static uint8_t proc_stacks[MAX_TASKS][PROC_STACK_SIZE];
@@ -50,13 +49,15 @@ static const user_prog_t* prog_lookup(const char* name) {
     return 0;
 }
 
-// 清扫孤儿僵尸 (没人 wait 的后台进程): 释放内存 + 空出槽位。
-// 只在 spawn 时调用: 单 CPU 下不会有"正被等待的孩子"被误扫
-// (父进程 wait 后孩子才可能变僵尸, 而收尸在 wait 里即时发生)。
+// 清扫孤儿僵尸: 释放内存 + 空出槽位。后台进程 parent_pid=0;
+// 父进程已经消失/退出的孩子也是孤儿。仍有存活父进程的 ZOMBIE
+// 必须保留, 否则 waitpid 会永远看不到孩子 (里程碑 12 修复)。
 static void sweep_zombies(void) {
     for (int i = 5; i < MAX_TASKS; i++) {
         task_t* t = task_at(i);
-        if (t && t->state == TASK_ZOMBIE) {
+        task_t* parent = (t && t->parent_pid) ? task_by_pid(t->parent_pid) : 0;
+        int orphan = !parent || parent->state == TASK_ZOMBIE;
+        if (t && t->state == TASK_ZOMBIE && orphan) {
             free_pages(t->user_block, PROC_BLOCK_PAGES);
             task_free_slot(i);
             serial_puts("[PROC] swept orphan zombie (slot ");
@@ -97,8 +98,13 @@ static void build_user_frame(task_t* t) {
 }
 
 // ---------- 建进程 ----------
-static int build_process(const char* name, const user_prog_t* p) {
+static int build_process(const char* name, const user_prog_t* p, int detached) {
     sweep_zombies();   // 顺手回收孤儿僵尸的槽位和内存
+
+    if (p->size > PROC_IMAGE_BYTES) {
+        serial_puts("[PROC] spawn fail: program image > 64KB\n\r");
+        return -1;
+    }
 
     int idx = task_alloc_slot();
     if (idx < 0) {
@@ -122,7 +128,7 @@ static int build_process(const char* name, const user_prog_t* p) {
 
     // 2. 用户区: 清零低 16KB (镜像+BSS 预算) + 拷镜像
     window_map(block + 0x2000, 1024);
-    k_memset((void*)WINDOW_BASE, 0, PROC_ZERO_BYTES);
+    k_memset((void*)WINDOW_BASE, 0, PROC_IMAGE_BYTES);
     k_memcpy((void*)WINDOW_BASE, p->data, p->size);
     window_unmap();
 
@@ -136,8 +142,9 @@ static int build_process(const char* name, const user_prog_t* p) {
     t->cr3 = block;
     t->is_user = 1;
     t->exit_code = 0;
-    t->parent_pid = task_current()->pid;   // 父 = shell (或未来的 fork 父)
+    t->parent_pid = detached ? 0 : task_current()->pid;   // 后台无父进程收尸
     t->user_block = block;
+    t->brk = PROC_HEAP_BASE;
     build_user_frame(t);
 
     __asm__ volatile("sti");
@@ -153,10 +160,10 @@ static int build_process(const char* name, const user_prog_t* p) {
 }
 
 // ---------- 对外接口 ----------
-int proc_spawn(const char* name) {
+int proc_spawn(const char* name, int detached) {
     const user_prog_t* p = prog_lookup(name);
     if (!p) return -1;
-    return build_process(name, p);
+    return build_process(name, p, detached);
 }
 
 // 前台等待: 睡到孩子 ZOMBIE → 收尸 (释放物理块 + 空槽) → 返回退出码
@@ -179,6 +186,76 @@ int proc_wait(int pid) {
     free_pages(block, PROC_BLOCK_PAGES);
     task_free_slot(idx);
     return code;
+}
+
+// 里程碑 12: 调整当前用户进程的堆顶。
+// delta > 0 时先清零新增区域 (教学版保证 malloc 的内存初值为 0),
+// delta < 0 时只收缩断点; 物理页仍属于进程, 供栈/后续分配使用。
+uint32_t proc_sbrk(int delta) {
+    task_t* me = task_current();
+    if (!me || !me->is_user) return (uint32_t)-1;
+
+    uint32_t old_brk = me->brk;
+    uint32_t new_brk;
+    if (delta < 0) {
+        uint32_t decrease = (uint32_t)(-(delta + 1)) + 1u;  // 安全处理 INT_MIN
+        if (old_brk < PROC_HEAP_BASE + decrease) return (uint32_t)-1;
+        new_brk = old_brk - decrease;
+    } else {
+        uint32_t increase = (uint32_t)delta;
+        if (increase > PROC_HEAP_LIMIT - old_brk) return (uint32_t)-1;
+        new_brk = old_brk + increase;
+        if (increase) k_memset((void*)old_brk, 0, increase);
+    }
+
+    me->brk = new_brk;
+    return old_brk;
+}
+
+static task_t* find_child(task_t* parent, int requested_pid, int only_zombie) {
+    for (int i = 5; i < MAX_TASKS; i++) {
+        task_t* t = task_at(i);
+        if (!t || t->state == TASK_IDLE || t->parent_pid != parent->pid) continue;
+        if (requested_pid != -1 && (int)t->pid != requested_pid) continue;
+        if (only_zombie && t->state != TASK_ZOMBIE) continue;
+        return t;
+    }
+    return 0;
+}
+
+static int reap_child(task_t* child, int* status) {
+    int code = child->exit_code;
+    int pid = (int)child->pid;
+    uint32_t block = child->user_block;
+    int idx = task_slot_of(child);
+    if (status) *status = code;
+    free_pages(block, PROC_BLOCK_PAGES);
+    task_free_slot(idx);
+    return pid;
+}
+
+// 里程碑 12: waitpid(pid, &status); pid=-1 等任一个孩子。
+// 调用者当前 CR3 是父进程自己的页目录, 所以收尸时释放孩子
+// 的物理块是安全的 (孩子的 CR3 已经切走)。
+int proc_waitpid(int pid, int* status) {
+    task_t* parent = task_current();
+    if (!parent || !parent->is_user || pid == 0 || pid < -1) return -1;
+
+    while (1) {
+        __asm__ volatile("cli");
+        task_t* child = find_child(parent, pid, 1);
+        if (child) {
+            int result = reap_child(child, status);
+            __asm__ volatile("sti");
+            return result;
+        }
+        if (!find_child(parent, pid, 0)) {
+            __asm__ volatile("sti");
+            return -1;
+        }
+        task_sleep_switch_locked(TASK_WAIT_PROC, 0);
+        __asm__ volatile("sti");
+    }
 }
 
 void proc_exit(int code) {
@@ -210,6 +287,7 @@ void proc_fault_kill(void) {
 }
 
 int proc_fork(user_frame_t* f) {
+    task_t* parent = task_current();
     int idx = task_alloc_slot();
     if (idx < 0) {
         serial_puts("[PROC] fork fail: no task slots\n\r");
@@ -231,10 +309,15 @@ int proc_fork(user_frame_t* f) {
     k_memcpy((void*)(WINDOW_BASE + 0x1000), pt8_scratch, 4096);
 
     // 拷贝用户区 (跑在父 CR3 下, 父进程自己的 USER_BASE 直接可读):
-    //   低 16KB (程序+BSS) + 栈区 (顶部 64KB, 子进程恢复 fork 现场
-    //   后要接着用父进程的调用栈 — 返回地址全在里面)
+    //   低 64KB (程序+BSS) + 已用堆 + 栈区 (顶部 64KB, 子进程恢复
+    //   fork 现场后要接着用父进程的调用栈 — 返回地址全在里面)
     window_map(child_block + 0x2000, 1024);
-    k_memcpy((void*)WINDOW_BASE, (void*)USER_BASE, PROC_ZERO_BYTES);
+    k_memcpy((void*)WINDOW_BASE, (void*)USER_BASE, PROC_IMAGE_BYTES);
+    uint32_t heap_bytes = parent->brk - PROC_HEAP_BASE;
+    if (heap_bytes) {
+        k_memcpy((void*)(WINDOW_BASE + PROC_IMAGE_BYTES),
+                 (void*)PROC_HEAP_BASE, heap_bytes);
+    }
     k_memcpy((void*)(WINDOW_BASE + USER_SIZE - PROC_STACK_COPY_BYTES),
              (void*)(USER_BASE + USER_SIZE - PROC_STACK_COPY_BYTES),
              PROC_STACK_COPY_BYTES);
@@ -242,7 +325,6 @@ int proc_fork(user_frame_t* f) {
 
     // 子进程任务: 内核栈上的现场 = 父进程的 int 0x80 帧 (52 字节布局
     // 恰好一致), eax 槽改成 0 → 子进程看到 fork() 返回 0
-    task_t* parent = task_current();
     task_t* child = task_at(idx);
     child->kstack_top = proc_stacks[idx] + PROC_STACK_SIZE;   // ★先设栈再建帧
     uint32_t* stack = (uint32_t*)child->kstack_top;
@@ -270,6 +352,7 @@ int proc_fork(user_frame_t* f) {
     child->exit_code = 0;
     child->parent_pid = parent->pid;
     child->user_block = child_block;
+    child->brk = parent->brk;
 
     __asm__ volatile("sti");
 

@@ -55,6 +55,7 @@ typedef struct {
     int parent_pid;        // 父任务 pid (wait 用)
     uint32_t user_block;   // 用户区连续物理块基址 (页目录+页表+用户页,
                            // 释放时 free_pages 一把梭)
+    uint32_t brk;          // 里程碑 12: 用户堆顶 (sbrk 当前断点)
 } task_t;
 
 // 多任务演示开关 (start/stop 命令 + 演示任务 A/B/C 使用)

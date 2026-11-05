@@ -18,19 +18,30 @@
 //   [2..1025] 用户区 (4MB, 虚拟 USER_BASE..USER_BASE+USER_SIZE)
 //
 //  生命周期:
-//   proc_spawn(name)   → 建任务 (READY), 返回 pid
+//   proc_spawn(name,d) → 建任务 (READY), detached=1 表示无父进程 wait
 //   proc_wait(pid)     → 睡到它 ZOMBIE, 收尸 (释放内存+空槽), 返回退出码
 //   proc_exit(code)    → SYS_EXIT: 变 ZOMBIE 切走 (永不返回)
 //   proc_fault_kill()  → 异常: 同上, 退出码 -1
 //   proc_fork(frame)   → SYS_FORK: 复制地址空间+现场, 子进程返回 0
 //   proc_kill(pid)     → kill 命令: 直接判死
+//   proc_sbrk(delta)   → SYS_SBRK: 用户堆扩容/收缩, 返回旧断点
+//   proc_waitpid(...)  → SYS_WAITPID: 父进程等子进程并写退出状态
 //
-//  孤儿僵尸: 后台进程没人 wait → 下次 proc_spawn 时统一清扫
-//  (sweep)。单 CPU + 清扫只在 spawn 时发生, 不会误扫正在等的孩子。
+//  里程碑 12: 用户堆从 USER_BASE+64KB 开始, 到栈保护区之前结束。
+//  fork 继承当前 brk 并复制已使用的堆页。后台进程 parent_pid=0,
+//  没有父进程的僵尸在下一次 proc_spawn 时清扫; 仍有存活父进程的
+//  ZOMBIE 保留下来, 由 waitpid 收尸。
 // ============================================================
 
-int  proc_spawn(const char* name);     // 建用户进程任务, 返回 pid (失败 -1)
+// 镜像/BSS 可用 64KB; 其后是用户堆, 栈顶向下保留 64KB。
+#define PROC_IMAGE_BYTES 0x10000
+#define PROC_HEAP_BASE   (USER_BASE + PROC_IMAGE_BYTES)
+#define PROC_HEAP_LIMIT  (USER_BASE + USER_SIZE - 0x10000)
+
+int  proc_spawn(const char* name, int detached); // 建进程, detached 无父 wait
 int  proc_wait(int pid);               // 睡到它退出并收尸, 返回退出码 (-1=被杀)
+int  proc_waitpid(int pid, int* status); // pid=-1 等任一个子进程, 返回其 pid
+uint32_t proc_sbrk(int delta);         // 返回旧 brk, 越界/溢出返回 -1
 void proc_exit(int code);              // SYS_EXIT 内核侧 (永不返回)
 int  proc_fork(user_frame_t* f);       // SYS_FORK 内核侧: 父得子 pid, 子得 0
 void proc_fault_kill(void);            // 异常处理调用 (永不返回)

@@ -54,6 +54,11 @@ static int sys_puts(const char* s) {
     return 0;
 }
 
+static int user_ptr_ok(uint32_t addr, uint32_t len) {
+    uint32_t end = USER_BASE + USER_SIZE;
+    return addr >= USER_BASE && addr < end && len <= end - addr;
+}
+
 // SYS_GETKEY: 读一个键 (阻塞到有按下事件)。
 // 从键盘环形缓冲读 (IRQ1 处理器负责把扫描码推进去)。阻塞 =
 // 当前任务 (用户进程自己) 睡到键盘事件: IRQ1 唤醒, 下一个
@@ -94,6 +99,19 @@ void syscall_dispatch(user_frame_t* f) {
         task_sleep_ticks(f->ebx);          // 睡 ebx 个滴答 (~55ms 每滴答)
         f->eax = 0;
         break;
+    case SYS_SBRK:
+        f->eax = proc_sbrk((int)f->ebx);
+        break;
+    case SYS_WAITPID: {
+        int* status = (int*)f->ecx;
+        if (status && !user_ptr_ok((uint32_t)status, sizeof(int))) {
+            serial_puts("[SYS] waitpid: rejected status pointer\n\r");
+            f->eax = (uint32_t)-1;
+            break;
+        }
+        f->eax = (uint32_t)proc_waitpid((int)f->ebx, status);
+        break;
+    }
     default:
         serial_puts("[SYS] unknown syscall #");
         serial_put_hex(f->eax);
@@ -144,16 +162,16 @@ void user_run(const char* name, int background) {
         serial_puts("\n\r");
         vga_puts("\n\rUnknown program: ");
         vga_puts(name);
-        vga_puts("  (try: run hello | count | crash | div0 | echo | badptr | forkdemo | spinner)\n\r");
+        vga_puts("  (try: run hello | count | crash | div0 | echo | badptr | forkdemo | spinner | memdemo)\n\r");
         return;
     }
-    if (p->size > USER_SIZE - 4096) {
+    if (p->size > PROC_IMAGE_BYTES) {
         serial_puts("[USER] program too big\n\r");
         vga_puts("\n\rrun: program image too large\n\r");
         return;
     }
 
-    int pid = proc_spawn(name);
+    int pid = proc_spawn(name, background);
     if (pid < 0) {
         serial_puts("[USER] spawn failed\n\r");
         vga_puts("\n\rrun: spawn failed (no task slots or out of memory)\n\r");

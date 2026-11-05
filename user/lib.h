@@ -30,6 +30,8 @@ static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 #define SYS_FORK     5   // 里程碑 11b: 复制地址空间+现场, 父得子 pid, 子得 0
 #define SYS_GETPID   6   // 里程碑 11b: 读自己的 pid
 #define SYS_SLEEP    7   // 里程碑 11b: 睡 N 个滴答 (~55ms 每滴答)
+#define SYS_SBRK     8   // 里程碑 12: 调整堆顶, 返回旧断点 ((void*)-1=失败)
+#define SYS_WAITPID  9   // 里程碑 12: 等 pid (或 -1), 状态写到第二个参数
 
 // exit 不会返回 (进程变 ZOMBIE 被切走); 写个死循环兜底
 static inline void exit(int code) {
@@ -44,6 +46,29 @@ static inline uint32_t ticks(void) { return syscall0(SYS_GETTICKS); }
 static inline int  fork(void) { return (int)syscall0(SYS_FORK); }
 static inline int  getpid(void) { return (int)syscall0(SYS_GETPID); }
 static inline void sleep(uint32_t n) { syscall1(SYS_SLEEP, n); }
+static inline void* sbrk(int delta) { return (void*)syscall1(SYS_SBRK, (uint32_t)delta); }
+static inline int waitpid(int pid, int* status) {
+    return (int)syscall3(SYS_WAITPID, (uint32_t)pid, (uint32_t)status, 0);
+}
+
+// 教学版用户堆分配器: 8 字节对齐的 bump allocator。free 是空操作 —
+// 本项目的短生命周期程序足够用; 真正回收留给后续 allocator 里程碑。
+static uint32_t user_heap_cur = 0;
+
+static void* malloc(uint32_t n) {
+    if (n == 0) return 0;
+    if (!user_heap_cur) user_heap_cur = (uint32_t)sbrk(0);
+    if (user_heap_cur == 0xFFFFFFFFu) return 0;
+    uint32_t start = (user_heap_cur + 7u) & ~7u;
+    if (n > 0xFFFFFFFFu - start) return 0;
+    uint32_t next = start + n;
+    next = (next + 7u) & ~7u;
+    if (next < start || sbrk((int)(next - user_heap_cur)) == (void*)-1) return 0;
+    user_heap_cur = next;
+    return (void*)start;
+}
+
+static void free(void* p) { (void)p; }
 
 // 十六进制打印 (8 位定宽, 和内核 serial_put_hex 同款格式, 测试好匹配)
 static void puthex(uint32_t n) {

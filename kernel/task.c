@@ -139,6 +139,10 @@ void task_init() {
         tasks[i].name[0] = '\0';
         tasks[i].cr3 = PAGE_DIR_ADDR;    // 内核页目录 (0x1000000)
         tasks[i].is_user = 0;
+        tasks[i].brk = 0;
+        tasks[i].parent_pid = 0;
+        tasks[i].exit_code = 0;
+        tasks[i].user_block = 0;
     }
     next_pid = 1;
 
@@ -227,6 +231,10 @@ void task_free_slot(int idx) {
     tasks[idx].is_user = 0;
     tasks[idx].cr3 = PAGE_DIR_ADDR;
     tasks[idx].user_block = 0;
+    tasks[idx].brk = 0;
+    tasks[idx].parent_pid = 0;
+    tasks[idx].exit_code = 0;
+    tasks[idx].kstack_top = 0;
 }
 
 // 子进程退出时调用: 唤醒所有在等 WAIT_PROC 的睡眠者

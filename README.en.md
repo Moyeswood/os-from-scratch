@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-11%2F11%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-284%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-12%2F12%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-310%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -20,7 +20,7 @@
   <img src="note/splash-mid.png" width="480" alt="boot screen"/>
 </p>
 
-NewOS is an educational 32-bit x86 operating system written from scratch in C and a bit of assembly, running in QEMU. It covers the full OS learning path: **booting → protected mode → interrupts → memory management → multitasking → graphics → filesystem → editor → C compiler → Ring 3 user mode** — so that in the end you can write a C program with the built-in editor, compile it with the built-in compiler, run it, and also run user-mode processes and watch the kernel catch them red-handed when they go out of bounds.
+NewOS is an educational 32-bit x86 operating system written from scratch in C and a bit of assembly, running in QEMU. It covers the full OS learning path: **booting → protected mode → interrupts → memory management → multitasking → graphics → filesystem → editor → C compiler → Ring 3 user mode** — so that in the end you can write a C program with the built-in editor, compile it with the built-in compiler, run it, and also run user-mode processes and watch the kernel catch them red-handed when they go out of bounds. Processes can `fork`, allocate memory through `sbrk`/`malloc`, run in the background, and reap children with `waitpid`.
 
 ## ✨ Features
 
@@ -33,12 +33,13 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 
 ### 🛡️ Ring 3 User Mode
 - **Privilege isolation**: TSS kernel-stack switch, user code/data segments (DPL3), page-table U/S protection — a user program touching kernel memory gets a #PF
-- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/read_key/get_ticks/exit; the kernel validates that user-supplied pointers fall inside the user region
+- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/read_key/get_ticks/exit/fork/getpid/sleep/sbrk/waitpid; the kernel validates that user-supplied pointers fall inside the user region
 - **Exception handling**: 32 exception handlers print the full fault context (EIP/CS/EFLAGS/ESP/CR2 + page-fault error code P/W/U decoding); a user-mode fault kills the process and returns to the shell, a kernel-mode fault panics
-- **6 built-in demo programs** (host-gcc compiled → incbin → loaded by the `run` command): `hello` (minimal user process), `count` (timer keeps ticking in user mode), `crash` (write to 0xB8000 → #PF), `div0` (divide by zero → #DE), `echo` (keyboard echo), `badptr` (syscall argument validation)
+- **9 built-in demo programs** (host-gcc compiled → incbin → loaded by the `run` command): `hello` (minimal user process), `count` (timer keeps ticking in user mode), `crash` (write to 0xB8000 → #PF), `div0` (divide by zero → #DE), `echo` (keyboard echo), `badptr` (syscall argument validation), `forkdemo` (address-space isolation), `spinner` (background process), and `memdemo` (dynamic memory + waitpid)
 
 ### ⏱️ Multitasking & Devices
 - **Preemptive multitasking**: PIT IRQ0 (18.2 Hz) round-robin scheduling; cooperative and preemptive context frames are mutually restorable; includes a "bully task" demo
+- **Full process lifecycle**: per-process page directories and address spaces, fork, background jobs, `ps`/`kill`, and orphan-zombie reaping; the user heap supports `sbrk` with zero-filled growth, while `waitpid(pid/-1, &status)` reaps children and returns their exit status
 - **Device drivers**: VGA text/graphics, COM1 serial, PS/2 keyboard, PIT timer, PC speaker beep
 - **Graphics library**: mode 13h (320×200×256) palette/pixel/rect/sprite/font
 - **🎨 Adjustable fonts**: pure VGA hardware programming to load **Terminus** bitmap fonts (writing character-generator plane 2 + CRTC row reprogramming); `font` command with 5 sizes (12/14/16/18/20 → 33/28/25/22/20 lines, default 18; 18/20 vertically scaled from 8x16), hardware-level self-test on every load
@@ -100,7 +101,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `df` | Filesystem usage |
 | `edit file` | Open the editor (^S save, ^X asks to save on exit) |
 | `cc file.c [args...]` | Compile and run a C program (args go to main) |
-| `run prog` | Run a user program in Ring 3 (hello/count/crash/div0/echo/badptr) |
+| `run prog [&]` | Run a user program in Ring 3 (`&` = background; includes forkdemo/spinner/memdemo) |
 | `splash` | Replay the boot screen |
 
 ## 🚀 Quick Start
@@ -150,9 +151,13 @@ printf("read %d: %s\n", n, buf); return 0; }
 |---|---|
 | <img src="note/ring3-hello.png" width="360" alt="ring 3 user mode"/> | <img src="note/ring3-crash.png" width="360" alt="page fault"/> |
 
+| User heap + fork heap isolation + waitpid |
+|---|
+| <img src="note/memdemo.png" width="480" alt="user heap, fork heap isolation and waitpid"/> |
+
 ## 🧪 Automated Tests
 
-8 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **233 checks in total**:
+11 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **310 checks in total**:
 
 ```bash
 python3 tools/test-splash.py   # boot screen  (14 checks)
@@ -163,6 +168,9 @@ python3 tools/test-cc.py       # C compiler   (41 checks)
 python3 tools/test-preempt.py  # preemption   (7 checks)
 python3 tools/test-mario.py    # Mario        (12 checks)
 python3 tools/test-user.py     # Ring 3 user  (36 checks)
+python3 tools/test-sched.py    # PCB scheduler + keyboard buffer (15 checks)
+python3 tools/test-proc.py     # fork/background/kill (36 checks)
+python3 tools/test-memproc.py  # user heap/fork isolation/waitpid (26 checks)
 ```
 
 > test-preempt / test-mario are attached tests (argv[1] = monitor socket);
@@ -200,9 +208,9 @@ python3 tools/test-user.py     # Ring 3 user  (36 checks)
 ├── user/               # user-mode demo programs (host-gcc built, incbin'd into the kernel)
 │   ├── lib.h           # syscall wrappers (int 0x80)
 │   ├── linker.ld       # linked at 0x2000000 (user region)
-│   └── hello.c count.c crash.c div0.c echo.c badptr.c
+│   └── hello.c count.c crash.c div0.c echo.c badptr.c forkdemo.c spinner.c memdemo.c
 ├── tetris/             # original real-mode assembly version (port reference)
-├── tools/              # font converter + 8 test suites
+├── tools/              # font converter + 11 test suites
 ├── note/               # development notes + screenshots
 └── Makefile
 ```
@@ -221,6 +229,8 @@ python3 tools/test-user.py     # Ring 3 user  (36 checks)
 | 8 | c4 mini C compiler (the write-C → compile → run loop) |
 | 9 | Boot screen (a 32-bit port & polish of a hand-written hello.asm) |
 | 10 | Ring 3 user mode (TSS + page-table U/S protection + int 0x80 syscalls + exception handling) |
+| 11 | Multiprocessing (PCB scheduler + keyboard ring buffer + per-process address spaces + fork + background jobs) |
+| 12 | User dynamic memory (sbrk + bump allocator) + fork heap copy + waitpid + precise orphan reaping |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 

@@ -48,3 +48,8 @@ global user_spinner_start
 user_spinner_start: incbin "build/spinner.bin"
 global user_spinner_end
 user_spinner_end:
+
+global user_memdemo_start
+user_memdemo_start: incbin "build/memdemo.bin"
+global user_memdemo_end
+user_memdemo_end:
