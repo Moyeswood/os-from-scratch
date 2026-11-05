@@ -4,6 +4,13 @@ LD = ld
 OBJCOPY = objcopy
 QEMU = qemu-system-i386
 
+# 当前系统 GCC 在 -m32 时仍可能默认 x86-64/SSE2。NewOS 尚未启用
+# CR4.OSFXSR/OSXMMEXCPT，编译器一旦生成 XMM 指令就会触发 #UD。
+CFLAGS32 = -m32 -march=i386 -mno-mmx -mno-sse -mno-sse2 -mno-3dnow \
+           -msoft-float -fno-tree-vectorize \
+           -ffreestanding -fno-pie -fno-stack-protector -fno-builtin \
+           -fno-asynchronous-unwind-tables -fno-unwind-tables -nostdlib
+
 BOOT_DIR = boot
 KERNEL_DIR = kernel
 BUILD_DIR = build
@@ -24,6 +31,7 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
               $(KERNEL_DIR)/keyboard.o \
               $(KERNEL_DIR)/timer.o \
               $(KERNEL_DIR)/memory.o \
+              $(KERNEL_DIR)/heap.o \
               $(KERNEL_DIR)/paging.o \
               $(KERNEL_DIR)/shell.o \
               $(KERNEL_DIR)/graphics.o \
@@ -94,12 +102,12 @@ $(KERNEL_DIR)/user_embed.o: $(KERNEL_DIR)/user_embed.asm $(USER_BINS)
 # 用户程序: 独立编译成 flat binary, 入口 0x2000000 (见 user/linker.ld)
 $(BUILD_DIR)/%.bin: user/%.c user/lib.h user/linker.ld
 	mkdir -p $(BUILD_DIR)
-	$(CC) -m32 -O2 -ffreestanding -fno-pie -fno-stack-protector -nostdlib -c $< -o $(BUILD_DIR)/$*.o
+	$(CC) $(CFLAGS32) -O2 -c $< -o $(BUILD_DIR)/$*.o
 	$(LD) -m elf_i386 -T user/linker.ld $(BUILD_DIR)/$*.o -o $(BUILD_DIR)/$*.elf
 	$(OBJCOPY) -O binary $(BUILD_DIR)/$*.elf $@
 
 $(KERNEL_DIR)/%.o: $(KERNEL_DIR)/%.c
-	$(CC) -m32 -g -ffreestanding -fno-pie -fno-stack-protector -nostdlib -c $< -o $@
+	$(CC) $(CFLAGS32) -g -c $< -o $@
 
 $(KERNEL_ELF): $(KERNEL_OBJS)
 	$(LD) -m elf_i386 -T $(KERNEL_DIR)/linker.ld $^ -o $@
@@ -121,4 +129,24 @@ debug: $(OS_IMG)
 clean:
 	rm -rf $(BUILD_DIR) $(KERNEL_DIR)/*.o
 
-.PHONY: all run debug clean
+.PHONY: all run debug clean test-memory test-attached test-suite test-all
+
+test-memory: $(OS_IMG)
+	python3 tools/test-memory.py
+
+test-attached: $(OS_IMG)
+	python3 tools/run-attached-tests.py
+
+test-suite: $(OS_IMG)
+	python3 tools/test-memory.py
+	python3 tools/test-splash.py
+	python3 tools/test-font.py
+	python3 tools/test-fs.py
+	python3 tools/test-edit.py
+	python3 tools/test-cc.py
+	python3 tools/test-user.py
+	python3 tools/test-proc.py
+	python3 tools/test-sched.py
+	python3 tools/run-attached-tests.py
+
+test-all: test-suite

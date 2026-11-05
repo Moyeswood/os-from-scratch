@@ -2,6 +2,7 @@
 #include "vga.h"
 #include "serial.h"
 #include "memory.h"
+#include "heap.h"
 #include "io.h"
 #include "types.h"
 #include "task.h"
@@ -135,6 +136,10 @@ static void cmd_help() {
     vga_puts("  help     - Show this help message\n\r");
     vga_puts("  clear    - Clear the screen\n\r");
     vga_puts("  meminfo  - Show memory information\n\r");
+    vga_puts("  memmap   - Show BIOS E820 memory map\n\r");
+    vga_puts("  heap     - Show kernel heap statistics\n\r");
+    vga_puts("  heap blocks - Show heap block list\n\r");
+    vga_puts("  heaptest - Run malloc/realloc/free stress test\n\r");
     vga_puts("  echo [t] - Print text, or: echo text > file\n\r");
     vga_puts("  date     - Show current time (CMOS)\n\r");
     vga_puts("  reboot   - Reboot the system\n\r");
@@ -215,6 +220,110 @@ static void cmd_font(int argc, char** argv) {
     } else {
         vga_puts("\n\rUsage: font 12 | 14 | 16 | 18 | 20\n\r");
     }
+}
+
+// ============================================================
+//  里程碑 12: E820 内存地图与内核堆
+// ============================================================
+
+static void vga_put_hex64(uint64_t value) {
+    uint32_t high = (uint32_t)(value >> 32);
+    uint32_t low = (uint32_t)value;
+    if (high) {
+        vga_put_hex(high);
+        for (int i = 28; i >= 0; i -= 4) {
+            uint8_t nibble = (low >> i) & 0xF;
+            vga_putc((char)(nibble < 10 ? '0' + nibble : 'A' + nibble - 10));
+        }
+    } else {
+        vga_put_hex(low);
+    }
+}
+
+static const char* memory_type_name(uint32_t type) {
+    switch (type) {
+    case MEMORY_TYPE_USABLE:       return "usable";
+    case MEMORY_TYPE_RESERVED:     return "reserved";
+    case MEMORY_TYPE_ACPI_RECLAIM: return "acpi-reclaim";
+    case MEMORY_TYPE_ACPI_NVS:     return "acpi-nvs";
+    case MEMORY_TYPE_BAD:          return "bad";
+    default:                       return "unknown";
+    }
+}
+
+static void cmd_memmap(void) {
+    uint32_t count = memory_map_count();
+    vga_puts("\n\rBIOS E820 memory map:\n\r");
+    serial_puts("[SH] memmap entries="); serial_put_hex(count);
+    serial_puts(" identity_limit="); serial_put_hex(memory_identity_limit());
+    serial_puts("\n\r");
+    for (uint32_t i = 0; i < count; ++i) {
+        const memory_map_entry_t* e = memory_map_entry(i);
+        if (!e) continue;
+        uint64_t end = e->base + e->length;
+        vga_puts("  ["); vga_put_dec(i); vga_puts("] ");
+        vga_put_hex64(e->base);
+        vga_puts(" - ");
+        vga_put_hex64(end);
+        vga_puts("  ");
+        vga_puts(memory_type_name(e->type));
+        vga_puts("\n\r");
+        serial_puts("[MEM] map "); serial_put_hex(i);
+        serial_puts(" base="); serial_put_hex((uint32_t)e->base);
+        serial_puts(" len="); serial_put_hex((uint32_t)e->length);
+        serial_puts(" type="); serial_put_hex(e->type);
+        serial_puts("\n\r");
+    }
+    vga_puts("Managed identity region: 0x100000 - ");
+    vga_put_hex(memory_identity_limit());
+    vga_puts("\n\r");
+}
+
+static void cmd_heap(int argc, char** argv) {
+    if (argc > 1 && k_strcmp(argv[1], "blocks") == 0) {
+        heap_print_blocks();
+        return;
+    }
+    heap_print_stats();
+}
+
+static int cmd_heaptest(void) {
+    static const uint32_t sizes[12] = {
+        8, 31, 32, 63, 128, 255, 256, 511, 1024, 2048, 4096, 97
+    };
+    uint8_t* ptr[12] = {0};
+    int ok = 1;
+
+    for (int i = 0; i < 12; ++i) {
+        ptr[i] = (uint8_t*)kmalloc(sizes[i]);
+        if (!ptr[i]) { ok = 0; break; }
+        for (uint32_t j = 0; j < sizes[i]; ++j)
+            ptr[i][j] = (uint8_t)(i * 17 + j);
+    }
+    for (int i = 0; i < 12 && ok; ++i)
+        for (uint32_t j = 0; j < sizes[i]; ++j)
+            if (ptr[i][j] != (uint8_t)(i * 17 + j)) { ok = 0; break; }
+
+    for (int i = 1; i < 12; i += 2) {
+        kfree(ptr[i]);
+        ptr[i] = 0;
+    }
+    for (int i = 0; i < 12; i += 2) {
+        uint32_t old = sizes[i];
+        ptr[i] = (uint8_t*)krealloc(ptr[i], old * 3 + 19);
+        if (!ptr[i]) { ok = 0; break; }
+        for (uint32_t j = 0; j < old; ++j)
+            if (ptr[i][j] != (uint8_t)(i * 17 + j)) { ok = 0; break; }
+    }
+    for (int i = 0; i < 12; ++i) kfree(ptr[i]);
+    ok = ok && heap_check();
+
+    vga_puts("\n\rHeap stress test: ");
+    vga_puts(ok ? "PASS" : "FAIL");
+    vga_puts("\n\r");
+    serial_puts("[HEAP] stress ");
+    serial_puts(ok ? "PASS\n\r" : "FAIL\n\r");
+    return ok;
 }
 
 // ============================================================
@@ -414,9 +523,25 @@ static void execute_command() {
     } else if (k_strcmp(argv[0], "meminfo") == 0) {
         uint32_t total = get_total_pages();
         uint32_t used = get_used_pages();
-        vga_puts("Memory: Total="); vga_put_hex(total);
-        vga_puts(", Used="); vga_put_hex(used);
-        vga_puts(", Free="); vga_put_hex(total - used); vga_puts("\n\r");
+        uint32_t free_pages = get_free_pages();
+        vga_puts("\n\rManaged memory: Total="); vga_put_dec(total); vga_puts(" pages");
+        vga_puts(", Used="); vga_put_dec(used);
+        vga_puts(", Free="); vga_put_dec(free_pages); vga_puts("\n\r");
+        vga_puts("Memory map entries="); vga_put_dec(memory_map_count());
+        vga_puts(" (usable="); vga_put_dec(memory_map_usable_entries());
+        vga_puts("), identity limit="); vga_put_hex(memory_identity_limit());
+        vga_puts("\n\r");
+        serial_puts("[SH] meminfo pages="); serial_put_hex(total);
+        serial_puts(" used="); serial_put_hex(used);
+        serial_puts(" free="); serial_put_hex(free_pages);
+        serial_puts(" e820="); serial_put_hex(memory_map_count());
+        serial_puts("\n\r");
+    } else if (k_strcmp(argv[0], "memmap") == 0) {
+        cmd_memmap();
+    } else if (k_strcmp(argv[0], "heap") == 0) {
+        cmd_heap(argc, argv);
+    } else if (k_strcmp(argv[0], "heaptest") == 0) {
+        cmd_heaptest();
     } else if (k_strcmp(argv[0], "version") == 0) {
         cmd_version();
     } else if (k_strcmp(argv[0], "reboot") == 0) {

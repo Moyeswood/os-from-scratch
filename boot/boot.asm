@@ -7,11 +7,74 @@ mov es, ax
 mov ss, ax
 mov sp, 0x7C00
 
-; ================= 获取扩展内存大小 =================
+; ★必须先保存 BIOS 传入的启动驱动器号。后面的 INT 15h 不保证保留 DL。
+mov [0x600], dl
+
+; ================= 兼容旧内存探测 (E820 失败时回退) =================
 mov ah, 0x88
 int 0x15
 mov [0x500], ax
 ; ==================================================
+
+; ================= 获取 BIOS E820 内存地图 =================
+; 记录区放在 0x2000, 最多 32 项, 每项 24 字节。
+; 0x4000 保存实际项数。该区域不碰启动扇区、BIOS EBDA、
+; 实模式跳板 (0x6000) 和内核加载区 (0x10000)。
+;
+; E820 项格式:
+;   uint64 base, uint64 length, uint32 type, uint32 acpi_attributes
+; type=1 表示可用内存。
+    xor edi, edi
+    mov di, 0x2000
+    xor eax, eax
+    mov ecx, 32 * 6
+    rep stosd
+
+    xor edi, edi
+    mov di, 0x2000
+    xor ebx, ebx
+    xor bp, bp
+.e820_loop:
+    mov eax, 0xE820
+    mov edx, 0x534D4150       ; "SMAP"
+    mov ecx, 24
+    int 0x15
+    jc .e820_done
+    cmp eax, 0x534D4150
+    jne .e820_done
+    cmp ecx, 20
+    jb .e820_next
+
+    cmp dword [di + 16], 0    ; type=0 的项无效
+    je .e820_next
+    inc bp
+    add di, 24
+    cmp bp, 32
+    jae .e820_done
+.e820_next:
+    test ebx, ebx
+    jnz .e820_loop
+.e820_done:
+    test bp, bp
+    jnz .e820_store
+
+    ; 极端兼容回退: 根据 int 0x15 AX=0x88 构造 1MB 以上可用区。
+    movzx eax, word [0x500]
+    shl eax, 10
+    mov dword [0x2000], 0x00100000
+    mov dword [0x2004], 0
+    mov dword [0x2008], eax
+    mov dword [0x200C], 0
+    mov dword [0x2010], 1
+    mov dword [0x2014], 0
+    mov bp, 1
+.e820_store:
+    mov [0x4000], bp
+    ; INT 15h 可能修改段寄存器, 读盘前恢复 BIOS 约定的 0 基址。
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+; ==========================================================
 
 ; 【关键】保存 BIOS 的 GDTR/IDTR 到 0x580/0x586
 ; 以后内核要临时回实模式调 BIOS (INT 10h) 时,
@@ -19,9 +82,6 @@ mov [0x500], ax
 ; 会短暂进入保护模式, 依赖这些表
 sgdt [0x580]
 sidt [0x586]
-
-; 保存启动驱动器号 (DL) 到安全地址 0x600
-mov [0x600], dl
 
 ; 开启 A20 地址线
 in al, 0x92

@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-11%2F11%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-284%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-12%2F12%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-299%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -27,7 +27,7 @@ NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编�
 ### 🖥️ 底层基础
 - **引导加载器**：512 字节手写引导扇区，从软盘加载内核（150KB 上限，含 64KB 段回绕处理）
 - **保护模式**：GDT 段机制、A20 门、32 位保护模式切换
-- **内存管理**：位图物理页分配器（含连续多页分配 `alloc_pages`）+ 分页（32MB 内核恒等映射 + 4MB 用户区）
+- **内存管理**：BIOS E820 内存地图解析 + 保留区保护位图 + 物理页分配器 + 内核 `kmalloc/kfree/krealloc` 堆 + 32MB 恒等映射分页
 - **中断系统**：完整 IDT（32 个异常处理器 + IRQ + 系统调用门）、8259A PIC 重映射、PS/2 键盘中断驱动
 - **实模式往返**：随时降级回实模式调 BIOS（切视频模式），用完自动回保护模式——跳板寄存器全套保存恢复
 
@@ -83,6 +83,10 @@ nano 风格的 `edit` 命令：
 | `help` | 显示所有命令 |
 | `clear` | 清屏 |
 | `meminfo` | 内存统计（页） |
+| `memmap` | 显示 BIOS E820 内存地图和各区域类型 |
+| `heap` | 内核堆统计与完整性检查 |
+| `heap blocks` | 显示堆块分裂/合并后的块列表 |
+| `heaptest` | 运行分配、重分配、释放和块合并压力测试 |
 | `echo [text]` | 打印文本；`echo text > file` 写入文件（覆盖） |
 | `date` | CMOS 实时时钟 |
 | `version` / `reboot` | 版本 / 重启 |
@@ -156,9 +160,10 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 自动化测试
 
-10 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**共 284 项**：
+11 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**共 299 项**：
 
 ```bash
+python3 tools/test-memory.py  # E820 + 页分配 + 内核堆 (15 项)
 python3 tools/test-splash.py   # 开机画面 (14 项)
 python3 tools/test-font.py     # 字体/字号 (30 项)
 python3 tools/test-fs.py       # 文件系统 (43 项)
@@ -181,7 +186,8 @@ python3 tools/test-proc.py     # 多进程/fork/后台/kill (36 项)
 ├── boot/boot.asm       # 512 字节引导扇区
 ├── kernel/             # 内核源码 (C + 汇编)
 │   ├── kernel.c        # 内核入口
-│   ├── memory.c/h      # 位图物理内存分配
+│   ├── memory.c/h      # E820 解析 + 保留保护 + 物理页分配
+│   ├── heap.c/h        # 内核堆：分裂、合并、重分配、完整性检查
 │   ├── paging.c/h      # 分页 (内核恒等映射 + 用户区)
 │   ├── gdt.c/h         # 内核 GDT (用户段 + TSS)
 │   ├── idt.c/h pic.c   # 中断与 8259A
@@ -208,7 +214,7 @@ python3 tools/test-proc.py     # 多进程/fork/后台/kill (36 项)
 │   ├── linker.ld       # 链接到 0x2000000 (用户区)
 │   └── hello.c count.c crash.c div0.c echo.c badptr.c
 ├── tetris/             # 原始实模式汇编版 (移植蓝本)
-├── tools/              # 字体转换 + 10 套测试脚本
+├── tools/              # 字体转换 + 11 套测试脚本
 ├── note/               # 开发记录 + 截图
 └── Makefile
 ```
@@ -228,8 +234,12 @@ python3 tools/test-proc.py     # 多进程/fork/后台/kill (36 项)
 | 9 | 开机画面（用户 hello.asm 的 32 位移植美化版） |
 | 10 | Ring 3 用户态（TSS + 页表 U/S 保护 + int 0x80 系统调用 + 异常处理） |
 | 11 | 多进程（PCB 调度器 + 键盘环形缓冲 + 每进程独立地址空间 + fork + 后台进程） |
+| 12 | E820 内存地图 + 保留区保护 + 内核堆分配器 + `memmap`/`heap` 诊断 |
 
 每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
+
+里程碑 12 的完整逐步教程见
+[`docs/MILESTONE_12_E820_HEAP.md`](docs/MILESTONE_12_E820_HEAP.md)。
 
 ## 📄 致谢
 

@@ -2,6 +2,7 @@
 #include "vga.h"
 #include "idt.h"
 #include "memory.h"
+#include "heap.h"
 #include "paging.h"
 #include "shell.h"
 #include "task.h"
@@ -21,7 +22,10 @@ void kernel_main() {
     serial_init();
     vga_init();
     memory_init();
+    memory_selftest();
     paging_init();
+    heap_init();
+    heap_selftest();
     gdt_init();     // 里程碑 10: 换内核自己的 GDT (用户段 + TSS)
     idt_init();
     pic_remap();

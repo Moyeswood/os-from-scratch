@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-11%2F11%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-284%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-12%2F12%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-299%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -27,7 +27,7 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 ### 🖥️ Core
 - **Bootloader**: a hand-written 512-byte boot sector that loads the kernel from a floppy (150 KB limit, with 64 KB segment wrap-around handling)
 - **Protected mode**: GDT segmentation, A20 gate, 32-bit mode switch
-- **Memory management**: bitmap physical page allocator (including contiguous multi-page `alloc_pages`) + paging (32 MB kernel identity map + 4 MB user region)
+- **Memory management**: BIOS E820 map parsing + reserved-page protection + physical page bitmap + `kmalloc/kfree/krealloc` kernel heap + 32 MB identity-mapped paging
 - **Interrupts**: full IDT (32 exception handlers + IRQs + syscall gate), 8259A PIC remap, PS/2 keyboard interrupt driver
 - **Real-mode round trips**: drop back to real mode to call the BIOS (video mode switching) and return to protected mode automatically — the trampoline saves/restores all callee-saved registers
 
@@ -83,6 +83,10 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `help` | List all commands |
 | `clear` | Clear the screen |
 | `meminfo` | Memory statistics (pages) |
+| `memmap` | Show the BIOS E820 memory map |
+| `heap` | Show kernel heap statistics and integrity |
+| `heap blocks` | Show heap blocks after split/coalesce |
+| `heaptest` | Run allocation/reallocation/free stress test |
 | `echo [text]` | Print text; `echo text > file` writes (overwrites) a file |
 | `date` | CMOS real-time clock |
 | `version` / `reboot` | Version / reboot |
@@ -175,7 +179,8 @@ python3 tools/test-user.py     # Ring 3 user  (36 checks)
 ├── boot/boot.asm       # 512-byte boot sector
 ├── kernel/             # kernel source (C + asm)
 │   ├── kernel.c        # kernel entry
-│   ├── memory.c/h      # bitmap physical memory allocation
+│   ├── memory.c/h      # E820 parsing + reserved-page protection + physical pages
+│   ├── heap.c/h        # kernel heap split/coalesce/realloc/integrity checks
 │   ├── paging.c/h      # paging (kernel identity map + user region)
 │   ├── gdt.c/h         # kernel GDT (user segments + TSS)
 │   ├── idt.c/h pic.c   # interrupts & 8259A
@@ -202,7 +207,7 @@ python3 tools/test-user.py     # Ring 3 user  (36 checks)
 │   ├── linker.ld       # linked at 0x2000000 (user region)
 │   └── hello.c count.c crash.c div0.c echo.c badptr.c
 ├── tetris/             # original real-mode assembly version (port reference)
-├── tools/              # font converter + 8 test suites
+├── tools/              # font converter + 11 test suites
 ├── note/               # development notes + screenshots
 └── Makefile
 ```
@@ -221,6 +226,8 @@ python3 tools/test-user.py     # Ring 3 user  (36 checks)
 | 8 | c4 mini C compiler (the write-C → compile → run loop) |
 | 9 | Boot screen (a 32-bit port & polish of a hand-written hello.asm) |
 | 10 | Ring 3 user mode (TSS + page-table U/S protection + int 0x80 syscalls + exception handling) |
+| 11 | PCB scheduler + per-process address spaces + fork + background processes |
+| 12 | E820 map + reserved-page protection + kernel heap + `memmap`/`heap` diagnostics |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 
