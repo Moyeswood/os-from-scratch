@@ -68,3 +68,18 @@ global user_execbad_start
 user_execbad_start: incbin "build/execbad.bin"
 global user_execbad_end
 user_execbad_end:
+
+global user_waittest_start
+user_waittest_start: incbin "build/waittest.bin"
+global user_waittest_end
+user_waittest_end:
+
+global user_execargv_start
+user_execargv_start: incbin "build/execargv.bin"
+global user_execargv_end
+user_execargv_end:
+
+global user_elfdemo_elf_start
+user_elfdemo_elf_start: incbin "build/elfdemo.elf"
+global user_elfdemo_elf_end
+user_elfdemo_elf_end:

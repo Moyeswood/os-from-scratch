@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-14%2F14%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-347%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-15%2F15%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-386%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -20,7 +20,7 @@
   <img src="note/splash-mid.png" width="480" alt="开机画面"/>
 </p>
 
-NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编从零编写，在 QEMU 中运行。它走完了操作系统学习的完整链路：**引导 → 保护模式 → 中断 → 内存管理 → 多任务 → 图形 → 文件系统 → 编辑器 → C 编译器 → Ring 3 用户态**——最终你可以在它里面用自带的编辑器写 C 程序、用自带的编译器编译、直接运行，也能从 `/bin` 加载可执行文件、用 `exec` 原地替换进程，并体验按需分页、写时复制和 guard page。
+NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编从零编写，在 QEMU 中运行。它走完了操作系统学习的完整链路：**引导 → 保护模式 → 中断 → 内存管理 → 多任务 → 图形 → 文件系统 → 编辑器 → C 编译器 → Ring 3 用户态**——最终你可以在它里面写、编译、运行 C 程序，从 `/bin` 加载 flat 或 ELF32 程序，通过 `fork/waitpid/execve` 管理进程，并体验按需分页、写时复制和 guard page。
 
 ## ✨ 核心特性
 
@@ -29,15 +29,15 @@ NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编�
 - **保护模式**：GDT 段机制、A20 门、32 位保护模式切换
 - **内存管理**：BIOS E820 内存地图解析 + 保留区保护位图 + 物理页分配器与引用计数 + 内核 `kmalloc/kfree/krealloc` 堆 + 32MB 恒等映射分页
 - **按进程虚拟内存**：独立页目录/页表、首次访问补零页、fork COW、栈 guard page、`brk` 堆收缩与匿名 `mmap` 窗口
-- **文件系统可执行文件**：启动时把演示程序发布到 `/bin`，`run /bin/hello` 从内存 FS 加载；`exec()` 先构建新地址空间，成功后保留 PID 并切换，失败则保留旧进程
+- **可执行文件与进程模型**：`/bin` 同时支持 flat 和 ELF32；解析 PT_LOAD、数据段与 BSS，构造 `argc/argv/envp` 初始栈；`fork/waitpid/execve` 提供完整父进程收尸和事务式进程替换
 - **中断系统**：完整 IDT（32 个异常处理器 + IRQ + 系统调用门）、8259A PIC 重映射、PS/2 键盘中断驱动
 - **实模式往返**：随时降级回实模式调 BIOS（切视频模式），用完自动回保护模式——跳板寄存器全套保存恢复
 
 ### 🛡️ Ring 3 用户态
 - **特权级隔离**：TSS 内核栈切换、用户代码/数据段（DPL3）、页表 U/S 位保护——用户程序碰内核内存直接 #PF
-- **系统调用**：`int 0x80`（门 DPL3）——putc/puts/read_key/get_ticks/exit/fork/getpid/sleep/brk/mmap/exec，内核逐页校验用户传入的指针
+- **系统调用**：`int 0x80`（门 DPL3）——putc/puts/read_key/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve，内核逐页校验用户传入的指针
 - **异常处理**：32 个异常处理器打印完整现场（EIP/CS/EFLAGS/ESP/CR2 + 页错误码 P/W/U 位解读），用户态异常杀进程回 shell，内核态异常 panic
-- **12 个内嵌演示程序**（宿主 gcc 编译 → incbin → 发布到 `/bin`）：`hello`、`count`、`crash`、`div0`、`echo`、`badptr`、`forkdemo`、`spinner`、`vmtest`、`vmguard`、`execdemo`（进程替换）、`execbad`（失败回滚）
+- **14 个 flat 演示程序 + 1 个 ELF32 演示程序**：新增 `waittest`（waitpid）、`execargv`（execve 参数传递）和 `/bin/elfdemo`（PT_LOAD/BSS/argv/envp）
 
 ### ⏱️ 多任务与设备
 - **抢占式多任务**：PIT IRQ0（18.2Hz）时间片轮转，协作式/抢占式统一上下文帧可互恢复，带"恶霸任务"演示
@@ -106,7 +106,7 @@ nano 风格的 `edit` 命令：
 | `df` | 文件系统用量 |
 | `edit file` | 打开编辑器（^S 保存，^X 退出时询问保存） |
 | `cc file.c [args...]` | 编译并运行 C 程序（参数传给 main） |
-| `run prog [&]` | 在 Ring 3 运行内嵌程序或 `/bin` 文件（& = 后台） |
+| `run prog [args] [&]` | 运行内嵌或 `/bin` 程序；参数进入初始用户栈，& = detached 后台任务 |
 | `splash` | 重放开机画面 |
 
 ## 🚀 快速开始
@@ -162,7 +162,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 自动化测试
 
-13 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**共 347 项**：
+14 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**共 386 项**：
 
 ```bash
 python3 tools/test-memory.py  # E820 + 页分配 + 内核堆 (15 项)
@@ -178,6 +178,7 @@ python3 tools/test-sched.py    # PCB 调度器 + 键盘缓冲 (15 项)
 python3 tools/test-proc.py     # 多进程/fork/后台/kill (36 项)
 python3 tools/test-vm.py       # 按需分页/COW/guard/brk/mmap (22 项)
 python3 tools/test-exec.py     # 文件加载/exec/失败回滚 (26 项)
+python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 项)
 ```
 
 > test-preempt / test-mario 是附着式测试（argv[1]=monitor socket），请用
@@ -195,6 +196,7 @@ python3 tools/test-exec.py     # 文件加载/exec/失败回滚 (26 项)
 │   ├── paging.c/h      # 页目录/页表、恒等映射与用户映射原语
 │   ├── vm.c/h          # 独立进程地址空间、按需分页、COW、brk/mmap
 │   ├── exec.c/h        # /bin 发布、flat 加载器、事务式 exec
+│   │                    # (vm.c/h 同时包含 ELF32 loader 与初始栈)
 │   ├── gdt.c/h         # 内核 GDT (用户段 + TSS)
 │   ├── idt.c/h pic.c   # 中断与 8259A
 │   ├── irq.asm         # IRQ 汇编桩
@@ -220,8 +222,9 @@ python3 tools/test-exec.py     # 文件加载/exec/失败回滚 (26 项)
 │   ├── linker.ld       # 链接到 0x2000000 (用户区)
 │   └── hello.c count.c crash.c div0.c echo.c badptr.c forkdemo.c
 │       spinner.c vmtest.c vmguard.c execdemo.c execbad.c
+│       waittest.c execargv.c elfdemo.c
 ├── tetris/             # 原始实模式汇编版 (移植蓝本)
-├── tools/              # 字体转换 + 13 套测试脚本
+├── tools/              # 字体转换 + 14 套测试脚本
 ├── note/               # 开发记录 + 截图
 └── Makefile
 ```
@@ -244,13 +247,15 @@ python3 tools/test-exec.py     # 文件加载/exec/失败回滚 (26 项)
 | 12 | E820 内存地图 + 保留区保护 + 内核堆分配器 + `memmap`/`heap` 诊断 |
 | 13 | 独立虚拟地址空间 + 按需分页 + fork COW + guard page + `brk`/`mmap` |
 | 14 | `/bin` 可执行文件发布 + flat 加载器 + 事务式 `exec` + PID 保持 |
+| 15 | `waitpid` + argv/envp 初始栈 + ELF32 PT_LOAD/BSS + 只读代码页 |
 
 每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
 
-里程碑 12–14 的完整逐步教程见
+里程碑 12–15 的完整逐步教程见
 [`docs/MILESTONE_12_E820_HEAP.md`](docs/MILESTONE_12_E820_HEAP.md) 与
 [`docs/MILESTONE_13_VM.md`](docs/MILESTONE_13_VM.md)、
-[`docs/MILESTONE_14_EXEC.md`](docs/MILESTONE_14_EXEC.md)。
+[`docs/MILESTONE_14_EXEC.md`](docs/MILESTONE_14_EXEC.md)、
+[`docs/MILESTONE_15_PROCESS_ELF.md`](docs/MILESTONE_15_PROCESS_ELF.md)。
 
 ## 📄 致谢
 

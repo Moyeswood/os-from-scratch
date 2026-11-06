@@ -17,8 +17,10 @@ extern const char user_vmtest_start[], user_vmtest_end[];
 extern const char user_vmguard_start[], user_vmguard_end[];
 extern const char user_execdemo_start[], user_execdemo_end[];
 extern const char user_execbad_start[], user_execbad_end[];
+extern const char user_waittest_start[], user_waittest_end[];
+extern const char user_execargv_start[], user_execargv_end[];
 
-static user_prog_t progs[12];
+static user_prog_t progs[14];
 const user_prog_t* user_progs = progs;
 const int user_prog_count = sizeof(progs) / sizeof(progs[0]);
 
@@ -70,4 +72,12 @@ void user_progs_init(void) {
     progs[11].name = "execbad";
     progs[11].data = (const uint8_t*)user_execbad_start;
     progs[11].size = (uint32_t)(user_execbad_end - user_execbad_start);
+
+    progs[12].name = "waittest";
+    progs[12].data = (const uint8_t*)user_waittest_start;
+    progs[12].size = (uint32_t)(user_waittest_end - user_waittest_start);
+
+    progs[13].name = "execargv";
+    progs[13].data = (const uint8_t*)user_execargv_start;
+    progs[13].size = (uint32_t)(user_execargv_end - user_execargv_start);
 }

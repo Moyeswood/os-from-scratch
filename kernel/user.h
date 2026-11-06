@@ -28,7 +28,7 @@ void user_progs_init(void);   // 运行时填程序表 (blob 大小是链接期�
 void user_init();
 
 // run 命令入口 (shell.c 调): 建进程; 前台 = 等它退出, 后台 = 立刻返回
-void user_run(const char* name, int background);
+void user_run(const char* name, int argc, char** argv, int background);
 
 // syscall 帧 (user_asm.asm pusha 顺序 + iret 返回帧):
 //   [0]=edi [1]=esi [2]=ebp [3]=esp(进入时) [4]=ebx [5]=edx [6]=ecx [7]=eax
@@ -52,5 +52,6 @@ typedef struct {
 #define SYS_BRK      8   // 里程碑 13: 设置堆断点, 返回旧断点
 #define SYS_MMAP     9   // 里程碑 13: 预留匿名映射, 返回用户虚拟地址
 #define SYS_EXEC     10  // 里程碑 14: 用文件系统镜像替换当前进程
+#define SYS_WAITPID  11  // 里程碑 15: 父进程等待并回收直接子进程
 
 #endif

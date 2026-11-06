@@ -60,10 +60,11 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
               $(KERNEL_DIR)/user_embed.o
 
 # 用户程序 (宿主 gcc 编译 → 链接到 0x2000000 → flat bin → incbin)
-# 里程碑 14: + execdemo/execbad (文件加载 + 事务式 exec)
+# 里程碑 15: + waittest/execargv；elfdemo 作为独立 ELF 镜像嵌入
 USER_PROGS = hello count crash div0 echo badptr forkdemo spinner vmtest vmguard \
-             execdemo execbad
+             execdemo execbad waittest execargv
 USER_BINS  = $(patsubst %,$(BUILD_DIR)/%.bin,$(USER_PROGS))
+ELF_DEMO   = $(BUILD_DIR)/elfdemo.elf
 
 all: $(OS_IMG)
 
@@ -99,7 +100,7 @@ $(KERNEL_DIR)/exc_asm.o: $(KERNEL_DIR)/exc_asm.asm
 $(KERNEL_DIR)/user_asm.o: $(KERNEL_DIR)/user_asm.asm
 	$(ASM) -f elf32 $< -o $@
 
-$(KERNEL_DIR)/user_embed.o: $(KERNEL_DIR)/user_embed.asm $(USER_BINS)
+$(KERNEL_DIR)/user_embed.o: $(KERNEL_DIR)/user_embed.asm $(USER_BINS) $(ELF_DEMO)
 	$(ASM) -f elf32 $< -o $@
 
 # 用户程序: 独立编译成 flat binary, 入口 0x2000000 (见 user/linker.ld)
@@ -108,6 +109,11 @@ $(BUILD_DIR)/%.bin: user/%.c user/lib.h user/linker.ld
 	$(CC) $(CFLAGS32) -O2 -c $< -o $(BUILD_DIR)/$*.o
 	$(LD) -m elf_i386 -T user/linker.ld $(BUILD_DIR)/$*.o -o $(BUILD_DIR)/$*.elf
 	$(OBJCOPY) -O binary $(BUILD_DIR)/$*.elf $@
+
+$(ELF_DEMO): user/elfdemo.c user/lib.h user/elf_linker.ld
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS32) -O2 -c user/elfdemo.c -o $(BUILD_DIR)/elfdemo.o
+	$(LD) -m elf_i386 -T user/elf_linker.ld $(BUILD_DIR)/elfdemo.o -o $@
 
 $(KERNEL_DIR)/%.o: $(KERNEL_DIR)/%.c
 	$(CC) $(CFLAGS32) -g -c $< -o $@
@@ -132,7 +138,7 @@ debug: $(OS_IMG)
 clean:
 	rm -rf $(BUILD_DIR) $(KERNEL_DIR)/*.o
 
-.PHONY: all run debug clean test-memory test-vm test-exec test-attached test-suite test-all
+.PHONY: all run debug clean test-memory test-vm test-exec test-process test-attached test-suite test-all
 
 test-memory: $(OS_IMG)
 	python3 tools/test-memory.py
@@ -142,6 +148,9 @@ test-vm: $(OS_IMG)
 
 test-exec: $(OS_IMG)
 	python3 tools/test-exec.py
+
+test-process: $(OS_IMG)
+	python3 tools/test-process.py
 
 test-attached: $(OS_IMG)
 	python3 tools/run-attached-tests.py
@@ -158,6 +167,7 @@ test-suite: $(OS_IMG)
 	python3 tools/test-sched.py
 	python3 tools/test-vm.py
 	python3 tools/test-exec.py
+	python3 tools/test-process.py
 	python3 tools/run-attached-tests.py
 
 test-all: test-suite

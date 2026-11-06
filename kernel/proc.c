@@ -41,13 +41,15 @@ static const user_prog_t* prog_lookup(const char* name) {
     return 0;
 }
 
-// 清扫孤儿僵尸 (没人 wait 的后台进程): 释放内存 + 空出槽位。
-// 只在 spawn 时调用: 单 CPU 下不会有"正被等待的孩子"被误扫
-// (父进程 wait 后孩子才可能变僵尸, 而收尸在 wait 里即时发生)。
+// 清扫孤儿僵尸 (后台进程或父进程已消失): 释放内存 + 空出槽位。
+// 仍有存活父进程的 ZOMBIE 必须保留到 waitpid 收尸。
 static void sweep_zombies(void) {
     for (int i = 5; i < MAX_TASKS; i++) {
         task_t* t = task_at(i);
-        if (t && t->state == TASK_ZOMBIE) {
+        task_t* parent = (t && t->parent_pid) ?
+                         task_by_pid(t->parent_pid) : 0;
+        int orphan = !parent || parent->state == TASK_ZOMBIE;
+        if (t && t->state == TASK_ZOMBIE && orphan) {
             vm_destroy(t);
             task_free_slot(i);
             serial_puts("[PROC] swept orphan zombie (slot ");
@@ -61,20 +63,21 @@ static void sweep_zombies(void) {
 // (低) 8 寄存器 | EIP | CS | EFLAGS | ESP(用户) | SS(用户) (高)
 // 首次被调度: popa + iret; iret 见 CS.RPL=3 → 继续弹 ESP/SS,
 // 落进用户栈, 从 USER_BASE 开始执行。
-static void build_user_frame(task_t* t) {
+static void build_user_frame(task_t* t, uint32_t entry, uint32_t user_esp) {
     uint32_t* stack = (uint32_t*)t->kstack_top;
     *(--stack) = 0x23;                       // SS = 用户数据段
-    *(--stack) = USER_BASE + USER_SIZE;      // ESP = 用户栈顶
+    *(--stack) = user_esp;
     *(--stack) = 0x202;                      // EFLAGS: IF=1 (IRQ0 照常滴答)
     *(--stack) = 0x1B;                       // CS = 用户代码段 (RPL=3)
-    *(--stack) = USER_BASE;                  // EIP = 用户入口
+    *(--stack) = entry;
     for (int i = 0; i < 8; i++) *(--stack) = 0;
     t->esp = (uint32_t)stack;
 }
 
 // ---------- 建进程 ----------
 static int build_process(const char* name, const uint8_t* image,
-                         uint32_t image_size) {
+                         uint32_t image_size, int argc, char* const* argv,
+                         int envc, char* const* envp, int detached) {
     sweep_zombies();   // 顺手回收孤儿僵尸的槽位和内存
 
     if (!image || image_size == 0) {
@@ -102,14 +105,24 @@ static int build_process(const char* name, const uint8_t* image,
     t->wait_flags = 0;
     t->is_user = 1;
     t->exit_code = 0;
-    t->parent_pid = task_current()->pid;
+    t->parent_pid = detached ? 0 : (int)task_current()->pid;
 
-    if (vm_init_image(t, image, image_size) < 0) {
+    uint32_t entry = 0;
+    uint32_t initial_esp = 0;
+    if (vm_init_program(t, image, image_size, &entry) < 0) {
         task_free_slot(idx);
         serial_puts("[PROC] spawn fail: virtual address space\n\r");
         return -1;
     }
-    build_user_frame(t);
+    if (vm_build_initial_stack(t, argc, (const char* const*)argv,
+                               envc, (const char* const*)envp,
+                               &initial_esp) < 0) {
+        vm_destroy(t);
+        task_free_slot(idx);
+        serial_puts("[PROC] spawn fail: initial stack\n\r");
+        return -1;
+    }
+    build_user_frame(t, entry, initial_esp);
     t->state = TASK_READY;
 
     serial_puts("[PROC] spawn ");
@@ -124,42 +137,116 @@ static int build_process(const char* name, const uint8_t* image,
 
 // ---------- 对外接口 ----------
 int proc_spawn(const char* name) {
+    char* argv[1] = { (char*)name };
+    return proc_spawn_args(name, 1, argv, 0, 0, 0);
+}
+
+int proc_spawn_args(const char* name, int argc, char* const* argv,
+                    int envc, char* const* envp, int detached) {
     const user_prog_t* p = prog_lookup(name);
     if (!p) return -1;
-    return build_process(name, p->data, p->size);
+    return build_process(name, p->data, p->size, argc, argv, envc, envp,
+                         detached);
 }
 
 int proc_spawn_file(const char* path) {
+    char* argv[1] = { (char*)path };
+    return proc_spawn_file_args(path, 1, argv, 0, 0, 0);
+}
+
+int proc_spawn_file_args(const char* path, int argc, char* const* argv,
+                         int envc, char* const* envp, int detached) {
     uint8_t* image = 0;
     uint32_t size = 0;
     if (exec_load_file(path, &image, &size) < 0) return -1;
 
     char name[16];
     exec_basename(name, sizeof(name), path);
-    int pid = build_process(name, image, size);
+    int pid = build_process(name, image, size, argc, argv, envc, envp,
+                            detached);
     kfree(image);
     return pid;
 }
 
+static task_t* find_child(task_t* parent, int requested_pid, int zombie_only) {
+    if (!parent) return 0;
+    for (int i = 5; i < MAX_TASKS; ++i) {
+        task_t* t = task_at(i);
+        if (!t || !t->is_user ||
+            t->parent_pid != (int)parent->pid) continue;
+        if (requested_pid != -1 && (int)t->pid != requested_pid) continue;
+        if (zombie_only && t->state != TASK_ZOMBIE) continue;
+        return t;
+    }
+    return 0;
+}
+
+static int reap_child(task_t* child) {
+    int pid = (int)child->pid;
+    int idx = task_slot_of(child);
+    vm_destroy(child);
+    task_free_slot(idx);
+    return pid;
+}
+
+static void detach_children(int parent_pid) {
+    for (int i = 5; i < MAX_TASKS; ++i) {
+        task_t* t = task_at(i);
+        if (t && t->is_user && t->parent_pid == parent_pid)
+            t->parent_pid = 0;
+    }
+}
+
 // 前台等待: 睡到孩子 ZOMBIE → 收尸 (销毁地址空间 + 空槽) → 返回退出码
 int proc_wait(int pid) {
-    task_t* child = task_by_pid(pid);
+    task_t* parent = task_current();
+    task_t* child = find_child(parent, pid, 0);
     if (!child) return -1;
 
     while (1) {
         __asm__ volatile("cli");
-        if (child->state == TASK_ZOMBIE) { __asm__ volatile("sti"); break; }
+        child = find_child(parent, pid, 1);
+        if (child) break;
+        if (!find_child(parent, pid, 0)) {
+            __asm__ volatile("sti");
+            return -1;
+        }
         task_sleep_switch_locked(TASK_WAIT_PROC, 0);
         __asm__ volatile("sti");
-        child = task_by_pid(pid);
-        if (!child) return -1;
     }
 
     int code = child->exit_code;
-    int idx = task_slot_of(child);
-    vm_destroy(child);
-    task_free_slot(idx);
+    reap_child(child);
     return code;
+}
+
+int proc_waitpid(int pid, int* status) {
+    task_t* parent = task_current();
+    if (!parent || !parent->is_user || pid == 0 || pid < -1) return -1;
+
+    while (1) {
+        __asm__ volatile("cli");
+        task_t* child = find_child(parent, pid, 1);
+        if (child) {
+            int code = child->exit_code;
+            if (status &&
+                vm_write_user(parent, (uint32_t)status, &code,
+                              sizeof(code)) < 0) {
+                __asm__ volatile("sti");
+                serial_puts("[PROC] waitpid: status write failed\n\r");
+                return -1;
+            }
+            int result = reap_child(child);
+            __asm__ volatile("sti");
+            return result;
+        }
+        if (!find_child(parent, pid, 0)) {
+            __asm__ volatile("sti");
+            return -1;
+        }
+        task_sleep_switch_locked(TASK_WAIT_PROC, 0);
+        __asm__ volatile("sti");
+    }
 }
 
 void proc_exit(int code) {
@@ -171,6 +258,7 @@ void proc_exit(int code) {
     serial_puts(") exited code=");
     serial_put_hex((uint32_t)code);
     serial_puts("\n\r");
+    detach_children(me->pid);
     task_zombie_switch_away(code);   // 永不返回
     while (1) { __asm__ volatile("hlt"); }
 }
@@ -186,6 +274,7 @@ void proc_fault_kill(void) {
     serial_puts(" (");
     serial_puts(me->name);
     serial_puts(") killed by exception\n\r");
+    detach_children(me->pid);
     task_zombie_switch_away(-1);     // 永不返回
     while (1) { __asm__ volatile("hlt"); }
 }
@@ -249,6 +338,7 @@ int proc_kill(int pid) {
     serial_puts(" (");
     serial_puts(t->name);
     serial_puts(") killed by kill command\n\r");
+    detach_children(t->pid);
     // 直接判死: 在跑就跑到下一个滴答 (pick_next 不会再看它),
     // 在睡就永远睡下去; 内存由下一次 spawn 的清扫回收
     t->state = TASK_ZOMBIE;

@@ -101,7 +101,10 @@ check("boot: scheduler marker", "[TASK] scheduler: idle + shell + demo A/B/C" in
 check("boot: splash done", wait_for(
     lambda: "[SP] done" in serial_log() or "[SP] skipped" in serial_log(),
     timeout=15.0, name="splash-done"))
-time.sleep(1.0)
+mark_serial_base()
+type_text("pwd\n")
+wait_since("[SH] pwd:", 10.0, "shell-ready")
+time.sleep(0.3)
 
 # ================= 2. ps: PCB 状态 =================
 def re_shell_sleeping(t):

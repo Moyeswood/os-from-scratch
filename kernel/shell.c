@@ -672,13 +672,17 @@ static void execute_command() {
             vga_puts("  vmguard  - write the stack guard page (expected #PF)\n\r");
             vga_puts("  execdemo - replace this process with /bin/hello\n\r");
             vga_puts("  execbad  - failed exec preserves the old image\n\r");
-            vga_puts("  /bin/p   - load a flat executable from the filesystem\n\r");
+            vga_puts("  waittest - waitpid + exit status + child reaping\n\r");
+            vga_puts("  execargv - execve argv/envp into /bin/elfdemo\n\r");
+            vga_puts("  elfdemo  - ELF32 segments, BSS and argument stack\n\r");
+            vga_puts("  /bin/p   - load a flat or ELF executable from the filesystem\n\r");
             vga_puts("  &        - run in background (shell stays usable, use ps/kill)\n\r");
         } else {
             // 里程碑 11b: 用户进程是独立任务, 不再跑在 shell 的调用链里。
             // 后台 = 建完进程就回 shell, 两个 (或更多) 进程并发跑。
-            int bg = (argc >= 3 && k_strcmp(argv[2], "&") == 0);
-            user_run(argv[1], bg);
+            int bg = (argc >= 3 && k_strcmp(argv[argc - 1], "&") == 0);
+            int run_argc = argc - 1 - (bg ? 1 : 0);
+            user_run(argv[1], run_argc, &argv[1], bg);
         }
     } else if (k_strcmp(argv[0], "kill") == 0) {
         if (argc < 2) {

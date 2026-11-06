@@ -5,6 +5,7 @@
 #include "vm.h"
 #include "exec.h"
 #include "fs.h"
+#include "heap.h"
 #include "serial.h"
 #include "vga.h"
 #include "timer.h"
@@ -90,6 +91,64 @@ static int copy_user_path(char* out, uint32_t cap, const char* user_path) {
     return -1;
 }
 
+static int copy_user_string(char* out, uint32_t cap, const char* source) {
+    task_t* me = task_current();
+    if (!out || cap == 0 || !source) return -1;
+    for (uint32_t i = 0; i < cap; ++i) {
+        uint32_t addr = (uint32_t)source + i;
+        if (!vm_user_range_ok(me, addr, 1)) return -1;
+        char c = source[i];
+        out[i] = c;
+        if (c == '\0') return 0;
+    }
+    return -1;
+}
+
+static int copy_user_vector(const char* const* source, const char* out[],
+                            int max_count, char* storage, uint32_t storage_size,
+                            uint32_t* used, int* count) {
+    *count = 0;
+    if (!source) return 0;
+
+    task_t* me = task_current();
+    for (int i = 0; i <= max_count; ++i) {
+        uint32_t slot = (uint32_t)source + (uint32_t)i * 4;
+        if (!vm_user_range_ok(me, slot, 4)) return -1;
+        const char* value = source[i];
+        if (!value) return 0;
+        if (i == max_count) return -1;
+        if (*used >= storage_size) return -1;
+        out[i] = storage + *used;
+        if (copy_user_string(storage + *used, storage_size - *used,
+                             value) < 0)
+            return -1;
+        *used += k_strlen(out[i]) + 1;
+        *count = i + 1;
+    }
+    return -1;
+}
+
+static exec_args_t* copy_exec_args(const char* const* user_argv,
+                                   const char* const* user_envp) {
+    exec_args_t* args = (exec_args_t*)kmalloc(sizeof(exec_args_t));
+    if (!args) return 0;
+    k_memset(args, 0, sizeof(*args));
+
+    uint32_t used = 0;
+    if (copy_user_vector(user_argv, args->argv, EXEC_MAX_ARGS,
+                         args->storage, sizeof(args->storage),
+                         &used, &args->argc) < 0 ||
+        copy_user_vector(user_envp, args->envp, EXEC_MAX_ENVS,
+                         args->storage, sizeof(args->storage),
+                         &used, &args->envc) < 0) {
+        kfree(args);
+        return 0;
+    }
+    args->argv[args->argc] = 0;
+    args->envp[args->envc] = 0;
+    return args;
+}
+
 // ---------- int 0x80 分发 ----------
 void syscall_dispatch(user_frame_t* f) {
     switch (f->eax) {
@@ -130,7 +189,25 @@ void syscall_dispatch(user_frame_t* f) {
             f->eax = 0xFFFFFFFF;
             break;
         }
-        f->eax = (uint32_t)exec_replace_current(f, path);
+        exec_args_t* args = copy_exec_args(
+            (const char* const*)f->ecx, (const char* const*)f->edx);
+        if (!args) {
+            f->eax = 0xFFFFFFFFu;
+            break;
+        }
+        f->eax = (uint32_t)exec_replace_current(f, path, args);
+        kfree(args);
+        break;
+    }
+    case SYS_WAITPID: {
+        int* status = (int*)f->ecx;
+        task_t* me = task_current();
+        if (status && !vm_user_range_ok(me, (uint32_t)status, sizeof(int))) {
+            serial_puts("[SYS] waitpid: rejected status pointer\n\r");
+            f->eax = 0xFFFFFFFFu;
+            break;
+        }
+        f->eax = (uint32_t)proc_waitpid((int)f->ebx, status);
         break;
     }
     default:
@@ -170,7 +247,7 @@ static void vga_put_dec(uint32_t n) {
     while (pos) vga_putc(tmp[--pos]);
 }
 
-void user_run(const char* name, int background) {
+void user_run(const char* name, int argc, char** argv, int background) {
     const user_prog_t* p = 0;
     for (int i = 0; i < user_prog_count; i++) {
         if (k_strcmp(user_progs[i].name, name) == 0) { p = &user_progs[i]; break; }
@@ -181,7 +258,9 @@ void user_run(const char* name, int background) {
         return;
     }
 
-    int pid = p ? proc_spawn(name) : proc_spawn_file(name);
+    char* envp[4] = { "HOME=/", "PATH=/bin", "NEWOS=1", 0 };
+    int pid = p ? proc_spawn_args(name, argc, argv, 3, envp, background)
+                : proc_spawn_file_args(name, argc, argv, 3, envp, background);
     if (pid < 0) {
         serial_puts("[USER] unknown program: ");
         serial_puts(name);

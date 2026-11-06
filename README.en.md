@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-14%2F14%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-347%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-15%2F15%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-386%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -20,7 +20,7 @@
   <img src="note/splash-mid.png" width="480" alt="boot screen"/>
 </p>
 
-NewOS is an educational 32-bit x86 operating system written from scratch in C and a bit of assembly, running in QEMU. It covers the full OS learning path: **booting → protected mode → interrupts → memory management → multitasking → graphics → filesystem → editor → C compiler → Ring 3 user mode** — so that in the end you can write a C program with the built-in editor, compile it, load executables from `/bin`, and use `exec` while exploring demand paging, copy-on-write, and guard pages.
+NewOS is an educational 32-bit x86 operating system written from scratch in C and a bit of assembly, running in QEMU. It covers the full OS learning path: **booting → protected mode → interrupts → memory management → multitasking → graphics → filesystem → editor → C compiler → Ring 3 user mode** — so that in the end you can write and compile C programs, load flat or ELF32 executables from `/bin`, and manage processes with `fork/waitpid/execve`.
 
 ## ✨ Features
 
@@ -29,15 +29,15 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 - **Protected mode**: GDT segmentation, A20 gate, 32-bit mode switch
 - **Memory management**: BIOS E820 map parsing + reserved-page protection + reference-counted physical pages + `kmalloc/kfree/krealloc` kernel heap + 32 MB identity-mapped paging
 - **Per-process virtual memory**: independent page directories/tables, zero-filled demand pages, fork COW, stack guard page, shrinking `brk`, and an anonymous `mmap` arena
-- **Filesystem executables**: demo programs are published to `/bin`; `run /bin/hello` loads a flat executable from the in-memory FS, while transactional `exec()` swaps the address space, preserves the PID, and keeps the old process alive on failure
+- **Executables and process lifecycle**: `/bin` accepts flat and ELF32 images, parses PT_LOAD/data/BSS, constructs `argc/argv/envp` stacks, and implements `fork/waitpid/execve` with transactional replacement and child reaping
 - **Interrupts**: full IDT (32 exception handlers + IRQs + syscall gate), 8259A PIC remap, PS/2 keyboard interrupt driver
 - **Real-mode round trips**: drop back to real mode to call the BIOS (video mode switching) and return to protected mode automatically — the trampoline saves/restores all callee-saved registers
 
 ### 🛡️ Ring 3 User Mode
 - **Privilege isolation**: TSS kernel-stack switch, user code/data segments (DPL3), page-table U/S protection — a user program touching kernel memory gets a #PF
-- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/read_key/get_ticks/exit/fork/getpid/sleep/brk/mmap/exec; user pointers are validated page by page
+- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/read_key/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve; user pointers are validated page by page
 - **Exception handling**: 32 exception handlers print the full fault context (EIP/CS/EFLAGS/ESP/CR2 + page-fault error code P/W/U decoding); a user-mode fault kills the process and returns to the shell, a kernel-mode fault panics
-- **12 built-in demo programs** (host-gcc compiled → incbin → published to `/bin`): `hello`, `count`, `crash`, `div0`, `echo`, `badptr`, `forkdemo`, `spinner`, `vmtest`, `vmguard`, `execdemo`, and `execbad`
+- **14 flat demos + 1 ELF32 demo**: new programs cover `waitpid`, `execve` argument passing, and ELF PT_LOAD/BSS loading
 
 ### ⏱️ Multitasking & Devices
 - **Preemptive multitasking**: PIT IRQ0 (18.2 Hz) round-robin scheduling; cooperative and preemptive context frames are mutually restorable; includes a "bully task" demo
@@ -106,7 +106,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `df` | Filesystem usage |
 | `edit file` | Open the editor (^S save, ^X asks to save on exit) |
 | `cc file.c [args...]` | Compile and run a C program (args go to main) |
-| `run prog [&]` | Run an embedded program or a `/bin` executable in Ring 3 (`&` = background) |
+| `run prog [args] [&]` | Run an embedded or `/bin` executable (`args` enter the initial stack; `&` = detached background) |
 | `splash` | Replay the boot screen |
 
 ## 🚀 Quick Start
@@ -158,7 +158,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 Automated Tests
 
-13 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **347 checks in total**:
+14 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **386 checks in total**:
 
 ```bash
 python3 tools/test-memory.py  # E820 + page allocator + kernel heap (15 checks)
@@ -174,6 +174,7 @@ python3 tools/test-sched.py    # PCB scheduler + keyboard buffer (15 checks)
 python3 tools/test-proc.py     # processes/fork/background/kill (36 checks)
 python3 tools/test-vm.py       # demand paging/COW/guard (22 checks)
 python3 tools/test-exec.py     # file loader/exec/rollback (26 checks)
+python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 checks)
 ```
 
 > test-preempt / test-mario are attached tests (argv[1] = monitor socket);
@@ -191,6 +192,7 @@ python3 tools/test-exec.py     # file loader/exec/rollback (26 checks)
 │   ├── paging.c/h      # page directories/tables and mapping primitives
 │   ├── vm.c/h          # address spaces, demand paging, COW, brk/mmap
 │   ├── exec.c/h        # /bin publishing, flat loader, transactional exec
+│   │                    # (vm.c/h also contains the ELF32 loader and initial stack)
 │   ├── gdt.c/h         # kernel GDT (user segments + TSS)
 │   ├── idt.c/h pic.c   # interrupts & 8259A
 │   ├── irq.asm         # IRQ assembly stubs
@@ -216,8 +218,9 @@ python3 tools/test-exec.py     # file loader/exec/rollback (26 checks)
 │   ├── linker.ld       # linked at 0x2000000 (user region)
 │   └── hello.c count.c crash.c div0.c echo.c badptr.c forkdemo.c
 │       spinner.c vmtest.c vmguard.c execdemo.c execbad.c
+│       waittest.c execargv.c elfdemo.c
 ├── tetris/             # original real-mode assembly version (port reference)
-├── tools/              # font converter + 13 test suites
+├── tools/              # font converter + 14 test suites
 ├── note/               # development notes + screenshots
 └── Makefile
 ```
@@ -240,13 +243,15 @@ python3 tools/test-exec.py     # file loader/exec/rollback (26 checks)
 | 12 | E820 map + reserved-page protection + kernel heap + `memmap`/`heap` diagnostics |
 | 13 | Independent virtual address spaces + demand paging + fork COW + guard page + `brk`/`mmap` |
 | 14 | `/bin` executables + flat loader + transactional `exec` + PID preservation |
+| 15 | `waitpid` + argv/envp stacks + ELF32 PT_LOAD/BSS + read-only code pages |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 
 The step-by-step Chinese guides for the latest phases are
 [`docs/MILESTONE_12_E820_HEAP.md`](docs/MILESTONE_12_E820_HEAP.md) and
 [`docs/MILESTONE_13_VM.md`](docs/MILESTONE_13_VM.md),
-[`docs/MILESTONE_14_EXEC.md`](docs/MILESTONE_14_EXEC.md).
+[`docs/MILESTONE_14_EXEC.md`](docs/MILESTONE_14_EXEC.md),
+[`docs/MILESTONE_15_PROCESS_ELF.md`](docs/MILESTONE_15_PROCESS_ELF.md).
 
 ## 📄 Credits
 

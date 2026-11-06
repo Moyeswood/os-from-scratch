@@ -9,6 +9,8 @@
 
 #define EXEC_PATH_BUF 64
 
+extern const char user_elfdemo_elf_start[], user_elfdemo_elf_end[];
+
 void exec_basename(char* out, uint32_t cap, const char* path) {
     if (!out || cap == 0) return;
     const char* base = path ? path : "";
@@ -64,6 +66,20 @@ void exec_install_builtins(void) {
     serial_puts("/");
     serial_put_hex((uint32_t)user_prog_count);
     serial_puts(" programs in /bin\n\r");
+
+    const uint8_t* elf = (const uint8_t*)user_elfdemo_elf_start;
+    uint32_t elf_size = (uint32_t)(user_elfdemo_elf_end -
+                                   user_elfdemo_elf_start);
+    int elf_inum = fs_create("/bin/elfdemo", FS_FILE);
+    if (elf_inum >= 0 &&
+        fs_write((uint32_t)elf_inum, elf, elf_size, 0) == (int)elf_size) {
+        serial_puts("[EXEC] installed ELF /bin/elfdemo bytes=");
+        serial_put_hex(elf_size);
+        serial_puts("\n\r");
+    } else {
+        if (elf_inum >= 0) fs_remove("/bin/elfdemo");
+        serial_puts("[EXEC] install FAIL: /bin/elfdemo\n\r");
+    }
 }
 
 int exec_load_file(const char* path, uint8_t** image, uint32_t* size) {
@@ -107,7 +123,8 @@ int exec_load_file(const char* path, uint8_t** image, uint32_t* size) {
     return 0;
 }
 
-int exec_replace_current(user_frame_t* frame, const char* path) {
+int exec_replace_current(user_frame_t* frame, const char* path,
+                         const exec_args_t* args) {
     task_t* t = task_current();
     if (!t || !t->is_user || !frame) return -1;
 
@@ -121,9 +138,20 @@ int exec_replace_current(user_frame_t* frame, const char* path) {
     k_memset(&staged, 0, sizeof(staged));
     staged.pid = t->pid;
     staged.is_user = 1;
-    if (vm_init_image(&staged, image, size) < 0) {
+    uint32_t entry = 0;
+    uint32_t initial_esp = 0;
+    if (vm_init_program(&staged, image, size, &entry) < 0) {
         kfree(image);
         serial_puts("[EXEC] image setup failed, old process preserved\n\r");
+        return -1;
+    }
+    if (vm_build_initial_stack(
+            &staged, args ? args->argc : 0, args ? args->argv : 0,
+            args ? args->envc : 0, args ? args->envp : 0,
+            &initial_esp) < 0) {
+        vm_destroy(&staged);
+        kfree(image);
+        serial_puts("[EXEC] initial stack failed, old process preserved\n\r");
         return -1;
     }
 
@@ -153,10 +181,10 @@ int exec_replace_current(user_frame_t* frame, const char* path) {
     frame->edx = 0;
     frame->ecx = 0;
     frame->eax = 0;
-    frame->eip = VM_IMAGE_BASE;
+    frame->eip = entry;
     frame->cs = 0x1B;
     frame->eflags = 0x202;
-    frame->esp_user = VM_STACK_TOP;
+    frame->esp_user = initial_esp;
     frame->ss_user = 0x23;
 
     serial_puts("[EXEC] replace pid=");
