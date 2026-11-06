@@ -53,13 +53,14 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
               $(KERNEL_DIR)/exc_asm.o \
               $(KERNEL_DIR)/user.o \
               $(KERNEL_DIR)/proc.o \
+              $(KERNEL_DIR)/vm.o \
               $(KERNEL_DIR)/user_asm.o \
               $(KERNEL_DIR)/user_progs.o \
               $(KERNEL_DIR)/user_embed.o
 
 # 用户程序 (宿主 gcc 编译 → 链接到 0x2000000 → flat bin → incbin)
-# 里程碑 11b: + forkdemo (fork/独立地址空间) + spinner (后台进程演示)
-USER_PROGS = hello count crash div0 echo badptr forkdemo spinner
+# 里程碑 13: + vmtest (按需分页/COW/brk/mmap) + vmguard (guard page)
+USER_PROGS = hello count crash div0 echo badptr forkdemo spinner vmtest vmguard
 USER_BINS  = $(patsubst %,$(BUILD_DIR)/%.bin,$(USER_PROGS))
 
 all: $(OS_IMG)
@@ -129,10 +130,13 @@ debug: $(OS_IMG)
 clean:
 	rm -rf $(BUILD_DIR) $(KERNEL_DIR)/*.o
 
-.PHONY: all run debug clean test-memory test-attached test-suite test-all
+.PHONY: all run debug clean test-memory test-vm test-attached test-suite test-all
 
 test-memory: $(OS_IMG)
 	python3 tools/test-memory.py
+
+test-vm: $(OS_IMG)
+	python3 tools/test-vm.py
 
 test-attached: $(OS_IMG)
 	python3 tools/run-attached-tests.py
@@ -147,6 +151,7 @@ test-suite: $(OS_IMG)
 	python3 tools/test-user.py
 	python3 tools/test-proc.py
 	python3 tools/test-sched.py
+	python3 tools/test-vm.py
 	python3 tools/run-attached-tests.py
 
 test-all: test-suite

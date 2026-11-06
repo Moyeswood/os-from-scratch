@@ -30,6 +30,19 @@ static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 #define SYS_FORK     5   // 里程碑 11b: 复制地址空间+现场, 父得子 pid, 子得 0
 #define SYS_GETPID   6   // 里程碑 11b: 读自己的 pid
 #define SYS_SLEEP    7   // 里程碑 11b: 睡 N 个滴答 (~55ms 每滴答)
+#define SYS_BRK      8   // 里程碑 13: 设置堆断点, 返回旧断点
+#define SYS_MMAP     9   // 里程碑 13: 预留匿名映射, 返回虚拟地址
+
+// 与 kernel/vm.h 保持一致的用户虚拟布局。
+#define VM_IMAGE_BASE   0x2000000u
+#define VM_IMAGE_LIMIT  0x2040000u
+#define VM_HEAP_BASE    0x2040000u
+#define VM_HEAP_LIMIT   0x20C0000u
+#define VM_MMAP_BASE    0x20C0000u
+#define VM_MMAP_LIMIT   0x22F0000u
+#define VM_STACK_GUARD  0x22F0000u
+#define VM_STACK_BOTTOM 0x22F1000u
+#define VM_STACK_TOP    0x2400000u
 
 // exit 不会返回 (进程变 ZOMBIE 被切走); 写个死循环兜底
 static inline void exit(int code) {
@@ -44,6 +57,12 @@ static inline uint32_t ticks(void) { return syscall0(SYS_GETTICKS); }
 static inline int  fork(void) { return (int)syscall0(SYS_FORK); }
 static inline int  getpid(void) { return (int)syscall0(SYS_GETPID); }
 static inline void sleep(uint32_t n) { syscall1(SYS_SLEEP, n); }
+static inline void* brk(void* address) {
+    return (void*)syscall1(SYS_BRK, (uint32_t)address);
+}
+static inline void* mmap(uint32_t length) {
+    return (void*)syscall1(SYS_MMAP, length);
+}
 
 // 十六进制打印 (8 位定宽, 和内核 serial_put_hex 同款格式, 测试好匹配)
 static void puthex(uint32_t n) {

@@ -2,6 +2,8 @@
 #include "serial.h"
 #include "vga.h"
 #include "proc.h"
+#include "task.h"
+#include "vm.h"
 
 // ============================================================
 //  异常处理 (里程碑 10: Ring 3 用户态; 里程碑 11b: 杀进程走调度器)
@@ -54,6 +56,12 @@ void exc_dispatch(uint32_t* f) {
     uint32_t esp = f[13];
     uint32_t cr2 = 0;
     if (vec == 14) __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+
+    // #PF 先交给 VM 层。合法的按需页和 COW 写故障处理后直接
+    // 返回异常桩，iret 重试原指令；其余情况才打印现场并杀进程。
+    if (vec == 14 && (cs & 3) &&
+        vm_handle_page_fault(task_current(), cr2, err))
+        return;
 
     print_both("\n\r[EXC] #");
     // 两位十进制向量号

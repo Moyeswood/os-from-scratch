@@ -13,8 +13,10 @@ extern const char user_echo_start[], user_echo_end[];
 extern const char user_badptr_start[], user_badptr_end[];
 extern const char user_forkdemo_start[], user_forkdemo_end[];
 extern const char user_spinner_start[], user_spinner_end[];
+extern const char user_vmtest_start[], user_vmtest_end[];
+extern const char user_vmguard_start[], user_vmguard_end[];
 
-static user_prog_t progs[8];
+static user_prog_t progs[10];
 const user_prog_t* user_progs = progs;
 const int user_prog_count = sizeof(progs) / sizeof(progs[0]);
 
@@ -50,4 +52,12 @@ void user_progs_init(void) {
     progs[7].name = "spinner";
     progs[7].data = (const uint8_t*)user_spinner_start;
     progs[7].size = (uint32_t)(user_spinner_end - user_spinner_start);
+
+    progs[8].name = "vmtest";
+    progs[8].data = (const uint8_t*)user_vmtest_start;
+    progs[8].size = (uint32_t)(user_vmtest_end - user_vmtest_start);
+
+    progs[9].name = "vmguard";
+    progs[9].data = (const uint8_t*)user_vmguard_start;
+    progs[9].size = (uint32_t)(user_vmguard_end - user_vmguard_start);
 }

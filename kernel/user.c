@@ -2,6 +2,7 @@
 #include "proc.h"
 #include "paging.h"
 #include "memory.h"
+#include "vm.h"
 #include "serial.h"
 #include "vga.h"
 #include "timer.h"
@@ -39,17 +40,23 @@ static int sys_putc(char c) {
 //   否则恶意程序可以让内核去读任意内核地址 (真实 OS 用
 //   copy_from_user 逐页复制, 这里只做首指针范围检查, 教学版)。
 static int sys_puts(const char* s) {
-    if ((uint32_t)s < USER_BASE || (uint32_t)s >= USER_BASE + USER_SIZE) {
+    task_t* me = task_current();
+    if ((uint32_t)s < USER_BASE || (uint32_t)s >= USER_BASE + USER_SIZE ||
+        !vm_user_range_ok(me, (uint32_t)s, 1)) {
         serial_puts("[SYS] puts: rejected kernel pointer\n\r");
         return -1;
     }
     // 读循环也限在用户区内: 字符串若越过 36MB 边界, 停住返回
     // (否则内核读到未映射页 → 内核态 #PF panic, 用户可借此 DoS)
     const char* region_end = (const char*)(USER_BASE + USER_SIZE);
-    while (*s && s < region_end) {
+    while (s < region_end && *s) {
         vga_putc(*s);
         serial_putc(*s);
         s++;
+        if (s < region_end && !vm_user_range_ok(me, (uint32_t)s, 1)) {
+            serial_puts("\n\r[SYS] puts: rejected unmapped page\n\r");
+            return -1;
+        }
     }
     return 0;
 }
@@ -94,6 +101,12 @@ void syscall_dispatch(user_frame_t* f) {
         task_sleep_ticks(f->ebx);          // 睡 ebx 个滴答 (~55ms 每滴答)
         f->eax = 0;
         break;
+    case SYS_BRK:
+        f->eax = vm_brk(task_current(), f->ebx);
+        break;
+    case SYS_MMAP:
+        f->eax = vm_mmap(task_current(), f->ebx);
+        break;
     default:
         serial_puts("[SYS] unknown syscall #");
         serial_put_hex(f->eax);
@@ -105,18 +118,15 @@ void syscall_dispatch(user_frame_t* f) {
 
 // ---------- 内核初始化 ----------
 void user_init() {
-    // 用户区物理页是"预占"的固定地址 (程序链接在 0x2000000),
-    // 先保留, 别让分配器把它们发给 VM 内存池/FS 块。
-    // (里程碑 11b: 每进程有自己的物理页, 内核页目录里的这份
-    //  恒等映射只作调试后门, 32~36MB 物理区保持预留。)
-    memory_reserve(USER_BASE, USER_SIZE);
-    paging_map_user_region();
+    // 每个进程的虚拟用户区都有独立页目录；物理页由分配器
+    // 从当前 E820 managed 区域按需提供，不再预留固定 4MB 块。
     user_progs_init();
     serial_puts("[USER] user region ");
     serial_put_hex(USER_BASE);
     serial_puts("..");
     serial_put_hex(USER_BASE + USER_SIZE);
-    serial_puts(" mapped (U/S=1, ring 3)\n\r");
+    serial_puts(" mapped per-process (demand paging + COW)\n\r");
+    serial_puts("[USER] per-process VM enabled\n\r");
 }
 
 // ---------- run 命令入口 ----------
@@ -144,10 +154,10 @@ void user_run(const char* name, int background) {
         serial_puts("\n\r");
         vga_puts("\n\rUnknown program: ");
         vga_puts(name);
-        vga_puts("  (try: run hello | count | crash | div0 | echo | badptr | forkdemo | spinner)\n\r");
+        vga_puts("  (try: run hello | count | crash | div0 | echo | badptr | forkdemo | spinner | vmtest | vmguard)\n\r");
         return;
     }
-    if (p->size > USER_SIZE - 4096) {
+    if (p->size > VM_IMAGE_LIMIT - VM_IMAGE_BASE) {
         serial_puts("[USER] program too big\n\r");
         vga_puts("\n\rrun: program image too large\n\r");
         return;

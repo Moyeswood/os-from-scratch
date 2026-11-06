@@ -8,6 +8,7 @@
 #define FIRST_MANAGED_ADDR 0x00100000u
 #define PAGE_TABLES_BASE   0x01000000u
 #define PAGE_TABLES_BYTES  0x0000B000u
+#define MAX_MANAGED_PAGES  (MEMORY_IDENTITY_LIMIT / PAGE_SIZE)
 
 extern uint8_t _kernel_start[];
 extern uint8_t _kernel_end[];
@@ -21,6 +22,7 @@ static uint64_t total_bytes;
 static uint64_t usable_bytes;
 static memory_map_entry_t e820_entries[MEMORY_MAP_MAX];
 static uint32_t e820_count;
+static uint8_t page_refs[MAX_MANAGED_PAGES];
 
 static uint32_t irq_save_disable() {
     uint32_t flags;
@@ -42,6 +44,13 @@ static void bit_set(uint8_t* map, uint32_t page) {
 
 static void bit_clear(uint8_t* map, uint32_t page) {
     map[page / 8] &= (uint8_t)~(1u << (page % 8));
+}
+
+static int valid_managed_page(uint32_t addr) {
+    if (addr & (PAGE_SIZE - 1)) return 0;
+    uint32_t page = addr / PAGE_SIZE;
+    return page < total_pages && page < MAX_MANAGED_PAGES
+        && bit_get(bitmap, page);
 }
 
 static uint64_t entry_end(const memory_map_entry_t* e) {
@@ -148,8 +157,10 @@ static uint32_t alloc_pages_locked(uint32_t n) {
             if (!run) run_start = page;
             ++run;
             if (run == n) {
-                for (uint32_t p = run_start; p < run_start + n; ++p)
+                for (uint32_t p = run_start; p < run_start + n; ++p) {
                     bit_set(bitmap, p);
+                    page_refs[p] = 1;
+                }
                 return run_start * PAGE_SIZE;
             }
         } else {
@@ -175,6 +186,7 @@ static void free_page_locked(uint32_t addr) {
     uint32_t page = addr / PAGE_SIZE;
     if (page >= total_pages || bit_get(reserved_bitmap, page)) return;
     bit_clear(bitmap, page);
+    if (page < MAX_MANAGED_PAGES) page_refs[page] = 0;
 }
 
 void free_page(uint32_t addr) {
@@ -188,6 +200,37 @@ void free_pages(uint32_t addr, uint32_t n) {
     for (uint32_t i = 0; i < n; ++i)
         free_page_locked(addr + i * PAGE_SIZE);
     irq_restore(flags);
+}
+
+void page_get(uint32_t addr) {
+    uint32_t flags = irq_save_disable();
+    if (valid_managed_page(addr)) {
+        uint32_t page = addr / PAGE_SIZE;
+        if (page_refs[page] != 0xFF) page_refs[page]++;
+    }
+    irq_restore(flags);
+}
+
+void page_put(uint32_t addr) {
+    uint32_t flags = irq_save_disable();
+    if (valid_managed_page(addr)) {
+        uint32_t page = addr / PAGE_SIZE;
+        if (page_refs[page] > 1) {
+            page_refs[page]--;
+        } else {
+            page_refs[page] = 0;
+            free_page_locked(addr);
+        }
+    }
+    irq_restore(flags);
+}
+
+uint32_t page_refcount(uint32_t addr) {
+    uint32_t flags = irq_save_disable();
+    uint32_t count = 0;
+    if (valid_managed_page(addr)) count = page_refs[addr / PAGE_SIZE];
+    irq_restore(flags);
+    return count;
 }
 
 void memory_reserve(uint32_t addr, uint32_t bytes) {
@@ -214,6 +257,14 @@ uint32_t get_used_pages() {
 
 uint32_t get_free_pages() {
     return total_pages - get_used_pages();
+}
+
+uint32_t get_shared_pages() {
+    uint32_t shared = 0;
+    for (uint32_t page = 0; page < total_pages && page < MAX_MANAGED_PAGES; ++page) {
+        if (bit_get(bitmap, page) && page_refs[page] > 1) shared++;
+    }
+    return shared;
 }
 
 uint32_t memory_map_count() { return e820_count; }

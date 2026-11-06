@@ -28,10 +28,17 @@ void free_page(uint32_t addr);
 void free_pages(uint32_t addr, uint32_t n);  // 批量释放连续 n 页 (里程碑 11b)
 void memory_reserve(uint32_t addr, uint32_t bytes);  // 保留一段物理地址
 
+// 里程碑 13: 物理页引用计数。fork 后多个地址空间可暂时共享同一页,
+// 只有最后一个引用释放时才真正归还位图。
+void page_get(uint32_t addr);
+void page_put(uint32_t addr);
+uint32_t page_refcount(uint32_t addr);
+
 // 新增：获取内存统计信息
 uint32_t get_total_pages();
 uint32_t get_used_pages();
 uint32_t get_free_pages();
+uint32_t get_shared_pages();
 
 // E820 内存地图. 内核只复制启动阶段给出的条目, 不直接信任任意长度.
 uint32_t memory_map_count();

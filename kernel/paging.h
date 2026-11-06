@@ -7,6 +7,7 @@
 #define PAGE_PRESENT  0x01  // 页在内存中
 #define PAGE_WRITE    0x02  // 可写
 #define PAGE_USER     0x04  // 用户态可访问 (Ring 3)
+#define PAGE_COW      0x200 // 软件位: fork 后共享、首次写时复制
 
 // 页表结构 (1024 个条目，每个 4 字节，共 4KB)
 typedef struct {
@@ -37,5 +38,16 @@ void paging_map_user_region();
 #define WINDOW_BASE 0x7800000
 void window_map(uint32_t phys_base, uint32_t n_pages);
 void window_unmap(void);
+
+// 里程碑 13: 按页操作页表。地址均为物理地址, 当前内核恒等映射
+// 0~32MB, 因此分配器返回的页目录/页表可直接通过指针访问。
+uint32_t paging_create_user_dir(void);
+int paging_map_page(uint32_t pd_phys, uint32_t virt, uint32_t phys,
+                    uint32_t flags);
+int paging_unmap_page(uint32_t pd_phys, uint32_t virt);
+uint32_t paging_translate(uint32_t pd_phys, uint32_t virt);
+uint32_t* paging_user_pte(uint32_t pd_phys, uint32_t virt);
+void paging_invalidate_page(uint32_t virt);
+void paging_flush_all(void);
 
 #endif

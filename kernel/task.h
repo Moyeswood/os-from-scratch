@@ -22,6 +22,8 @@
 //     + ESP(用户) + SS(用户)。iret 看到 CS.RPL=3 会自动再弹
 //     ESP/SS 落回用户栈 — 和内核任务的 44 字节帧共用同一套
 //     popa+iret 恢复代码, switch.asm/irq.asm 无需改动。
+//   - 里程碑 13: PCB 还记录 brk/mmap 边界；cr3 指向按页分配的
+//     地址空间，不再假设用户物理页连续。
 // ============================================================
 
 #define MAX_TASKS 16
@@ -53,8 +55,10 @@ typedef struct {
     int is_user;           // 用户进程标志
     int exit_code;         // 退出码 (ZOMBIE 时有效; 被杀 = -1)
     int parent_pid;        // 父任务 pid (wait 用)
-    uint32_t user_block;   // 用户区连续物理块基址 (页目录+页表+用户页,
-                           // 释放时 free_pages 一把梭)
+    // ---- 里程碑 13: 按需虚拟内存 ----
+    uint32_t brk;          // 用户堆当前断点
+    uint32_t mmap_brk;     // 匿名 mmap 窗口下一个空闲地址
+    uint32_t image_end;    // 已装入镜像的页尾
 } task_t;
 
 // 多任务演示开关 (start/stop 命令 + 演示任务 A/B/C 使用)

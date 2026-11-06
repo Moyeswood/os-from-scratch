@@ -7,10 +7,9 @@
 //  Ring 3 用户态 (里程碑 10) + 多进程 (里程碑 11b)
 //
 //  用户程序链接在 USER_BASE (32MB), 栈顶 USER_BASE+USER_SIZE。
-//  里程碑 11b 起每个用户进程 = 一个调度任务: 独立页目录
-//  (虚拟 32~36MB → 自己的一整块物理内存) + 独立内核栈
-//  (TSS.esp0)。进程管理在 proc.c, 本文件保留: 程序表、
-//  系统调用号、int 0x80 帧布局。
+//  每个用户进程 = 一个调度任务: 独立页目录 + 按需分配的物理页
+//  + 独立内核栈 (TSS.esp0)。进程/Virtual Memory 管理分别在
+//  proc.c/vm.c, 本文件保留: 程序表、系统调用号、int 0x80 帧布局。
 // ============================================================
 
 // 用户程序描述: 名字 → 内嵌镜像 (user_embed.asm incbin, 见 user_progs.c)
@@ -25,7 +24,7 @@ extern const int user_prog_count;
 
 void user_progs_init(void);   // 运行时填程序表 (blob 大小是链接期常量)
 
-// 内核初始化: 保留用户区物理页 + 映射 USER 页表
+// 内核初始化: 初始化内嵌程序表并报告每进程 VM 布局
 void user_init();
 
 // run 命令入口 (shell.c 调): 建进程; 前台 = 等它退出, 后台 = 立刻返回
@@ -50,5 +49,7 @@ typedef struct {
 #define SYS_FORK     5   // 里程碑 11b: 复制地址空间 + 现场, 父得子 pid, 子得 0
 #define SYS_GETPID   6   // 里程碑 11b: 读自己的 pid
 #define SYS_SLEEP    7   // 里程碑 11b: 睡 ebx 个滴答
+#define SYS_BRK      8   // 里程碑 13: 设置堆断点, 返回旧断点
+#define SYS_MMAP     9   // 里程碑 13: 预留匿名映射, 返回用户虚拟地址
 
 #endif
