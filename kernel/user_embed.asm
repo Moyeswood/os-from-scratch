@@ -58,3 +58,13 @@ global user_vmguard_start
 user_vmguard_start: incbin "build/vmguard.bin"
 global user_vmguard_end
 user_vmguard_end:
+
+global user_execdemo_start
+user_execdemo_start: incbin "build/execdemo.bin"
+global user_execdemo_end
+user_execdemo_end:
+
+global user_execbad_start
+user_execbad_start: incbin "build/execbad.bin"
+global user_execbad_end
+user_execbad_end:

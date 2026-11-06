@@ -32,6 +32,7 @@ static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 #define SYS_SLEEP    7   // 里程碑 11b: 睡 N 个滴答 (~55ms 每滴答)
 #define SYS_BRK      8   // 里程碑 13: 设置堆断点, 返回旧断点
 #define SYS_MMAP     9   // 里程碑 13: 预留匿名映射, 返回虚拟地址
+#define SYS_EXEC     10  // 里程碑 14: 用文件系统镜像替换当前进程
 
 // 与 kernel/vm.h 保持一致的用户虚拟布局。
 #define VM_IMAGE_BASE   0x2000000u
@@ -62,6 +63,9 @@ static inline void* brk(void* address) {
 }
 static inline void* mmap(uint32_t length) {
     return (void*)syscall1(SYS_MMAP, length);
+}
+static inline int exec(const char* path) {
+    return (int)syscall1(SYS_EXEC, (uint32_t)path);
 }
 
 // 十六进制打印 (8 位定宽, 和内核 serial_put_hex 同款格式, 测试好匹配)

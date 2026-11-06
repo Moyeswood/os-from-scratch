@@ -51,5 +51,6 @@ typedef struct {
 #define SYS_SLEEP    7   // 里程碑 11b: 睡 ebx 个滴答
 #define SYS_BRK      8   // 里程碑 13: 设置堆断点, 返回旧断点
 #define SYS_MMAP     9   // 里程碑 13: 预留匿名映射, 返回用户虚拟地址
+#define SYS_EXEC     10  // 里程碑 14: 用文件系统镜像替换当前进程
 
 #endif

@@ -670,6 +670,9 @@ static void execute_command() {
             vga_puts("  spinner  - endless dot printer (for 'run spinner &' + kill)\n\r");
             vga_puts("  vmtest   - demand paging + COW + brk/mmap\n\r");
             vga_puts("  vmguard  - write the stack guard page (expected #PF)\n\r");
+            vga_puts("  execdemo - replace this process with /bin/hello\n\r");
+            vga_puts("  execbad  - failed exec preserves the old image\n\r");
+            vga_puts("  /bin/p   - load a flat executable from the filesystem\n\r");
             vga_puts("  &        - run in background (shell stays usable, use ps/kill)\n\r");
         } else {
             // 里程碑 11b: 用户进程是独立任务, 不再跑在 shell 的调用链里。

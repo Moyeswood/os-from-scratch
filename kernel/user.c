@@ -3,6 +3,8 @@
 #include "paging.h"
 #include "memory.h"
 #include "vm.h"
+#include "exec.h"
+#include "fs.h"
 #include "serial.h"
 #include "vga.h"
 #include "timer.h"
@@ -74,6 +76,20 @@ static uint32_t sys_getticks(void) {
     return g_ticks;
 }
 
+static int copy_user_path(char* out, uint32_t cap, const char* user_path) {
+    task_t* me = task_current();
+    if (!out || cap == 0 || !user_path) return -1;
+    for (uint32_t i = 0; i < cap; ++i) {
+        uint32_t addr = (uint32_t)user_path + i;
+        if (!vm_user_range_ok(me, addr, 1)) return -1;
+        char c = user_path[i];
+        out[i] = c;
+        if (c == '\0') return 0;
+    }
+    out[cap - 1] = '\0';
+    return -1;
+}
+
 // ---------- int 0x80 分发 ----------
 void syscall_dispatch(user_frame_t* f) {
     switch (f->eax) {
@@ -107,6 +123,16 @@ void syscall_dispatch(user_frame_t* f) {
     case SYS_MMAP:
         f->eax = vm_mmap(task_current(), f->ebx);
         break;
+    case SYS_EXEC: {
+        char path[FS_PATH_MAX];
+        if (copy_user_path(path, sizeof(path), (const char*)f->ebx) < 0) {
+            serial_puts("[SYS] exec: rejected path pointer\n\r");
+            f->eax = 0xFFFFFFFF;
+            break;
+        }
+        f->eax = (uint32_t)exec_replace_current(f, path);
+        break;
+    }
     default:
         serial_puts("[SYS] unknown syscall #");
         serial_put_hex(f->eax);
@@ -121,6 +147,7 @@ void user_init() {
     // 每个进程的虚拟用户区都有独立页目录；物理页由分配器
     // 从当前 E820 managed 区域按需提供，不再预留固定 4MB 块。
     user_progs_init();
+    exec_install_builtins();
     serial_puts("[USER] user region ");
     serial_put_hex(USER_BASE);
     serial_puts("..");
@@ -148,25 +175,18 @@ void user_run(const char* name, int background) {
     for (int i = 0; i < user_prog_count; i++) {
         if (k_strcmp(user_progs[i].name, name) == 0) { p = &user_progs[i]; break; }
     }
-    if (!p) {
-        serial_puts("[USER] unknown program: ");
-        serial_puts(name);
-        serial_puts("\n\r");
-        vga_puts("\n\rUnknown program: ");
-        vga_puts(name);
-        vga_puts("  (try: run hello | count | crash | div0 | echo | badptr | forkdemo | spinner | vmtest | vmguard)\n\r");
-        return;
-    }
-    if (p->size > VM_IMAGE_LIMIT - VM_IMAGE_BASE) {
+    if (p && p->size > VM_IMAGE_LIMIT - VM_IMAGE_BASE) {
         serial_puts("[USER] program too big\n\r");
         vga_puts("\n\rrun: program image too large\n\r");
         return;
     }
 
-    int pid = proc_spawn(name);
+    int pid = p ? proc_spawn(name) : proc_spawn_file(name);
     if (pid < 0) {
-        serial_puts("[USER] spawn failed\n\r");
-        vga_puts("\n\rrun: spawn failed (no task slots or out of memory)\n\r");
+        serial_puts("[USER] unknown program: ");
+        serial_puts(name);
+        serial_puts("\n\r");
+        vga_puts("\n\rrun: unknown executable or spawn failed (try run /bin/hello)\n\r");
         return;
     }
 

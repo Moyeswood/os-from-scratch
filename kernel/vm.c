@@ -14,6 +14,16 @@ static uint32_t align_up(uint32_t value) {
     return (value + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
 }
 
+static uint32_t irq_save_disable(void) {
+    uint32_t flags;
+    __asm__ volatile("pushf; pop %0; cli" : "=r"(flags) :: "memory");
+    return flags;
+}
+
+static void irq_restore(uint32_t flags) {
+    if (flags & 0x200) __asm__ volatile("sti" ::: "memory");
+}
+
 static int in_range(uint32_t value, uint32_t begin, uint32_t end) {
     return value >= begin && value < end;
 }
@@ -78,7 +88,7 @@ static void destroy_dir(uint32_t pd) {
     if (!pd) return;
     uint32_t* dir = (uint32_t*)pd;
 
-    __asm__ volatile("cli");
+    uint32_t flags = irq_save_disable();
     for (uint32_t pdi = 8; pdi < 30; ++pdi) {
         if (!(dir[pdi] & PAGE_PRESENT)) continue;
         uint32_t pt_phys = dir[pdi] & 0xFFFFF000u;
@@ -91,7 +101,7 @@ static void destroy_dir(uint32_t pd) {
         dir[pdi] = 0;
     }
     free_page(pd);
-    __asm__ volatile("sti");
+    irq_restore(flags);
 }
 
 void vm_destroy(task_t* t) {
@@ -116,13 +126,13 @@ int vm_clone(task_t* parent, task_t* child) {
     uint32_t* parent_dir = (uint32_t*)parent->cr3;
     uint32_t* child_dir = (uint32_t*)child_pd;
 
-    __asm__ volatile("cli");
+    uint32_t irq_flags = irq_save_disable();
     for (uint32_t pdi = 8; pdi < 30; ++pdi) {
         if (!(parent_dir[pdi] & PAGE_PRESENT)) continue;
 
         uint32_t child_pt_phys = alloc_page();
         if (!child_pt_phys) {
-            __asm__ volatile("sti");
+            irq_restore(irq_flags);
             vm_destroy(child);
             return -1;
         }
@@ -151,7 +161,7 @@ int vm_clone(task_t* parent, task_t* child) {
         }
     }
     paging_flush_all();
-    __asm__ volatile("sti");
+    irq_restore(irq_flags);
 
     serial_puts("[VM] fork pid=");
     put_hex(parent->pid);
@@ -257,7 +267,7 @@ uint32_t vm_brk(task_t* t, uint32_t new_break) {
         return 0xFFFFFFFFu;
 
     uint32_t old_break = t->brk;
-    __asm__ volatile("cli");
+    uint32_t flags = irq_save_disable();
     if (new_break < old_break) {
         for (uint32_t addr = align_up(new_break);
              addr < align_up(old_break); addr += PAGE_SIZE) {
@@ -270,7 +280,7 @@ uint32_t vm_brk(task_t* t, uint32_t new_break) {
         }
     }
     t->brk = new_break;
-    __asm__ volatile("sti");
+    irq_restore(flags);
     return old_break;
 }
 

@@ -24,6 +24,8 @@
 #include "paging.h"
 #include "memory.h"
 #include "vm.h"
+#include "exec.h"
+#include "heap.h"
 #include "serial.h"
 #include "string.h"
 
@@ -71,10 +73,15 @@ static void build_user_frame(task_t* t) {
 }
 
 // ---------- 建进程 ----------
-static int build_process(const char* name, const user_prog_t* p) {
+static int build_process(const char* name, const uint8_t* image,
+                         uint32_t image_size) {
     sweep_zombies();   // 顺手回收孤儿僵尸的槽位和内存
 
-    if (p->size > VM_IMAGE_LIMIT - VM_IMAGE_BASE) {
+    if (!image || image_size == 0) {
+        serial_puts("[PROC] spawn fail: empty program image\n\r");
+        return -1;
+    }
+    if (image_size > VM_IMAGE_LIMIT - VM_IMAGE_BASE) {
         serial_puts("[PROC] spawn fail: program image > 256KB\n\r");
         return -1;
     }
@@ -97,7 +104,7 @@ static int build_process(const char* name, const user_prog_t* p) {
     t->exit_code = 0;
     t->parent_pid = task_current()->pid;
 
-    if (vm_init_image(t, p->data, p->size) < 0) {
+    if (vm_init_image(t, image, image_size) < 0) {
         task_free_slot(idx);
         serial_puts("[PROC] spawn fail: virtual address space\n\r");
         return -1;
@@ -119,7 +126,19 @@ static int build_process(const char* name, const user_prog_t* p) {
 int proc_spawn(const char* name) {
     const user_prog_t* p = prog_lookup(name);
     if (!p) return -1;
-    return build_process(name, p);
+    return build_process(name, p->data, p->size);
+}
+
+int proc_spawn_file(const char* path) {
+    uint8_t* image = 0;
+    uint32_t size = 0;
+    if (exec_load_file(path, &image, &size) < 0) return -1;
+
+    char name[16];
+    exec_basename(name, sizeof(name), path);
+    int pid = build_process(name, image, size);
+    kfree(image);
+    return pid;
 }
 
 // 前台等待: 睡到孩子 ZOMBIE → 收尸 (销毁地址空间 + 空槽) → 返回退出码
