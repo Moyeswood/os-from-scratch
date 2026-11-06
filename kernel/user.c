@@ -162,7 +162,7 @@ void user_run(const char* name, int background) {
         serial_puts("\n\r");
         vga_puts("\n\rUnknown program: ");
         vga_puts(name);
-        vga_puts("  (try: run hello | count | crash | div0 | echo | badptr | forkdemo | spinner | memdemo)\n\r");
+        vga_puts("  (try: run hello | count | crash | div0 | echo | badptr | forkdemo | spinner | memdemo | allocdemo)\n\r");
         return;
     }
     if (p->size > PROC_IMAGE_BYTES) {

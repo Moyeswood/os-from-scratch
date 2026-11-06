@@ -51,24 +51,173 @@ static inline int waitpid(int pid, int* status) {
     return (int)syscall3(SYS_WAITPID, (uint32_t)pid, (uint32_t)status, 0);
 }
 
-// 教学版用户堆分配器: 8 字节对齐的 bump allocator。free 是空操作 —
-// 本项目的短生命周期程序足够用; 真正回收留给后续 allocator 里程碑。
-static uint32_t user_heap_cur = 0;
+// 教学版用户堆分配器 (里程碑 13):
+//   - 16 字节块头, 对齐后返回 8 字节对齐的 payload;
+//   - 空闲块按地址排序的单链表, malloc 首适配;
+//   - free 与相邻空闲块合并, 堆尾空闲块直接 sbrk 收缩;
+//   - 分配态/空闲态用 magic 区分, 重复 free 是无操作。
+typedef struct user_heap_block {
+    uint32_t size;                  // 含块头的总字节数 (8 字节对齐)
+    struct user_heap_block* next;   // 仅空闲块使用
+    uint32_t magic;
+    uint32_t reserved;              // 块头保持 16 字节, payload 仍对齐
+} user_heap_block_t;
 
-static void* malloc(uint32_t n) {
-    if (n == 0) return 0;
-    if (!user_heap_cur) user_heap_cur = (uint32_t)sbrk(0);
-    if (user_heap_cur == 0xFFFFFFFFu) return 0;
-    uint32_t start = (user_heap_cur + 7u) & ~7u;
-    if (n > 0xFFFFFFFFu - start) return 0;
-    uint32_t next = start + n;
-    next = (next + 7u) & ~7u;
-    if (next < start || sbrk((int)(next - user_heap_cur)) == (void*)-1) return 0;
-    user_heap_cur = next;
-    return (void*)start;
+#define USER_HEAP_ALLOC_MAGIC 0xA110CA7Eu
+#define USER_HEAP_FREE_MAGIC  0xF4EEB10Cu
+
+static uint32_t user_heap_cur = 0;
+static uint32_t user_heap_base = 0;
+static user_heap_block_t* user_heap_free_list = 0;
+
+static uint32_t user_heap_align8(uint32_t n) {
+    return (n + 7u) & ~7u;
 }
 
-static void free(void* p) { (void)p; }
+static int user_heap_init(void) {
+    if (user_heap_cur) return 1;
+    uint32_t brk = (uint32_t)sbrk(0);
+    if (brk == 0xFFFFFFFFu) return 0;
+    user_heap_base = brk;
+    user_heap_cur = brk;
+    return 1;
+}
+
+static void user_heap_shrink_tail(void) {
+    for (;;) {
+        user_heap_block_t* prev = 0;
+        user_heap_block_t* tail = user_heap_free_list;
+        if (!tail) break;
+        while (tail->next) {
+            prev = tail;
+            tail = tail->next;
+        }
+        if (!tail->size ||
+            (uint32_t)tail + tail->size != user_heap_cur ||
+            tail->size > 0x7FFFFFFFu) {
+            break;
+        }
+        if (prev) prev->next = 0;
+        else user_heap_free_list = 0;
+
+        if (sbrk(-(int)tail->size) == (void*)-1) {
+            tail->next = 0;
+            if (prev) prev->next = tail;
+            else user_heap_free_list = tail;
+            break;
+        }
+        user_heap_cur -= tail->size;
+    }
+}
+
+static void* malloc(uint32_t n) {
+    if (n == 0 || !user_heap_init()) return 0;
+    if (n > 0xFFFFFFFFu - sizeof(user_heap_block_t)) return 0;
+
+    uint32_t need = user_heap_align8(n + sizeof(user_heap_block_t));
+    if (need < n + sizeof(user_heap_block_t)) return 0;
+
+    user_heap_block_t** link = &user_heap_free_list;
+    while (*link) {
+        user_heap_block_t* block = *link;
+        if (block->size >= need) {
+            uint32_t rest = block->size - need;
+            if (rest >= sizeof(user_heap_block_t) + 8u) {
+                user_heap_block_t* split =
+                    (user_heap_block_t*)((uint32_t)block + need);
+                split->size = rest;
+                split->next = block->next;
+                split->magic = USER_HEAP_FREE_MAGIC;
+                split->reserved = 0;
+                *link = split;
+                block->size = need;
+            } else {
+                *link = block->next;
+            }
+            block->next = 0;
+            block->magic = USER_HEAP_ALLOC_MAGIC;
+            block->reserved = 0;
+            return (void*)(block + 1);
+        }
+        link = &block->next;
+    }
+
+    user_heap_block_t* block = (user_heap_block_t*)sbrk((int)need);
+    if (block == (void*)-1) return 0;
+    block->size = need;
+    block->next = 0;
+    block->magic = USER_HEAP_ALLOC_MAGIC;
+    block->reserved = 0;
+    user_heap_cur = (uint32_t)block + need;
+    return (void*)(block + 1);
+}
+
+static void free(void* p) {
+    if (!p || !user_heap_init()) return;
+    uint32_t payload = (uint32_t)p;
+    if (payload < user_heap_base + sizeof(user_heap_block_t) ||
+        payload >= user_heap_cur || (payload & 7u)) {
+        return;
+    }
+
+    user_heap_block_t* block =
+        (user_heap_block_t*)(payload - sizeof(user_heap_block_t));
+    if (block->magic != USER_HEAP_ALLOC_MAGIC || block->size < sizeof(*block)) {
+        return;
+    }
+    block->magic = USER_HEAP_FREE_MAGIC;
+
+    user_heap_block_t* prev = 0;
+    user_heap_block_t* next = user_heap_free_list;
+    while (next && (uint32_t)next < (uint32_t)block) {
+        prev = next;
+        next = next->next;
+    }
+    block->next = next;
+    if (prev) prev->next = block;
+    else user_heap_free_list = block;
+
+    if (next && (uint32_t)block + block->size == (uint32_t)next) {
+        block->size += next->size;
+        block->next = next->next;
+    }
+    if (prev && (uint32_t)prev + prev->size == (uint32_t)block) {
+        prev->size += block->size;
+        prev->next = block->next;
+        block = prev;
+    }
+
+    user_heap_shrink_tail();
+}
+
+static void* calloc(uint32_t count, uint32_t size) {
+    if (size && count > 0xFFFFFFFFu / size) return 0;
+    uint32_t total = count * size;
+    uint8_t* p = (uint8_t*)malloc(total);
+    if (!p) return 0;
+    for (uint32_t i = 0; i < total; i++) p[i] = 0;
+    return p;
+}
+
+static void* realloc(void* p, uint32_t n) {
+    if (!p) return malloc(n);
+    if (n == 0) {
+        free(p);
+        return 0;
+    }
+
+    user_heap_block_t* old =
+        (user_heap_block_t*)((uint32_t)p - sizeof(user_heap_block_t));
+    if (old->magic != USER_HEAP_ALLOC_MAGIC || old->size < sizeof(*old)) return 0;
+    uint32_t old_capacity = old->size - sizeof(*old);
+    if (n <= old_capacity) return p;
+
+    uint8_t* fresh = (uint8_t*)malloc(n);
+    if (!fresh) return 0;
+    for (uint32_t i = 0; i < old_capacity; i++) fresh[i] = ((uint8_t*)p)[i];
+    free(p);
+    return fresh;
+}
 
 // 十六进制打印 (8 位定宽, 和内核 serial_put_hex 同款格式, 测试好匹配)
 static void puthex(uint32_t n) {

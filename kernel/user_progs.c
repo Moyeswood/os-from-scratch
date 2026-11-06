@@ -14,8 +14,9 @@ extern const char user_badptr_start[], user_badptr_end[];
 extern const char user_forkdemo_start[], user_forkdemo_end[];
 extern const char user_spinner_start[], user_spinner_end[];
 extern const char user_memdemo_start[], user_memdemo_end[];
+extern const char user_allocdemo_start[], user_allocdemo_end[];
 
-static user_prog_t progs[9];
+static user_prog_t progs[10];
 const user_prog_t* user_progs = progs;
 const int user_prog_count = sizeof(progs) / sizeof(progs[0]);
 
@@ -55,4 +56,8 @@ void user_progs_init(void) {
     progs[8].name = "memdemo";
     progs[8].data = (const uint8_t*)user_memdemo_start;
     progs[8].size = (uint32_t)(user_memdemo_end - user_memdemo_start);
+
+    progs[9].name = "allocdemo";
+    progs[9].data = (const uint8_t*)user_allocdemo_start;
+    progs[9].size = (uint32_t)(user_allocdemo_end - user_allocdemo_start);
 }

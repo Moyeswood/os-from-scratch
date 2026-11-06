@@ -157,7 +157,7 @@ static void cmd_help() {
     vga_puts("  edit f   - Edit file (^S save, ^X exit)\n\r");
     vga_puts("  cc f.c   - Compile and run C program (c4 subset)\n\r");
     vga_puts("  splash   - Replay the boot screen animation\n\r");
-    vga_puts("  run p    - Run user program in Ring 3 (hello/count/crash/div0/echo/badptr/forkdemo/spinner/memdemo)\n\r");
+    vga_puts("  run p    - Run user program in Ring 3 (hello/count/crash/div0/echo/badptr/forkdemo/spinner/memdemo/allocdemo)\n\r");
     vga_puts("  run p &  - Run in background (shell stays usable)\n\r");
     vga_puts("  kill n   - Kill a user process by pid (see ps)\n\r");
 }
@@ -544,6 +544,7 @@ static void execute_command() {
             vga_puts("  forkdemo - fork + own address space demo\n\r");
             vga_puts("  spinner  - endless dot printer (for 'run spinner &' + kill)\n\r");
             vga_puts("  memdemo  - sbrk/malloc + fork heap isolation + waitpid\n\r");
+            vga_puts("  allocdemo- free-list malloc/free + coalescing + tail shrink\n\r");
             vga_puts("  &        - run in background (shell stays usable, use ps/kill)\n\r");
         } else {
             // 里程碑 11b: 用户进程是独立任务, 不再跑在 shell 的调用链里。

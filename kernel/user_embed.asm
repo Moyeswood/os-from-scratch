@@ -53,3 +53,8 @@ global user_memdemo_start
 user_memdemo_start: incbin "build/memdemo.bin"
 global user_memdemo_end
 user_memdemo_end:
+
+global user_allocdemo_start
+user_allocdemo_start: incbin "build/allocdemo.bin"
+global user_allocdemo_end
+user_allocdemo_end:

@@ -50,8 +50,8 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
               $(KERNEL_DIR)/user_embed.o
 
 # 用户程序 (宿主 gcc 编译 → 链接到 0x2000000 → flat bin → incbin)
-# 里程碑 12: + memdemo (用户堆 + fork 堆隔离 + waitpid)
-USER_PROGS = hello count crash div0 echo badptr forkdemo spinner memdemo
+# 里程碑 13: + allocdemo (空闲链表 + 合并 + 堆尾收缩)
+USER_PROGS = hello count crash div0 echo badptr forkdemo spinner memdemo allocdemo
 USER_BINS  = $(patsubst %,$(BUILD_DIR)/%.bin,$(USER_PROGS))
 
 all: $(OS_IMG)
@@ -94,7 +94,7 @@ $(KERNEL_DIR)/user_embed.o: $(KERNEL_DIR)/user_embed.asm $(USER_BINS)
 # 用户程序: 独立编译成 flat binary, 入口 0x2000000 (见 user/linker.ld)
 $(BUILD_DIR)/%.bin: user/%.c user/lib.h user/linker.ld
 	mkdir -p $(BUILD_DIR)
-	$(CC) -m32 -O2 -ffreestanding -fno-pie -fno-stack-protector -nostdlib -c $< -o $(BUILD_DIR)/$*.o
+	$(CC) -m32 -O2 -mno-mmx -mno-sse -mno-sse2 -ffreestanding -fno-pie -fno-stack-protector -nostdlib -c $< -o $(BUILD_DIR)/$*.o
 	$(LD) -m elf_i386 -T user/linker.ld $(BUILD_DIR)/$*.o -o $(BUILD_DIR)/$*.elf
 	$(OBJCOPY) -O binary $(BUILD_DIR)/$*.elf $@
 
