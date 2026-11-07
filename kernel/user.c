@@ -13,6 +13,7 @@
 #include "string.h"
 #include "shell.h"
 #include "task.h"
+#include "fd.h"
 
 // ============================================================
 //  Ring 3 用户态 (里程碑 10) + 多进程 (里程碑 11b)
@@ -109,15 +110,14 @@ static int copy_user_string(char* out, uint32_t cap, const char* source) {
     return -1;
 }
 
-static task_fd_t* sys_fd(task_t* t, int fd) {
+static task_file_t* sys_fd(task_t* t, int fd) {
     if (!t || fd < 0 || fd >= TASK_FD_MAX) return 0;
-    if (t->fds[fd].kind == TASK_FD_NONE) return 0;
-    return &t->fds[fd];
+    return t->fds[fd];
 }
 
 static int sys_fd_alloc(task_t* t) {
-    for (int fd = 3; fd < TASK_FD_MAX; fd++)
-        if (t->fds[fd].kind == TASK_FD_NONE) return fd;
+    for (int fd = 0; fd < TASK_FD_MAX; fd++)
+        if (!t->fds[fd]) return fd;
     return -1;
 }
 
@@ -139,13 +139,11 @@ static int sys_open(task_t* me, const char* user_path, uint32_t flags) {
 
     int fd = sys_fd_alloc(me);
     if (fd < 0) return -1;
-    task_fd_t* slot = &me->fds[fd];
-    slot->kind = TASK_FD_FILE;
-    slot->inum = (uint32_t)inum;
-    slot->off = 0;
-    slot->readable = (uint8_t)readable;
-    slot->writable = (uint8_t)writable;
-    slot->append = (flags & O_APPEND) != 0;
+    task_file_t* file = fd_file_new((uint32_t)inum, (uint8_t)readable,
+                                    (uint8_t)writable,
+                                    (flags & O_APPEND) != 0);
+    if (!file) return -1;
+    me->fds[fd] = file;
     serial_puts("[FD] open ");
     serial_puts(path);
     serial_puts(" fd=");
@@ -155,11 +153,12 @@ static int sys_open(task_t* me, const char* user_path, uint32_t flags) {
 }
 
 static int sys_read(task_t* me, int fd, void* user_buf, uint32_t count) {
-    task_fd_t* f = sys_fd(me, fd);
-    if (!f || !f->readable || !user_buf || !count ||
+    task_file_t* f = sys_fd(me, fd);
+    if (!f || !user_buf ||
         !vm_user_range_ok(me, (uint32_t)user_buf, count)) return -1;
+    if (!count) return 0;
 
-    if (f->kind == TASK_FD_STDIN) {
+    if (f == fd_stdin()) {
         uint8_t tmp[64];
         uint32_t n = count < sizeof(tmp) ? count : sizeof(tmp);
         uint32_t got = 0;
@@ -173,22 +172,11 @@ static int sys_read(task_t* me, int fd, void* user_buf, uint32_t count) {
             return -1;
         return (int)got;
     }
-    if (f->kind != TASK_FD_FILE) return -1;
-
-    uint8_t tmp[128];
-    uint32_t left = count;
-    uint32_t total = 0;
-    while (left) {
-        uint32_t chunk = left < sizeof(tmp) ? left : sizeof(tmp);
-        int got = fs_read(f->inum, tmp, f->off, chunk);
-        if (got < 0) return -1;
-        if (!got) break;
-        if (vm_write_user(me, (uint32_t)user_buf + total, tmp,
-                          (uint32_t)got) < 0) return -1;
-        f->off += (uint32_t)got;
-        total += (uint32_t)got;
-        left -= (uint32_t)got;
-    }
+    if (f == fd_stdout()) return -1;
+    int total = fd_is_pipe(f) ?
+        fd_pipe_read(f, user_buf, count) :
+        fd_file_read(f, user_buf, count);
+    if (total < 0) return -1;
     serial_puts("[FD] read fd=");
     serial_put_hex((uint32_t)fd);
     serial_puts(" bytes=");
@@ -198,11 +186,12 @@ static int sys_read(task_t* me, int fd, void* user_buf, uint32_t count) {
 }
 
 static int sys_write(task_t* me, int fd, const void* user_buf, uint32_t count) {
-    task_fd_t* f = sys_fd(me, fd);
-    if (!f || !f->writable || !user_buf ||
+    task_file_t* f = sys_fd(me, fd);
+    if (!f || !user_buf ||
         !vm_user_range_ok(me, (uint32_t)user_buf, count)) return -1;
+    if (!count) return 0;
 
-    if (f->kind == TASK_FD_STDOUT) {
+    if (f == fd_stdout()) {
         const char* p = (const char*)user_buf;
         for (uint32_t i = 0; i < count; i++) {
             vga_putc(p[i]);
@@ -210,11 +199,11 @@ static int sys_write(task_t* me, int fd, const void* user_buf, uint32_t count) {
         }
         return (int)count;
     }
-    if (f->kind != TASK_FD_FILE) return -1;
-    uint32_t off = f->append ? (uint32_t)fs_inode_size((int)f->inum) : f->off;
-    int wrote = fs_write_at(f->inum, user_buf, off, count);
+    if (f == fd_stdin()) return -1;
+    int wrote = fd_is_pipe(f) ?
+        fd_pipe_write(f, user_buf, count) :
+        fd_file_write(f, user_buf, count);
     if (wrote < 0) return -1;
-    f->off = off + (uint32_t)wrote;
     serial_puts("[FD] write fd=");
     serial_put_hex((uint32_t)fd);
     serial_puts(" bytes=");
@@ -224,24 +213,97 @@ static int sys_write(task_t* me, int fd, const void* user_buf, uint32_t count) {
 }
 
 static int sys_lseek(task_t* me, int fd, int offset, int whence) {
-    task_fd_t* f = sys_fd(me, fd);
-    if (!f || f->kind != TASK_FD_FILE) return -1;
-    int base;
-    if (whence == SEEK_SET) base = 0;
-    else if (whence == SEEK_CUR) base = (int)f->off;
-    else if (whence == SEEK_END) base = fs_inode_size((int)f->inum);
-    else return -1;
-    int target = base + offset;
-    if (target < 0) return -1;
-    f->off = (uint32_t)target;
-    return target;
+    return fd_file_seek(sys_fd(me, fd), offset, whence);
 }
 
 static int sys_close(task_t* me, int fd) {
-    task_fd_t* f = sys_fd(me, fd);
+    task_file_t* f = sys_fd(me, fd);
     if (!f) return -1;
-    k_memset(f, 0, sizeof(*f));
+    me->fds[fd] = 0;
+    fd_release(f);
     return 0;
+}
+
+static int sys_pipe(task_t* me, int* user_fds) {
+    if (!user_fds || !vm_user_range_ok(me, (uint32_t)user_fds,
+                                       sizeof(int) * 2))
+        return -1;
+
+    int fd_in = sys_fd_alloc(me);
+    if (fd_in < 0) return -1;
+    me->fds[fd_in] = (task_file_t*)1;   // 占位，确保两个端点拿到不同槽位
+    int fd_out = sys_fd_alloc(me);
+    me->fds[fd_in] = 0;
+    if (fd_out < 0) return -1;
+
+    task_file_t* reader = 0;
+    task_file_t* writer = 0;
+    if (fd_pipe_pair(&reader, &writer) < 0) return -1;
+    me->fds[fd_in] = reader;
+    me->fds[fd_out] = writer;
+    int pair[2] = { fd_in, fd_out };
+    if (vm_write_user(me, (uint32_t)user_fds, pair, sizeof(pair)) < 0) {
+        sys_close(me, fd_in);
+        sys_close(me, fd_out);
+        return -1;
+    }
+    serial_puts("[FD] pipe read=");
+    serial_put_hex((uint32_t)fd_in);
+    serial_puts(" write=");
+    serial_put_hex((uint32_t)fd_out);
+    serial_puts("\n\r");
+    return 0;
+}
+
+static int sys_dup(task_t* me, int fd) {
+    task_file_t* file = sys_fd(me, fd);
+    int fresh = sys_fd_alloc(me);
+    if (!file || fresh < 0) return -1;
+    fd_retain(file);
+    me->fds[fresh] = file;
+    return fresh;
+}
+
+static int sys_dup2(task_t* me, int oldfd, int newfd) {
+    task_file_t* file = sys_fd(me, oldfd);
+    if (!file || newfd < 0 || newfd >= TASK_FD_MAX) return -1;
+    if (oldfd == newfd) return newfd;
+    fd_retain(file);
+    task_file_t* old = me->fds[newfd];
+    me->fds[newfd] = file;
+    fd_release(old);
+    return newfd;
+}
+
+static int sys_remove(task_t* me, const char* user_path) {
+    char path[FS_PATH_MAX];
+    if (copy_user_path(path, sizeof(path), user_path) < 0) return -1;
+    return fs_remove(path);
+}
+
+static int sys_readdir(task_t* me, const char* user_path, uint32_t index,
+                       user_dirent_t* user_entry) {
+    char path[FS_PATH_MAX];
+    char name[32];
+    user_dirent_t entry;
+    uint32_t inum, type, size;
+    if (!user_entry ||
+        !vm_user_range_ok(me, (uint32_t)user_entry, sizeof(entry)) ||
+        copy_user_path(path, sizeof(path), user_path) < 0)
+        return -1;
+    int dir = fs_lookup(path);
+    if (dir < 0) return -1;
+    int got = fs_readdir((uint32_t)dir, index, name, &inum, &type, &size);
+    if (got <= 0) return got;
+    k_memset(&entry, 0, sizeof(entry));
+    entry.inum = inum;
+    entry.type = type;
+    entry.size = size;
+    for (int i = 0; i < (int)sizeof(entry.name) - 1 && name[i]; ++i)
+        entry.name[i] = name[i];
+    if (vm_write_user(me, (uint32_t)user_entry, &entry, sizeof(entry)) < 0)
+        return -1;
+    return 1;
 }
 
 static int sys_chdir(task_t* me, const char* user_path) {
@@ -371,7 +433,7 @@ void syscall_dispatch(user_frame_t* f) {
             f->eax = 0xFFFFFFFFu;
             break;
         }
-        f->eax = (uint32_t)proc_waitpid((int)f->ebx, status);
+        f->eax = (uint32_t)proc_waitpid((int)f->ebx, status, (int)f->edx);
         break;
     }
     case SYS_OPEN:
@@ -401,6 +463,23 @@ void syscall_dispatch(user_frame_t* f) {
         break;
     case SYS_MKDIR:
         f->eax = (uint32_t)sys_mkdir(task_current(), (const char*)f->ebx);
+        break;
+    case SYS_PIPE:
+        f->eax = (uint32_t)sys_pipe(task_current(), (int*)f->ebx);
+        break;
+    case SYS_DUP:
+        f->eax = (uint32_t)sys_dup(task_current(), (int)f->ebx);
+        break;
+    case SYS_DUP2:
+        f->eax = (uint32_t)sys_dup2(task_current(), (int)f->ebx, (int)f->ecx);
+        break;
+    case SYS_REMOVE:
+        f->eax = (uint32_t)sys_remove(task_current(), (const char*)f->ebx);
+        break;
+    case SYS_READDIR:
+        f->eax = (uint32_t)sys_readdir(task_current(),
+                                       (const char*)f->ebx, f->ecx,
+                                       (user_dirent_t*)f->edx);
         break;
     default:
         serial_puts("[SYS] unknown syscall #");

@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-19%2F19%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-468%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-20%2F20%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-505%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -20,7 +20,7 @@
   <img src="note/splash-mid.png" width="480" alt="boot screen"/>
 </p>
 
-NewOS is an educational 32-bit x86 operating system written from scratch in C and a bit of assembly, running in QEMU. It covers the full OS learning path: **booting → protected mode → interrupts → memory management → multitasking → graphics → filesystem → editor → C compiler → Ring 3 user mode** — so that in the end you can write and compile C programs, load flat or ELF32 executables from `/bin`, manage processes with `fork/waitpid/execve`, and use demand paging, COW, guard pages, and a reclaiming user-space free-list allocator.
+NewOS is an educational 32-bit x86 operating system written from scratch in C and a bit of assembly, running in QEMU. It covers the full OS learning path: **booting → protected mode → interrupts → memory management → multitasking → graphics → filesystem → editor → C compiler → Ring 3 user mode → user-mode shell** — so that in the end you can write and compile C programs, load flat or ELF32 executables from `/bin`, manage processes with `fork/waitpid/execve`, and use pipes, redirection, and background jobs.
 
 ## ✨ Features
 
@@ -35,9 +35,10 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 
 ### 🛡️ Ring 3 User Mode
 - **Privilege isolation**: TSS kernel-stack switch, user code/data segments (DPL3), page-table U/S protection — a user program touching kernel memory gets a #PF
-- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir; user pointers are validated page by page
+- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir; user pointers are validated page by page
+- **Standalone user shell**: launch with `run sh`; supports `/bin` lookup, `fork/execve/waitpid`, `<`/`>`/`>>`, a single `|` pipeline, background `&`, and `WNOHANG` reaping
 - **Exception handling**: 32 exception handlers print the full fault context (EIP/CS/EFLAGS/ESP/CR2 + page-fault error code P/W/U decoding); a user-mode fault kills the process and returns to the shell, a kernel-mode fault panics
-- **18 flat demos + 1 ELF32 demo**: programs cover waitpid, execve, ELF32, fork heap isolation, the free-list allocator, file descriptors, and per-process working directories
+- **20 flat programs + 1 ELF32 demo**: coverage includes the user shell, shared opens, pipes, waitpid, execve, ELF32, fork heap isolation, the free-list allocator, and per-process working directories
 
 ### ⏱️ Multitasking & Devices
 - **Preemptive multitasking**: PIT IRQ0 (18.2 Hz) round-robin scheduling; cooperative and preemptive context frames are mutually restorable; includes a "bully task" demo
@@ -109,6 +110,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `edit file` | Open the editor (^S save, ^X asks to save on exit) |
 | `cc file.c [args...]` | Compile and run a C program (args go to main) |
 | `run prog [args] [&]` | Run an embedded or `/bin` executable (`args` enter the initial stack; `&` = detached background) |
+| `run sh` | Enter the user-mode shell (`exit` returns to the kernel shell) |
 | `splash` | Replay the boot screen |
 
 ## 🚀 Quick Start
@@ -168,7 +170,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 Automated Tests
 
-17 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **468 documented checks**:
+18 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **505 documented checks**:
 
 ```bash
 python3 tools/test-memory.py  # E820 + page allocator + kernel heap (15 checks)
@@ -187,7 +189,8 @@ python3 tools/test-alloc.py    # free list/coalescing/realloc (24 checks)
 python3 tools/test-vm.py       # demand paging/COW/guard (22 checks)
 python3 tools/test-exec.py     # file loader/exec/rollback (26 checks)
 python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 checks)
-python3 tools/test-fd.py       # fd/read/write/lseek/stdin/CWD (34 checks)
+python3 tools/test-fd.py       # fd/CWD/shared offsets/pipes/dup2 (42 checks)
+python3 tools/test-shell.py    # user shell/tools/pipes/redirection (29 checks)
 ```
 
 > test-preempt / test-mario are attached tests (argv[1] = monitor socket);
@@ -218,6 +221,7 @@ python3 tools/test-fd.py       # fd/read/write/lseek/stdin/CWD (34 checks)
 │   ├── font.c/h        # VGA character-generator font management
 │   ├── font12/14/16.h  # Terminus font data
 │   ├── fs.c/h          # in-memory filesystem
+│   ├── fd.c/h          # shared opens, pipe ring buffers, reference counts
 │   ├── editor.c/h      # built-in editor
 │   ├── cc.c/h          # c4 compiler port
 │   ├── splash.c/h .asm # boot screen
@@ -232,9 +236,9 @@ python3 tools/test-fd.py       # fd/read/write/lseek/stdin/CWD (34 checks)
 │   └── hello.c count.c crash.c div0.c echo.c badptr.c forkdemo.c
 │       spinner.c vmtest.c vmguard.c execdemo.c execbad.c
 │       waittest.c execargv.c elfdemo.c memdemo.c allocdemo.c
-│       filedemo.c fdstdin.c
+│       filedemo.c fdstdin.c sh.c fdpipe.c
 ├── tetris/             # original real-mode assembly version (port reference)
-├── tools/              # font converter + 17 test suites
+├── tools/              # font converter + 18 test suites
 ├── note/               # development notes + screenshots
 └── Makefile
 ```
@@ -262,6 +266,7 @@ python3 tools/test-fd.py       # fd/read/write/lseek/stdin/CWD (34 checks)
 | 17 | Editor enhancements (caret ghost fix + undo/redo + find/goto + word navigation) |
 | 18 | Mario enhancements (two stages, ability blocks, checkpoint, stomp combos, particles/shake, polished HUD) |
 | 19 | Per-process fd table (open/read/write/close/lseek) + per-process CWD + fd 0/1/2 |
+| 20 | User shell + echo/cat/ls/pwd/mkdir/rm + shared open objects + pipe/dup2 + `<`/`>`/`>>`/`\|`/`&` |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 

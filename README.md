@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-19%2F19%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-468%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-20%2F20%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-505%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -20,7 +20,7 @@
   <img src="note/splash-mid.png" width="480" alt="开机画面"/>
 </p>
 
-NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编从零编写，在 QEMU 中运行。它走完了操作系统学习的完整链路：**引导 → 保护模式 → 中断 → 内存管理 → 多任务 → 图形 → 文件系统 → 编辑器 → C 编译器 → Ring 3 用户态**——最终你可以在它里面写、编译、运行 C 程序，从 `/bin` 加载 flat 或 ELF32 程序，通过 `fork/waitpid/execve` 管理进程，并体验按需分页、写时复制、guard page 和可回收的用户态空闲链表 allocator。
+NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编从零编写，在 QEMU 中运行。它走完了操作系统学习的完整链路：**引导 → 保护模式 → 中断 → 内存管理 → 多任务 → 图形 → 文件系统 → 编辑器 → C 编译器 → Ring 3 用户态 → 用户态 Shell**——最终你可以在它里面写、编译、运行 C 程序，从 `/bin` 加载 flat 或 ELF32 程序，通过 `fork/waitpid/execve` 管理进程，并使用管道、重定向和后台任务。
 
 ## ✨ 核心特性
 
@@ -35,9 +35,10 @@ NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编�
 
 ### 🛡️ Ring 3 用户态
 - **特权级隔离**：TSS 内核栈切换、用户代码/数据段（DPL3）、页表 U/S 位保护——用户程序碰内核内存直接 #PF
-- **系统调用**：`int 0x80`（门 DPL3）——putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir，内核逐页校验用户传入的指针
+- **系统调用**：`int 0x80`（门 DPL3）——putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir，内核逐页校验用户传入的指针
+- **独立用户态 Shell**：`run sh` 启动；支持 `/bin` PATH 查找、`fork/execve/waitpid`、`<`/`>`/`>>`、单级管道 `|`、后台任务 `&` 和 `WNOHANG` 回收
 - **异常处理**：32 个异常处理器打印完整现场（EIP/CS/EFLAGS/ESP/CR2 + 页错误码 P/W/U 位解读），用户态异常杀进程回 shell，内核态异常 panic
-- **18 个 flat 演示程序 + 1 个 ELF32 演示程序**：覆盖 waitpid、execve、ELF32、fork 堆隔离、空闲链表 allocator、文件 fd 和每进程工作目录
+- **20 个 flat 程序 + 1 个 ELF32 演示程序**：覆盖用户 Shell、共享打开文件、管道、waitpid、execve、ELF32、fork 堆隔离、空闲链表 allocator 和每进程工作目录
 
 ### ⏱️ 多任务与设备
 - **抢占式多任务**：PIT IRQ0（18.2Hz）时间片轮转，协作式/抢占式统一上下文帧可互恢复，带"恶霸任务"演示
@@ -109,6 +110,7 @@ nano 风格的 `edit` 命令：
 | `edit file` | 打开编辑器（^S 保存，^X 退出时询问保存） |
 | `cc file.c [args...]` | 编译并运行 C 程序（参数传给 main） |
 | `run prog [args] [&]` | 运行内嵌或 `/bin` 程序；参数进入初始用户栈，& = detached 后台任务 |
+| `run sh` | 进入用户态 Shell（`exit` 返回内核 Shell） |
 | `splash` | 重放开机画面 |
 
 ## 🚀 快速开始
@@ -172,7 +174,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 自动化测试
 
-17 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**文档统计 468 项**：
+18 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**文档统计 505 项**：
 
 ```bash
 python3 tools/test-memory.py  # E820 + 页分配 + 内核堆 (15 项)
@@ -191,7 +193,8 @@ python3 tools/test-alloc.py    # 空闲链表/合并/realloc (24 项)
 python3 tools/test-vm.py       # 按需分页/COW/guard/brk/mmap (22 项)
 python3 tools/test-exec.py     # 文件加载/exec/失败回滚 (26 项)
 python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 项)
-python3 tools/test-fd.py       # fd/read/write/lseek/stdin/CWD (34 项)
+python3 tools/test-fd.py       # fd/CWD/共享偏移/pipe/dup2 (42 项)
+python3 tools/test-shell.py    # 用户态 Shell/工具/管道/重定向 (29 项)
 ```
 
 > test-preempt / test-mario 是附着式测试（argv[1]=monitor socket），请用
@@ -222,6 +225,7 @@ python3 tools/test-fd.py       # fd/read/write/lseek/stdin/CWD (34 项)
 │   ├── font.c/h        # VGA 字符发生器字体管理
 │   ├── font12/14/16.h  # Terminus 字体数据
 │   ├── fs.c/h          # 内存文件系统
+│   ├── fd.c/h          # 共享打开文件对象、pipe 环形缓冲区、引用计数
 │   ├── editor.c/h      # 内置编辑器
 │   ├── cc.c/h          # c4 编译器移植
 │   ├── splash.c/h .asm # 开机画面
@@ -236,9 +240,9 @@ python3 tools/test-fd.py       # fd/read/write/lseek/stdin/CWD (34 项)
 │   └── hello.c count.c crash.c div0.c echo.c badptr.c forkdemo.c
 │       spinner.c vmtest.c vmguard.c execdemo.c execbad.c
 │       waittest.c execargv.c elfdemo.c memdemo.c allocdemo.c
-│       filedemo.c fdstdin.c
+│       filedemo.c fdstdin.c sh.c fdpipe.c
 ├── tetris/             # 原始实模式汇编版 (移植蓝本)
-├── tools/              # 字体转换 + 17 套测试脚本
+├── tools/              # 字体转换 + 18 套测试脚本
 ├── note/               # 开发记录 + 截图
 └── Makefile
 ```
@@ -266,6 +270,7 @@ python3 tools/test-fd.py       # fd/read/write/lseek/stdin/CWD (34 项)
 | 17 | 编辑器增强（光标残影修复 + 撤销重做 + 搜索跳行 + 按词导航） |
 | 18 | 马里奥增强（双关卡、能力块、检查点、连踩、粒子震屏、精致 HUD） |
 | 19 | 进程级 fd 表（open/read/write/close/lseek）+ 每进程 CWD + fd 0/1/2 |
+| 20 | 用户态 Shell + echo/cat/ls/pwd/mkdir/rm + 共享文件对象 + pipe/dup2 + `<`/`>`/`>>`/`\|`/`&` |
 
 每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
 

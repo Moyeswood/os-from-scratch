@@ -42,6 +42,20 @@ static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 #define SYS_CHDIR    17
 #define SYS_GETCWD   18
 #define SYS_MKDIR    19
+#define SYS_PIPE     20
+#define SYS_DUP      21
+#define SYS_DUP2     22
+#define SYS_REMOVE   23
+#define SYS_READDIR  24
+
+#define WNOHANG 1
+
+typedef struct {
+    uint32_t inum;
+    uint32_t type;
+    uint32_t size;
+    char name[28];
+} user_dirent_t;
 
 #define O_RDONLY 0x0001
 #define O_WRONLY 0x0002
@@ -95,6 +109,10 @@ static inline int exec(const char* path) {
 static inline int waitpid(int pid, int* status) {
     return (int)syscall3(SYS_WAITPID, (uint32_t)pid, (uint32_t)status, 0);
 }
+static inline int waitpid_flags(int pid, int* status, int flags) {
+    return (int)syscall3(SYS_WAITPID, (uint32_t)pid, (uint32_t)status,
+                         (uint32_t)flags);
+}
 static inline int open(const char* path, uint32_t flags) {
     return (int)syscall3(SYS_OPEN, (uint32_t)path, flags, 0);
 }
@@ -119,6 +137,23 @@ static inline char* getcwd(char* buf, uint32_t size) {
 }
 static inline int mkdir(const char* path) {
     return (int)syscall1(SYS_MKDIR, (uint32_t)path);
+}
+static inline int pipe(int fds[2]) {
+    return (int)syscall1(SYS_PIPE, (uint32_t)fds);
+}
+static inline int dup(int fd) {
+    return (int)syscall1(SYS_DUP, (uint32_t)fd);
+}
+static inline int dup2(int oldfd, int newfd) {
+    return (int)syscall3(SYS_DUP2, (uint32_t)oldfd, (uint32_t)newfd, 0);
+}
+static inline int remove(const char* path) {
+    return (int)syscall1(SYS_REMOVE, (uint32_t)path);
+}
+static inline int readdir(const char* path, uint32_t index,
+                          user_dirent_t* entry) {
+    return (int)syscall3(SYS_READDIR, (uint32_t)path, index,
+                         (uint32_t)entry);
 }
 
 // 里程碑 12 的 sbrk 接口在里程碑 13 的 brk 之上保持兼容。

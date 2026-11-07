@@ -222,7 +222,7 @@ int proc_wait(int pid) {
     return code;
 }
 
-int proc_waitpid(int pid, int* status) {
+int proc_waitpid(int pid, int* status, int flags) {
     task_t* parent = task_current();
     if (!parent || !parent->is_user || pid == 0 || pid < -1) return -1;
 
@@ -246,6 +246,10 @@ int proc_waitpid(int pid, int* status) {
             __asm__ volatile("sti");
             return -1;
         }
+        if (flags & 1) {   // WNOHANG: 没有已退出的子进程就立即返回
+            __asm__ volatile("sti");
+            return 0;
+        }
         task_sleep_switch_locked(TASK_WAIT_PROC, 0);
         __asm__ volatile("sti");
     }
@@ -260,6 +264,7 @@ void proc_exit(int code) {
     serial_puts(") exited code=");
     serial_put_hex((uint32_t)code);
     serial_puts("\n\r");
+    task_fd_close_all(me);       // 先关写端, 让管道读者看到 EOF
     detach_children(me->pid);
     task_zombie_switch_away(code);   // 永不返回
     while (1) { __asm__ volatile("hlt"); }
@@ -276,6 +281,7 @@ void proc_fault_kill(void) {
     serial_puts(" (");
     serial_puts(me->name);
     serial_puts(") killed by exception\n\r");
+    task_fd_close_all(me);
     detach_children(me->pid);
     task_zombie_switch_away(-1);     // 永不返回
     while (1) { __asm__ volatile("hlt"); }
@@ -342,6 +348,7 @@ int proc_kill(int pid) {
     serial_puts(" (");
     serial_puts(t->name);
     serial_puts(") killed by kill command\n\r");
+    task_fd_close_all(t);
     detach_children(t->pid);
     // 直接判死: 在跑就跑到下一个滴答 (pick_next 不会再看它),
     // 在睡就永远睡下去; 内存由下一次 spawn 的清扫回收

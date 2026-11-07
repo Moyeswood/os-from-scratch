@@ -69,6 +69,16 @@ user_fdstdin_start: incbin "build/fdstdin.bin"
 global user_fdstdin_end
 user_fdstdin_end:
 
+global user_sh_start
+user_sh_start: incbin "build/sh.bin"
+global user_sh_end
+user_sh_end:
+
+global user_fdpipe_start
+user_fdpipe_start: incbin "build/fdpipe.bin"
+global user_fdpipe_end
+user_fdpipe_end:
+
 global user_vmtest_start
 user_vmtest_start: incbin "build/vmtest.bin"
 global user_vmtest_end

@@ -8,8 +8,13 @@
 #include "vm.h"
 
 #define EXEC_PATH_BUF 64
+#define SHELL_UTILITY_COUNT 6
 
 extern const char user_elfdemo_elf_start[], user_elfdemo_elf_end[];
+
+static const char* shell_utilities[SHELL_UTILITY_COUNT] = {
+    "echo", "cat", "ls", "pwd", "mkdir", "rm"
+};
 
 void exec_basename(char* out, uint32_t cap, const char* path) {
     if (!out || cap == 0) return;
@@ -47,7 +52,10 @@ void exec_install_builtins(void) {
     for (int i = 0; i < user_prog_count; ++i) {
         const user_prog_t* p = &user_progs[i];
         char path[EXEC_PATH_BUF];
-        make_bin_path(path, sizeof(path), p->name);
+        // 内嵌 echo 是历史键盘回显演示；/bin/echo 留给用户态工具。
+        const char* install_name =
+            k_strcmp(p->name, "echo") == 0 ? "echodemo" : p->name;
+        make_bin_path(path, sizeof(path), install_name);
 
         int inum = fs_create(path, FS_FILE);
         if (inum < 0 || fs_write((uint32_t)inum, p->data, p->size, 0)
@@ -59,6 +67,26 @@ void exec_install_builtins(void) {
             continue;
         }
         ++installed;
+    }
+
+    const user_prog_t* sh = 0;
+    for (int i = 0; i < user_prog_count; ++i)
+        if (k_strcmp(user_progs[i].name, "sh") == 0)
+            sh = &user_progs[i];
+    if (sh) {
+        for (int i = 0; i < SHELL_UTILITY_COUNT; ++i) {
+            char path[EXEC_PATH_BUF];
+            make_bin_path(path, sizeof(path), shell_utilities[i]);
+            int inum = fs_create(path, FS_FILE);
+            if (inum < 0 ||
+                fs_write((uint32_t)inum, sh->data, sh->size, 0)
+                    != (int)sh->size) {
+                if (inum >= 0) fs_remove(path);
+                serial_puts("[EXEC] install FAIL shell utility ");
+                serial_puts(shell_utilities[i]);
+                serial_puts("\n\r");
+            }
+        }
     }
 
     serial_puts("[EXEC] installed ");

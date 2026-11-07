@@ -174,6 +174,21 @@ try:
           wait_since("(fdstdin) exited code=0x00000000", 10.0, "stdin-exit"))
 
     mark()
+    type_text("run fdpipe\n")
+    pipe_expected = [
+        ("fork shares file offset", "[PIPE] child-read=1"),
+        ("offset advances across fork", "[PIPE] shared-offset=1"),
+        ("pipe create", "[PIPE] pipe-create=1"),
+        ("pipe data and EOF", "[PIPE] pipe-data=1"),
+        ("second pipe create", "[PIPE] pipe-create-2=1"),
+        ("dup2 redirects stdout", "[PIPE] dup2-stdout=1"),
+        ("pipe in-process checks", "[PIPE] done=1"),
+        ("pipe process exit", "(fdpipe) exited code=0x00000000"),
+    ]
+    for name, needle in pipe_expected:
+        check(name, wait_since(needle, 20.0, name))
+
+    mark()
     type_text("ls /fdhome\n")
     check("shell lists user-created directory",
           wait_for(lambda: "[SH] ls: note.txt" in since(), 10.0, "ls"))

@@ -96,18 +96,26 @@ static void create_task(task_t* t, void (*entry)(), uint32_t* stack_top) {
     t->esp = (uint32_t)stack;
 }
 
+void task_fd_close_all(task_t* t) {
+    if (!t) return;
+    for (int fd = 0; fd < TASK_FD_MAX; ++fd) {
+        fd_release(t->fds[fd]);
+        t->fds[fd] = 0;
+    }
+}
+
 void task_fd_reset(task_t* t) {
-    k_memset(t->fds, 0, sizeof(t->fds));
-    t->fds[0].kind = TASK_FD_STDIN;
-    t->fds[0].readable = 1;
-    t->fds[1].kind = TASK_FD_STDOUT;
-    t->fds[1].writable = 1;
-    t->fds[2].kind = TASK_FD_STDOUT;
-    t->fds[2].writable = 1;
+    task_fd_close_all(t);
+    t->fds[0] = fd_stdin();
+    t->fds[1] = fd_stdout();
+    t->fds[2] = fd_stdout();
 }
 
 void task_fd_copy(task_t* dst, const task_t* src) {
-    k_memcpy(dst->fds, src->fds, sizeof(dst->fds));
+    for (int fd = 0; fd < TASK_FD_MAX; ++fd) {
+        dst->fds[fd] = src->fds[fd];
+        fd_retain(dst->fds[fd]);
+    }
 }
 
 // ---------- 调度核心 ----------
@@ -266,6 +274,19 @@ void task_wake_pid(int pid) {
             tasks[i].wait_flags &= ~TASK_WAIT_PROC;
         }
     }
+}
+
+void task_wake_pipe(void) {
+    uint32_t flags;
+    __asm__ volatile("pushf; pop %0; cli" : "=r"(flags) : : "memory");
+    for (int i = 1; i < MAX_TASKS; i++) {
+        if (tasks[i].state == TASK_SLEEPING &&
+            (tasks[i].wait_flags & TASK_WAIT_PIPE)) {
+            tasks[i].state = TASK_READY;
+            tasks[i].wait_flags &= ~TASK_WAIT_PIPE;
+        }
+    }
+    if (flags & 0x200) __asm__ volatile("sti" : : : "memory");
 }
 
 // ---------- 协作切换 ----------

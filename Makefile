@@ -39,6 +39,7 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
               $(KERNEL_DIR)/mario.o \
               $(KERNEL_DIR)/font.o \
               $(KERNEL_DIR)/fs.o \
+              $(KERNEL_DIR)/fd.o \
               $(KERNEL_DIR)/editor.o \
               $(KERNEL_DIR)/cc.o \
               $(KERNEL_DIR)/splash.o \
@@ -62,7 +63,8 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
 # 用户程序 (宿主 gcc 编译 → 链接到 0x2000000 → flat bin → incbin)
 # 里程碑 15 + 本地 allocator 演示；elfdemo 作为独立 ELF 镜像嵌入
 USER_PROGS = hello count crash div0 echo badptr forkdemo spinner vmtest vmguard \
-             execdemo execbad waittest execargv memdemo allocdemo filedemo fdstdin
+             execdemo execbad waittest execargv memdemo allocdemo filedemo fdstdin \
+             sh fdpipe
 USER_BINS  = $(patsubst %,$(BUILD_DIR)/%.bin,$(USER_PROGS))
 ELF_DEMO   = $(BUILD_DIR)/elfdemo.elf
 
@@ -138,7 +140,7 @@ debug: $(OS_IMG)
 clean:
 	rm -rf $(BUILD_DIR) $(KERNEL_DIR)/*.o
 
-.PHONY: all run debug clean test-memory test-vm test-exec test-process test-attached test-suite test-all
+.PHONY: all run debug clean test-memory test-vm test-exec test-process test-fd test-shell test-attached test-suite test-all
 
 test-memory: $(OS_IMG)
 	python3 tools/test-memory.py
@@ -151,6 +153,12 @@ test-exec: $(OS_IMG)
 
 test-process: $(OS_IMG)
 	python3 tools/test-process.py
+
+test-fd: $(OS_IMG)
+	python3 tools/test-fd.py
+
+test-shell: $(OS_IMG)
+	python3 tools/test-shell.py
 
 test-attached: $(OS_IMG)
 	python3 tools/run-attached-tests.py
@@ -168,6 +176,8 @@ test-suite: $(OS_IMG)
 	python3 tools/test-vm.py
 	python3 tools/test-exec.py
 	python3 tools/test-process.py
+	python3 tools/test-fd.py
+	python3 tools/test-shell.py
 	python3 tools/run-attached-tests.py
 
 test-all: test-suite

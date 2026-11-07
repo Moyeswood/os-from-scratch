@@ -61,6 +61,11 @@ typedef struct {
 #define SYS_CHDIR    17  // 里程碑 19: 修改当前进程工作目录
 #define SYS_GETCWD   18  // 里程碑 19: 读取当前工作目录
 #define SYS_MKDIR    19  // 里程碑 19: 创建目录
+#define SYS_PIPE     20  // 里程碑 20: 创建共享读/写端
+#define SYS_DUP      21  // 里程碑 20: 复制 fd
+#define SYS_DUP2     22  // 里程碑 20: 重定向 fd
+#define SYS_REMOVE   23  // 里程碑 20: 删除文件/空目录
+#define SYS_READDIR  24  // 里程碑 20: 用户态目录迭代
 
 #define O_RDONLY     0x0001
 #define O_WRONLY     0x0002
@@ -72,5 +77,13 @@ typedef struct {
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
+
+// 用户态 readdir 结果（与 user/lib.h 的 user_dirent_t 布局一致）。
+typedef struct {
+    uint32_t inum;
+    uint32_t type;
+    uint32_t size;
+    char name[28];
+} user_dirent_t;
 
 #endif
