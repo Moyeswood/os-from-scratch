@@ -75,6 +75,16 @@ def type_text(s, wait=0.2):
 def press(key, wait=0.3):
     send(f"sendkey {key}", wait=wait)
 
+def read_mem_bytes(addr, count):
+    r = send(f"xp /{count}bx 0x{addr:x}", wait=0.05)
+    values = []
+    for line in r.splitlines():
+        if ':' not in line or '\x1b' in line: continue
+        for token in line.split(':', 1)[1].split():
+            if token.startswith('0x'):
+                values.append(int(token, 16))
+    return values[:count]
+
 def serial_log():
     return serial_buf.decode(errors='replace')
 
@@ -252,7 +262,76 @@ check("save page", save_exit())
 time.sleep(0.6)
 check("cat X at top", run_cmd("cat /p.txt", "[SH] cat: XL01", name="cat-pg"))
 
-# ---------- 10. 错误路径 ----------
+# ---------- 11. 换行后光标残影 ----------
+check("edit caret file", run_edit("/caret.txt"))
+type_text("abc\nxyz", wait=0.15)
+time.sleep(0.6)
+line0 = read_mem_bytes(0xB8000, 160)
+line1 = read_mem_bytes(0xB80A0, 160)
+line0_attrs = line0[1::2]
+line1_attrs = line1[1::2]
+check("caret: previous line has no cursor shadow",
+      len(line0_attrs) == 80 and 0x70 not in line0_attrs,
+      f"attrs={line0_attrs[:8]}")
+check("caret: cursor is on the new line",
+      len(line1_attrs) == 80 and line1_attrs[3] == 0x70,
+      f"cursor_attr={line1_attrs[3] if len(line1_attrs) > 3 else 'missing'}")
+press("ctrl-x", wait=0.4)
+press("n", wait=0.4)
+wait_for(lambda: "[ED] exit: discarded" in serial_log(), name="caret-discard")
+
+# ---------- 12. Undo / Redo ----------
+check("edit undo file", run_edit("/undo.txt"))
+type_text("alpha", wait=0.15)
+mark_serial_base()
+press("ctrl-z", wait=0.5)
+check("undo: typed run is removed", wait_for(
+    lambda: "[ED] undo" in serial_since(), name="undo"))
+press("ctrl-y", wait=0.5)
+check("redo: typed run is restored", wait_for(
+    lambda: "[ED] redo" in serial_since(), name="redo"))
+press("ctrl-z", wait=0.5)
+type_text("beta", wait=0.15)
+check("undo file saves replacement", save_exit())
+time.sleep(0.6)
+check("undo/redo result", run_cmd("cat /undo.txt", "[SH] cat: beta", name="cat-undo"))
+
+# ---------- 13. 搜索 / 跳行 ----------
+check("edit navigation file", run_edit("/nav.txt"))
+type_text("one\ntwo\nthree", wait=0.15)
+mark_serial_base()
+press("ctrl-f", wait=0.3)
+type_text("two\n", wait=0.15)
+check("find: locates searched text", wait_for(
+    lambda: "[ED] find hit" in serial_since(), name="find-hit"))
+type_text("X", wait=0.2)
+mark_serial_base()
+press("ctrl-g", wait=0.3)
+type_text("3\n", wait=0.15)
+check("goto: jumps to requested line", wait_for(
+    lambda: "[ED] goto" in serial_since(), name="goto"))
+press("end", wait=0.3)
+type_text("!", wait=0.2)
+check("navigation file saves", save_exit())
+time.sleep(0.6)
+check("find inserted at match", run_cmd("cat /nav.txt", "[SH] cat: one", name="cat-nav-one"))
+check("find moved to Xtwo", "Xtwo" in serial_log())
+check("goto appended at line 3", "three!" in serial_log())
+
+# ---------- 14. 按词导航与删除 ----------
+check("edit word file", run_edit("/word.txt"))
+type_text("alpha beta gamma", wait=0.15)
+press("home", wait=0.3)
+press("ctrl-right", wait=0.3)
+press("ctrl-right", wait=0.3)
+press("ctrl-backspace", wait=0.4)
+type_text("B", wait=0.2)
+check("word editing saves", save_exit())
+time.sleep(0.6)
+check("ctrl navigation deletes previous word",
+      run_cmd("cat /word.txt", "[SH] cat: alpha Bgamma", name="cat-word"))
+
+# ---------- 15. 错误路径 ----------
 check("edit dir → error", run_edit("/"))
 check("dir error marker", "[ED] fail: is a directory" in serial_since())
 type_text("\n")                # 编辑器失败直接返回 shell, 这条命令是空回车
@@ -263,7 +342,7 @@ type_text("\n")
 time.sleep(0.6)
 check("shell still alive", run_cmd("pwd", "[SH] pwd: /", name="pwd-alive"))
 
-# ---------- 11. 状态栏渲染抽查 (偶数字节 = 字符, 奇数字节 = 属性) ----------
+# ---------- 16. 状态栏渲染抽查 (偶数字节 = 字符, 奇数字节 = 属性) ----------
 mark_serial_base()
 type_text("edit /t.txt\n")
 wait_for(lambda: "[ED] open: /t.txt" in serial_since(), name="reopen")
@@ -288,7 +367,7 @@ press("ctrl-x", wait=0.4)    # 未修改 → 一次 ^X 直接退出 (多按会�
 type_text("\n")              # 冲掉可能的残留输入
 time.sleep(0.8)
 
-# ---------- 12. 回归 ----------
+# ---------- 17. 回归 ----------
 check("regression: fs mkdir", run_cmd("mkdir ed-regress", "[SH] mkdir ok", name="reg-mkdir"))
 check("regression: font 12", run_cmd("font 12",
       "[FONT] height=0x0000000C mismatch=0x00000000 scanline=0x0000000B vde=0x", name="reg-font12"))

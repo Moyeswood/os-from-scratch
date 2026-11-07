@@ -2,8 +2,10 @@
 #define EDITOR_H
 
 // 内置文本编辑器 (nano 风格教学版), shell 的 edit 命令调用。
-// 打开/创建 path 指向的文件, 编辑, Ctrl+S 保存, Ctrl+X 退出
-// (有修改时第一次 ^X 只警告, 再按一次才放弃修改退出)。
+// 支持撤销/重做、搜索、跳行和按词导航:
+//   ^S 保存  ^X 退出  ^Z 撤销  ^Y 重做  ^F 搜索  ^G 跳行
+//   Ctrl+方向键按词移动, Ctrl+Backspace 删除前一个词。
+// 有修改时 ^X 会询问 Y=保存退出 / N=丢弃 / Esc=取消。
 void editor_run(const char* path);
 
 #endif

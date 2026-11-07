@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-13%2F13%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-334%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-14%2F14%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-351%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -53,9 +53,10 @@ xv6-style teaching implementation (in-memory, 1 MB / 256 blocks, 64 inodes):
 
 ### ✏️ Built-in Editor
 A nano-style `edit` command:
-- Arrow keys / Home / End / PgUp / PgDn navigation, insert/backspace/delete/newline, Tab expansion
-- **Ctrl+S to save, Ctrl+X to exit** (double confirmation when modified)
-- Inverse-video status bar (filename / line,column / [M] marker), highlighted cursor cell, horizontal scrolling of long lines
+- Arrow keys / Home / End / PgUp / PgDn navigation, Ctrl+Arrow word movement, Ctrl+Backspace word deletion
+- **Ctrl+Z / Ctrl+Y undo and redo**, **Ctrl+F search**, **Ctrl+G go to line**
+- **Ctrl+S to save, Ctrl+X to exit** (save, discard, or cancel when modified)
+- Exact line/column cursor highlighting (fixes newline ghosts), status bar, horizontal scrolling of long lines
 - Polls the 8042 directly and tracks Shift/Ctrl/CapsLock/0xE0 extended-key prefixes itself
 
 ### ⚙️ C Compiler (c4 port)
@@ -157,13 +158,13 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 Automated Tests
 
-12 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **334 checks in total**:
+12 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **351 checks in total**:
 
 ```bash
 python3 tools/test-splash.py   # boot screen  (14 checks)
 python3 tools/test-font.py     # fonts        (30 checks)
 python3 tools/test-fs.py       # filesystem   (43 checks)
-python3 tools/test-edit.py     # editor       (50 checks)
+python3 tools/test-edit.py     # editor/undo/find/caret (67 checks)
 python3 tools/test-cc.py       # C compiler   (41 checks)
 python3 tools/test-preempt.py  # preemption   (7 checks)
 python3 tools/test-mario.py    # Mario        (12 checks)
@@ -233,6 +234,7 @@ python3 tools/test-alloc.py    # free list/coalescing/realloc (24 checks)
 | 11 | Multiprocessing (PCB scheduler + keyboard ring buffer + per-process address spaces + fork + background jobs) |
 | 12 | User dynamic memory (sbrk + bump allocator) + fork heap copy + waitpid + precise orphan reaping |
 | 13 | User-space free-list allocator (first fit + splitting + adjacent coalescing + tail shrinking + calloc/realloc) |
+| 14 | Editor enhancements (caret ghost fix + undo/redo + find/goto + word navigation) |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 

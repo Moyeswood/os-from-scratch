@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-13%2F13%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-334%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-14%2F14%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-351%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -53,9 +53,10 @@ xv6 风格教学实现（内存文件系统，1MB/256 块，64 inode）：
 
 ### ✏️ 内置编辑器
 nano 风格的 `edit` 命令：
-- 方向键/Home/End/PgUp/PgDn 导航、插入/退格/删除/换行、Tab 展开
-- **Ctrl+S 保存、Ctrl+X 退出**（修改未保存时二次确认）
-- 底部反显状态栏（文件名/行列号/[M] 标记）、光标格高亮、长行水平滚动
+- 方向键/Home/End/PgUp/PgDn 导航、Ctrl+方向键按词移动、Ctrl+Backspace 按词删除
+- **Ctrl+Z/Ctrl+Y 撤销重做**、**Ctrl+F 搜索**、**Ctrl+G 跳行**
+- **Ctrl+S 保存、Ctrl+X 退出**（修改未保存时可选保存、丢弃或取消）
+- 精确定位光标格（修复换行残影）、底部状态栏、长行水平滚动
 - 自己轮询 8042 并跟踪 Shift/Ctrl/Caps/0xE0 扩展键前缀
 
 ### ⚙️ C 编译器（c4 移植）
@@ -161,13 +162,13 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 自动化测试
 
-12 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**共 334 项**：
+12 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**共 351 项**：
 
 ```bash
 python3 tools/test-splash.py   # 开机画面 (14 项)
 python3 tools/test-font.py     # 字体/字号 (30 项)
 python3 tools/test-fs.py       # 文件系统 (43 项)
-python3 tools/test-edit.py     # 编辑器   (50 项)
+python3 tools/test-edit.py     # 编辑器/撤销/搜索/光标 (67 项)
 python3 tools/test-cc.py       # C 编译器 (41 项)
 python3 tools/test-preempt.py  # 抢占调度 (7 项)
 python3 tools/test-mario.py    # 马里奥   (12 项)
@@ -237,6 +238,7 @@ python3 tools/test-alloc.py    # 空闲链表/合并/realloc (24 项)
 | 11 | 多进程（PCB 调度器 + 键盘环形缓冲 + 每进程独立地址空间 + fork + 后台进程） |
 | 12 | 用户动态内存（sbrk + bump malloc）+ fork 堆复制 + waitpid + 精确孤儿回收 |
 | 13 | 用户态空闲链表 allocator（首适配 + 分裂 + 相邻合并 + 堆尾收缩 + calloc/realloc） |
+| 14 | 编辑器增强（光标残影修复 + 撤销重做 + 搜索跳行 + 按词导航） |
 
 每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
 

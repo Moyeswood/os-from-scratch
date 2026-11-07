@@ -98,6 +98,9 @@ $(BUILD_DIR)/%.bin: user/%.c user/lib.h user/linker.ld
 	$(LD) -m elf_i386 -T user/linker.ld $(BUILD_DIR)/$*.o -o $(BUILD_DIR)/$*.elf
 	$(OBJCOPY) -O binary $(BUILD_DIR)/$*.elf $@
 
+$(KERNEL_DIR)/editor.o: $(KERNEL_DIR)/editor.c
+	$(CC) -m32 -g -mno-mmx -mno-sse -mno-sse2 -ffreestanding -fno-pie -fno-stack-protector -nostdlib -c $< -o $@
+
 $(KERNEL_DIR)/%.o: $(KERNEL_DIR)/%.c
 	$(CC) -m32 -g -ffreestanding -fno-pie -fno-stack-protector -nostdlib -c $< -o $@
 

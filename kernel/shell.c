@@ -154,7 +154,8 @@ static void cmd_help() {
     vga_puts("  cat f    - Print file contents\n\r");
     vga_puts("  rm p     - Remove file or empty directory\n\r");
     vga_puts("  df       - Show filesystem usage\n\r");
-    vga_puts("  edit f   - Edit file (^S save, ^X exit)\n\r");
+    vga_puts("  edit f   - Nano-style editor (^S save, ^X exit)\n\r");
+    vga_puts("  edit keys- ^Z undo ^Y redo ^F find ^G goto line\n\r");
     vga_puts("  cc f.c   - Compile and run C program (c4 subset)\n\r");
     vga_puts("  splash   - Replay the boot screen animation\n\r");
     vga_puts("  run p    - Run user program in Ring 3 (hello/count/crash/div0/echo/badptr/forkdemo/spinner/memdemo/allocdemo)\n\r");
