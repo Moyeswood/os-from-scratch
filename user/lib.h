@@ -34,6 +34,25 @@ static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 #define SYS_MMAP     9   // 里程碑 13: 预留匿名映射, 返回虚拟地址
 #define SYS_EXEC     10  // 里程碑 14: 用文件系统镜像替换当前进程
 #define SYS_WAITPID  11  // 里程碑 15: 等待 pid/-1, 状态写入 int*
+#define SYS_OPEN     12
+#define SYS_READ     13
+#define SYS_WRITE    14
+#define SYS_CLOSE    15
+#define SYS_LSEEK    16
+#define SYS_CHDIR    17
+#define SYS_GETCWD   18
+#define SYS_MKDIR    19
+
+#define O_RDONLY 0x0001
+#define O_WRONLY 0x0002
+#define O_RDWR   (O_RDONLY | O_WRONLY)
+#define O_CREAT  0x0040
+#define O_TRUNC  0x0200
+#define O_APPEND 0x0400
+
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 
 // 与 kernel/vm.h 保持一致的用户虚拟布局。
 #define VM_IMAGE_BASE   0x2000000u
@@ -75,6 +94,31 @@ static inline int exec(const char* path) {
 }
 static inline int waitpid(int pid, int* status) {
     return (int)syscall3(SYS_WAITPID, (uint32_t)pid, (uint32_t)status, 0);
+}
+static inline int open(const char* path, uint32_t flags) {
+    return (int)syscall3(SYS_OPEN, (uint32_t)path, flags, 0);
+}
+static inline int read(int fd, void* buf, uint32_t count) {
+    return (int)syscall3(SYS_READ, (uint32_t)fd, (uint32_t)buf, count);
+}
+static inline int write(int fd, const void* buf, uint32_t count) {
+    return (int)syscall3(SYS_WRITE, (uint32_t)fd, (uint32_t)buf, count);
+}
+static inline int close(int fd) {
+    return (int)syscall1(SYS_CLOSE, (uint32_t)fd);
+}
+static inline int lseek(int fd, int offset, int whence) {
+    return (int)syscall3(SYS_LSEEK, (uint32_t)fd, (uint32_t)offset,
+                         (uint32_t)whence);
+}
+static inline int chdir(const char* path) {
+    return (int)syscall1(SYS_CHDIR, (uint32_t)path);
+}
+static inline char* getcwd(char* buf, uint32_t size) {
+    return (int)syscall3(SYS_GETCWD, (uint32_t)buf, size, 0) == 0 ? buf : 0;
+}
+static inline int mkdir(const char* path) {
+    return (int)syscall1(SYS_MKDIR, (uint32_t)path);
 }
 
 // 里程碑 12 的 sbrk 接口在里程碑 13 的 brk 之上保持兼容。

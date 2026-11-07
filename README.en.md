@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-18%2F18%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-434%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-19%2F19%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-468%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -35,13 +35,13 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 
 ### 🛡️ Ring 3 User Mode
 - **Privilege isolation**: TSS kernel-stack switch, user code/data segments (DPL3), page-table U/S protection — a user program touching kernel memory gets a #PF
-- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/read_key/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve; user pointers are validated page by page
+- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir; user pointers are validated page by page
 - **Exception handling**: 32 exception handlers print the full fault context (EIP/CS/EFLAGS/ESP/CR2 + page-fault error code P/W/U decoding); a user-mode fault kills the process and returns to the shell, a kernel-mode fault panics
-- **16 flat demos + 1 ELF32 demo**: programs cover waitpid, execve argument stacks, ELF32, fork heap isolation, and the free-list allocator
+- **18 flat demos + 1 ELF32 demo**: programs cover waitpid, execve, ELF32, fork heap isolation, the free-list allocator, file descriptors, and per-process working directories
 
 ### ⏱️ Multitasking & Devices
 - **Preemptive multitasking**: PIT IRQ0 (18.2 Hz) round-robin scheduling; cooperative and preemptive context frames are mutually restorable; includes a "bully task" demo
-- **Full process lifecycle**: per-process page directories and address spaces, fork, background jobs, `ps`/`kill`, and orphan-zombie reaping; the user heap provides `malloc/free/calloc/realloc`, adjacent-block coalescing, and tail shrinking, while `waitpid(pid/-1, &status)` reaps children and returns their exit status
+- **Full process lifecycle**: per-process address spaces and CWDs, fork, background jobs, process reaping, and an 8-entry per-process fd table inherited by fork and preserved by exec; the user heap provides `malloc/free/calloc/realloc`
 - **Device drivers**: VGA text/graphics, COM1 serial, PS/2 keyboard, PIT timer, PC speaker beep
 - **Graphics library**: mode 13h (320×200×256) palette/pixel/rect/sprite/font
 - **🎨 Adjustable fonts**: pure VGA hardware programming to load **Terminus** bitmap fonts (writing character-generator plane 2 + CRTC row reprogramming); `font` command with 5 sizes (12/14/16/18/20 → 33/28/25/22/20 lines, default 18; 18/20 vertically scaled from 8x16), hardware-level self-test on every load
@@ -168,7 +168,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 Automated Tests
 
-16 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **434 documented checks**:
+17 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **468 documented checks**:
 
 ```bash
 python3 tools/test-memory.py  # E820 + page allocator + kernel heap (15 checks)
@@ -187,6 +187,7 @@ python3 tools/test-alloc.py    # free list/coalescing/realloc (24 checks)
 python3 tools/test-vm.py       # demand paging/COW/guard (22 checks)
 python3 tools/test-exec.py     # file loader/exec/rollback (26 checks)
 python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 checks)
+python3 tools/test-fd.py       # fd/read/write/lseek/stdin/CWD (34 checks)
 ```
 
 > test-preempt / test-mario are attached tests (argv[1] = monitor socket);
@@ -231,8 +232,9 @@ python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 checks)
 │   └── hello.c count.c crash.c div0.c echo.c badptr.c forkdemo.c
 │       spinner.c vmtest.c vmguard.c execdemo.c execbad.c
 │       waittest.c execargv.c elfdemo.c memdemo.c allocdemo.c
+│       filedemo.c fdstdin.c
 ├── tetris/             # original real-mode assembly version (port reference)
-├── tools/              # font converter + 16 test suites
+├── tools/              # font converter + 17 test suites
 ├── note/               # development notes + screenshots
 └── Makefile
 ```
@@ -259,6 +261,7 @@ python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 checks)
 | 16 | User-space free-list allocator (first fit + splitting + adjacent coalescing + tail shrinking + calloc/realloc) |
 | 17 | Editor enhancements (caret ghost fix + undo/redo + find/goto + word navigation) |
 | 18 | Mario enhancements (two stages, ability blocks, checkpoint, stomp combos, particles/shake, polished HUD) |
+| 19 | Per-process fd table (open/read/write/close/lseek) + per-process CWD + fd 0/1/2 |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 

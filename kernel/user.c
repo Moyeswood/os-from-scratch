@@ -109,6 +109,165 @@ static int copy_user_string(char* out, uint32_t cap, const char* source) {
     return -1;
 }
 
+static task_fd_t* sys_fd(task_t* t, int fd) {
+    if (!t || fd < 0 || fd >= TASK_FD_MAX) return 0;
+    if (t->fds[fd].kind == TASK_FD_NONE) return 0;
+    return &t->fds[fd];
+}
+
+static int sys_fd_alloc(task_t* t) {
+    for (int fd = 3; fd < TASK_FD_MAX; fd++)
+        if (t->fds[fd].kind == TASK_FD_NONE) return fd;
+    return -1;
+}
+
+static int sys_open(task_t* me, const char* user_path, uint32_t flags) {
+    char path[FS_PATH_MAX];
+    if (copy_user_path(path, sizeof(path), user_path) < 0) return -1;
+
+    int readable = (flags & O_RDONLY) != 0;
+    int writable = (flags & O_WRONLY) != 0;
+    if (!readable && !writable) readable = 1;
+
+    int inum = fs_lookup(path);
+    if (inum < 0 && (flags & O_CREAT)) {
+        inum = fs_create(path, FS_FILE);
+    }
+    if (inum < 0 || fs_inode_type((uint32_t)inum) != FS_FILE) return -1;
+    if ((flags & O_TRUNC) && writable && fs_truncate((uint32_t)inum) < 0)
+        return -1;
+
+    int fd = sys_fd_alloc(me);
+    if (fd < 0) return -1;
+    task_fd_t* slot = &me->fds[fd];
+    slot->kind = TASK_FD_FILE;
+    slot->inum = (uint32_t)inum;
+    slot->off = 0;
+    slot->readable = (uint8_t)readable;
+    slot->writable = (uint8_t)writable;
+    slot->append = (flags & O_APPEND) != 0;
+    serial_puts("[FD] open ");
+    serial_puts(path);
+    serial_puts(" fd=");
+    serial_put_hex((uint32_t)fd);
+    serial_puts("\n\r");
+    return fd;
+}
+
+static int sys_read(task_t* me, int fd, void* user_buf, uint32_t count) {
+    task_fd_t* f = sys_fd(me, fd);
+    if (!f || !f->readable || !user_buf || !count ||
+        !vm_user_range_ok(me, (uint32_t)user_buf, count)) return -1;
+
+    if (f->kind == TASK_FD_STDIN) {
+        uint8_t tmp[64];
+        uint32_t n = count < sizeof(tmp) ? count : sizeof(tmp);
+        uint32_t got = 0;
+        while (got < n) {
+            int c = sys_getkey();
+            if (c < 0) break;
+            tmp[got++] = (uint8_t)c;
+            if (c == '\n') break;
+        }
+        if (got && vm_write_user(me, (uint32_t)user_buf, tmp, got) < 0)
+            return -1;
+        return (int)got;
+    }
+    if (f->kind != TASK_FD_FILE) return -1;
+
+    uint8_t tmp[128];
+    uint32_t left = count;
+    uint32_t total = 0;
+    while (left) {
+        uint32_t chunk = left < sizeof(tmp) ? left : sizeof(tmp);
+        int got = fs_read(f->inum, tmp, f->off, chunk);
+        if (got < 0) return -1;
+        if (!got) break;
+        if (vm_write_user(me, (uint32_t)user_buf + total, tmp,
+                          (uint32_t)got) < 0) return -1;
+        f->off += (uint32_t)got;
+        total += (uint32_t)got;
+        left -= (uint32_t)got;
+    }
+    serial_puts("[FD] read fd=");
+    serial_put_hex((uint32_t)fd);
+    serial_puts(" bytes=");
+    serial_put_hex(total);
+    serial_puts("\n\r");
+    return (int)total;
+}
+
+static int sys_write(task_t* me, int fd, const void* user_buf, uint32_t count) {
+    task_fd_t* f = sys_fd(me, fd);
+    if (!f || !f->writable || !user_buf ||
+        !vm_user_range_ok(me, (uint32_t)user_buf, count)) return -1;
+
+    if (f->kind == TASK_FD_STDOUT) {
+        const char* p = (const char*)user_buf;
+        for (uint32_t i = 0; i < count; i++) {
+            vga_putc(p[i]);
+            serial_putc(p[i]);
+        }
+        return (int)count;
+    }
+    if (f->kind != TASK_FD_FILE) return -1;
+    uint32_t off = f->append ? (uint32_t)fs_inode_size((int)f->inum) : f->off;
+    int wrote = fs_write_at(f->inum, user_buf, off, count);
+    if (wrote < 0) return -1;
+    f->off = off + (uint32_t)wrote;
+    serial_puts("[FD] write fd=");
+    serial_put_hex((uint32_t)fd);
+    serial_puts(" bytes=");
+    serial_put_hex((uint32_t)wrote);
+    serial_puts("\n\r");
+    return wrote;
+}
+
+static int sys_lseek(task_t* me, int fd, int offset, int whence) {
+    task_fd_t* f = sys_fd(me, fd);
+    if (!f || f->kind != TASK_FD_FILE) return -1;
+    int base;
+    if (whence == SEEK_SET) base = 0;
+    else if (whence == SEEK_CUR) base = (int)f->off;
+    else if (whence == SEEK_END) base = fs_inode_size((int)f->inum);
+    else return -1;
+    int target = base + offset;
+    if (target < 0) return -1;
+    f->off = (uint32_t)target;
+    return target;
+}
+
+static int sys_close(task_t* me, int fd) {
+    task_fd_t* f = sys_fd(me, fd);
+    if (!f) return -1;
+    k_memset(f, 0, sizeof(*f));
+    return 0;
+}
+
+static int sys_chdir(task_t* me, const char* user_path) {
+    (void)me;
+    char path[FS_PATH_MAX];
+    if (copy_user_path(path, sizeof(path), user_path) < 0) return -1;
+    return fs_chdir(path);
+}
+
+static int sys_getcwd(task_t* me, char* user_buf, uint32_t size) {
+    if (!user_buf || size == 0 ||
+        !vm_user_range_ok(me, (uint32_t)user_buf, size)) return -1;
+    char path[FS_PATH_MAX];
+    fs_pwd(path);
+    uint32_t len = k_strlen(path) + 1;
+    if (len > size) return -1;
+    return vm_write_user(me, (uint32_t)user_buf, path, len);
+}
+
+static int sys_mkdir(task_t* me, const char* user_path) {
+    (void)me;
+    char path[FS_PATH_MAX];
+    if (copy_user_path(path, sizeof(path), user_path) < 0) return -1;
+    return fs_create(path, FS_DIR) < 0 ? -1 : 0;
+}
+
 static int copy_user_vector(const char* const* source, const char* out[],
                             int max_count, char* storage, uint32_t storage_size,
                             uint32_t* used, int* count) {
@@ -215,6 +374,34 @@ void syscall_dispatch(user_frame_t* f) {
         f->eax = (uint32_t)proc_waitpid((int)f->ebx, status);
         break;
     }
+    case SYS_OPEN:
+        f->eax = (uint32_t)sys_open(task_current(),
+                                    (const char*)f->ebx, f->ecx);
+        break;
+    case SYS_READ:
+        f->eax = (uint32_t)sys_read(task_current(), (int)f->ebx,
+                                    (void*)f->ecx, f->edx);
+        break;
+    case SYS_WRITE:
+        f->eax = (uint32_t)sys_write(task_current(), (int)f->ebx,
+                                     (const void*)f->ecx, f->edx);
+        break;
+    case SYS_CLOSE:
+        f->eax = (uint32_t)sys_close(task_current(), (int)f->ebx);
+        break;
+    case SYS_LSEEK:
+        f->eax = (uint32_t)sys_lseek(task_current(), (int)f->ebx,
+                                     (int)f->ecx, (int)f->edx);
+        break;
+    case SYS_CHDIR:
+        f->eax = (uint32_t)sys_chdir(task_current(), (const char*)f->ebx);
+        break;
+    case SYS_GETCWD:
+        f->eax = (uint32_t)sys_getcwd(task_current(), (char*)f->ebx, f->ecx);
+        break;
+    case SYS_MKDIR:
+        f->eax = (uint32_t)sys_mkdir(task_current(), (const char*)f->ebx);
+        break;
     default:
         serial_puts("[SYS] unknown syscall #");
         serial_put_hex(f->eax);

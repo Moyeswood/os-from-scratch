@@ -96,6 +96,20 @@ static void create_task(task_t* t, void (*entry)(), uint32_t* stack_top) {
     t->esp = (uint32_t)stack;
 }
 
+void task_fd_reset(task_t* t) {
+    k_memset(t->fds, 0, sizeof(t->fds));
+    t->fds[0].kind = TASK_FD_STDIN;
+    t->fds[0].readable = 1;
+    t->fds[1].kind = TASK_FD_STDOUT;
+    t->fds[1].writable = 1;
+    t->fds[2].kind = TASK_FD_STDOUT;
+    t->fds[2].writable = 1;
+}
+
+void task_fd_copy(task_t* dst, const task_t* src) {
+    k_memcpy(dst->fds, src->fds, sizeof(dst->fds));
+}
+
 // ---------- 调度核心 ----------
 
 // 从轮转游标出发找一个 READY 任务; 没有就绪任务时:
@@ -144,6 +158,8 @@ void task_init() {
         tasks[i].exit_code = 0;
         tasks[i].mmap_brk = 0;
         tasks[i].image_end = 0;
+        tasks[i].cwd_inum = 0;
+        task_fd_reset(&tasks[i]);
     }
     next_pid = 1;
 
@@ -237,6 +253,8 @@ void task_free_slot(int idx) {
     tasks[idx].kstack_top = 0;
     tasks[idx].mmap_brk = 0;
     tasks[idx].image_end = 0;
+    tasks[idx].cwd_inum = 0;
+    task_fd_reset(&tasks[idx]);
 }
 
 // 子进程退出时调用: 唤醒所有在等 WAIT_PROC 的睡眠者

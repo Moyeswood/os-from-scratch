@@ -15,6 +15,8 @@ extern const char user_forkdemo_start[], user_forkdemo_end[];
 extern const char user_spinner_start[], user_spinner_end[];
 extern const char user_memdemo_start[], user_memdemo_end[];
 extern const char user_allocdemo_start[], user_allocdemo_end[];
+extern const char user_filedemo_start[], user_filedemo_end[];
+extern const char user_fdstdin_start[], user_fdstdin_end[];
 extern const char user_vmtest_start[], user_vmtest_end[];
 extern const char user_vmguard_start[], user_vmguard_end[];
 extern const char user_execdemo_start[], user_execdemo_end[];
@@ -22,7 +24,7 @@ extern const char user_execbad_start[], user_execbad_end[];
 extern const char user_waittest_start[], user_waittest_end[];
 extern const char user_execargv_start[], user_execargv_end[];
 
-static user_prog_t progs[16];
+static user_prog_t progs[18];
 const user_prog_t* user_progs = progs;
 const int user_prog_count = sizeof(progs) / sizeof(progs[0]);
 
@@ -90,4 +92,12 @@ void user_progs_init(void) {
     progs[15].name = "allocdemo";
     progs[15].data = (const uint8_t*)user_allocdemo_start;
     progs[15].size = (uint32_t)(user_allocdemo_end - user_allocdemo_start);
+
+    progs[16].name = "filedemo";
+    progs[16].data = (const uint8_t*)user_filedemo_start;
+    progs[16].size = (uint32_t)(user_filedemo_end - user_filedemo_start);
+
+    progs[17].name = "fdstdin";
+    progs[17].data = (const uint8_t*)user_fdstdin_start;
+    progs[17].size = (uint32_t)(user_fdstdin_end - user_fdstdin_start);
 }

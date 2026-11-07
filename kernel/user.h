@@ -53,5 +53,24 @@ typedef struct {
 #define SYS_MMAP     9   // 里程碑 13: 预留匿名映射, 返回用户虚拟地址
 #define SYS_EXEC     10  // 里程碑 14: 用文件系统镜像替换当前进程
 #define SYS_WAITPID  11  // 里程碑 15: 父进程等待并回收直接子进程
+#define SYS_OPEN     12  // 里程碑 19: 打开/创建文件, 返回进程级 fd
+#define SYS_READ     13  // 里程碑 19: fd 读取
+#define SYS_WRITE    14  // 里程碑 19: fd 写入
+#define SYS_CLOSE    15  // 里程碑 19: 关闭 fd
+#define SYS_LSEEK    16  // 里程碑 19: 调整文件偏移
+#define SYS_CHDIR    17  // 里程碑 19: 修改当前进程工作目录
+#define SYS_GETCWD   18  // 里程碑 19: 读取当前工作目录
+#define SYS_MKDIR    19  // 里程碑 19: 创建目录
+
+#define O_RDONLY     0x0001
+#define O_WRONLY     0x0002
+#define O_RDWR       (O_RDONLY | O_WRONLY)
+#define O_CREAT      0x0040
+#define O_TRUNC      0x0200
+#define O_APPEND     0x0400
+
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 
 #endif

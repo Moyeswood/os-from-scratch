@@ -46,6 +46,10 @@ int fs_remove(const char* path);
 // 写: append=0 先截断再写, append=1 追加; 返回写入字节数或 -1
 int fs_read(uint32_t inum, void* buf, uint32_t off, uint32_t n);
 int fs_write(uint32_t inum, const void* buf, uint32_t n, int append);
+int fs_write_at(uint32_t inum, const void* buf, uint32_t off, uint32_t n);
+int fs_truncate(uint32_t inum);
+int fs_inode_type(uint32_t inum);
+int fs_inode_size(uint32_t inum);
 
 // 目录迭代: 第 idx 个目录项 → 名字/inode/类型/大小 (0=成功, 0 项=结束)
 int fs_readdir(uint32_t inum, uint32_t idx,

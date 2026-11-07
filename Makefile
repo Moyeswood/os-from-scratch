@@ -62,7 +62,7 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
 # 用户程序 (宿主 gcc 编译 → 链接到 0x2000000 → flat bin → incbin)
 # 里程碑 15 + 本地 allocator 演示；elfdemo 作为独立 ELF 镜像嵌入
 USER_PROGS = hello count crash div0 echo badptr forkdemo spinner vmtest vmguard \
-             execdemo execbad waittest execargv memdemo allocdemo
+             execdemo execbad waittest execargv memdemo allocdemo filedemo fdstdin
 USER_BINS  = $(patsubst %,$(BUILD_DIR)/%.bin,$(USER_PROGS))
 ELF_DEMO   = $(BUILD_DIR)/elfdemo.elf
 

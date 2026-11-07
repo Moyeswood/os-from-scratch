@@ -10,6 +10,7 @@
 #include "string.h"
 #include "memory.h"
 #include "serial.h"
+#include "task.h"
 #include "types.h"
 
 #define FS_NBLOCKS 256
@@ -49,7 +50,10 @@ struct fs_dirent {                         // 32 字节, 每块 128 项
 static uint8_t* fs_block[FS_NBLOCKS];
 static struct fs_super* sb;                // = 块 0
 static struct fs_inode* itab;              // = 块 1 (inode 表)
-static uint32_t cwd_inum;                  // 当前目录
+static uint32_t current_cwd(void) {
+    task_t* t = task_current();
+    return t && t->cwd_inum ? t->cwd_inum : sb->root_inum;
+}
 
 // ---------- 位图 ----------
 static int bit_get(const uint8_t* bmap, uint32_t i) {
@@ -168,12 +172,12 @@ static int dir_remove(uint32_t dinum, const char* name) {
 // ---------- 路径解析 ----------
 // 把 path 走到"最后一段的父目录": 返回父 inode, 最后一段名字写入 last。
 // 支持绝对/相对路径、"."、".."、连续 '/'; 中间段必须存在且是目录。
-static char pathbuf[FS_PATH_MAX];
 static int namex(const char* path, char* last) {
     if (k_strlen(path) >= FS_PATH_MAX) return -1;
+    char pathbuf[FS_PATH_MAX];
     k_strcpy(pathbuf, path);
     char* p = pathbuf;
-    uint32_t cur = cwd_inum;
+    uint32_t cur = current_cwd();
     if (*p == '/') { cur = sb->root_inum; p++; }
 
     for (;;) {
@@ -246,16 +250,21 @@ static int dir_is_empty(uint32_t inum) {
     return 1;
 }
 
-// 目录 inum 是不是 cwd 或 cwd 的祖先 (防止删掉当前目录)
-static int is_cwd_ancestor(uint32_t inum) {
-    uint32_t cur = cwd_inum;
-    while (cur != sb->root_inum) {
-        if (cur == inum) return 1;
-        int up = dir_lookup(cur, "..");
-        if (up < 0) return 0;
-        cur = (uint32_t)up;
+// 目录 inum 是否被任何任务作为 cwd 或其祖先。
+static int is_task_cwd_ancestor(uint32_t inum) {
+    for (int i = 0; i < MAX_TASKS; i++) {
+        task_t* t = task_at(i);
+        if (!t || !t->cwd_inum) continue;
+        uint32_t cur = t->cwd_inum;
+        while (cur != sb->root_inum) {
+            if (cur == inum) return 1;
+            int up = dir_lookup(cur, "..");
+            if (up < 0) break;
+            cur = (uint32_t)up;
+        }
+        if (inum == sb->root_inum) return 1;
     }
-    return inum == sb->root_inum;
+    return 0;
 }
 
 int fs_remove(const char* path) {
@@ -268,7 +277,7 @@ int fs_remove(const char* path) {
 
     if (ip->type == FS_DIR) {
         if (inum == (int)sb->root_inum) return -1;              // 不能删根
-        if (is_cwd_ancestor((uint32_t)inum)) return -1;         // 不能删 cwd 及其祖先
+        if (is_task_cwd_ancestor((uint32_t)inum)) return -1;    // 不能删任何任务 cwd
         if (!dir_is_empty((uint32_t)inum)) return -1;           // 只删空目录
         itab[parent].nlink--;
     }
@@ -285,7 +294,7 @@ int fs_read(uint32_t inum, void* buf, uint32_t off, uint32_t n) {
     struct fs_inode* ip = &itab[inum];
     if (ip->type == FS_DIR) return -1;   // cat 目录由 shell 检查报错
     if (off >= ip->size) return 0;
-    if (off + n > ip->size) n = ip->size - off;
+    if (n > ip->size - off) n = ip->size - off;
     uint8_t* dst = (uint8_t*)buf;
     uint32_t done = 0;
     while (done < n) {
@@ -299,27 +308,52 @@ int fs_read(uint32_t inum, void* buf, uint32_t off, uint32_t n) {
     return (int)done;
 }
 
-int fs_write(uint32_t inum, const void* buf, uint32_t n, int append) {
+int fs_write_at(uint32_t inum, const void* buf, uint32_t off, uint32_t n) {
     struct fs_inode* ip = &itab[inum];
-    if (ip->type == FS_DIR) return -1;
-    if (!append) inode_truncate(inum);
+    if (ip->type != FS_FILE || off > ip->size) return -1;
     const uint8_t* src = (const uint8_t*)buf;
     uint32_t done = 0;
     while (done < n) {
-        uint32_t idx = ip->size / FS_BSIZE;
+        uint32_t absolute = off + done;
+        uint32_t idx = absolute / FS_BSIZE;
         if (idx >= FS_NDIRECT) return -1;        // 超过 48KB
         if (ip->direct[idx] == 0) {
             int b = balloc();
             if (b < 0) return -1;
             ip->direct[idx] = (uint32_t)b;
         }
-        uint32_t inoff = ip->size % FS_BSIZE;
+        uint32_t inoff = absolute % FS_BSIZE;
         uint32_t chunk = FS_BSIZE - inoff;
         if (chunk > n - done) chunk = n - done;
         k_memcpy(fs_block[ip->direct[idx]] + inoff, src, chunk);
-        ip->size += chunk; src += chunk; done += chunk;
+        src += chunk;
+        done += chunk;
+        if (absolute + chunk > ip->size) ip->size = absolute + chunk;
     }
     return (int)done;
+}
+
+int fs_write(uint32_t inum, const void* buf, uint32_t n, int append) {
+    struct fs_inode* ip = &itab[inum];
+    if (ip->type != FS_FILE) return -1;
+    if (!append) inode_truncate(inum);
+    return fs_write_at(inum, buf, append ? ip->size : 0, n);
+}
+
+int fs_truncate(uint32_t inum) {
+    if (inum >= FS_NINODES || itab[inum].type != FS_FILE) return -1;
+    inode_truncate(inum);
+    return 0;
+}
+
+int fs_inode_type(uint32_t inum) {
+    if (inum >= FS_NINODES) return -1;
+    return (int)itab[inum].type;
+}
+
+int fs_inode_size(uint32_t inum) {
+    if (inum >= FS_NINODES || itab[inum].type != FS_FILE) return -1;
+    return (int)itab[inum].size;
 }
 
 int fs_readdir(uint32_t inum, uint32_t idx,
@@ -343,14 +377,16 @@ int fs_chdir(const char* path) {
     int inum = fs_lookup(path);
     if (inum < 0) return -1;
     if (itab[inum].type != FS_DIR) return -1;
-    cwd_inum = (uint32_t)inum;
+    task_t* t = task_current();
+    if (!t) return -1;
+    t->cwd_inum = (uint32_t)inum;
     return 0;
 }
 
 // 从 cwd 一路 ".." 走到根, 收集每段名字, 再反转拼出绝对路径
 void fs_pwd(char* out) {
-    static char segs[32][FS_MAXNAME + 1];
-    uint32_t cur = cwd_inum;
+    char segs[32][FS_MAXNAME + 1];
+    uint32_t cur = current_cwd();
     int depth = 0;
     while (cur != sb->root_inum && depth < 32) {
         int parent = dir_lookup(cur, "..");
@@ -456,7 +492,10 @@ void fs_init(void) {
     itab[root].direct[0] = (uint32_t)rootdir;
     dir_add((uint32_t)root, ".", (uint32_t)root);
     dir_add((uint32_t)root, "..", (uint32_t)root);
-    cwd_inum = (uint32_t)root;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        task_t* t = task_at(i);
+        if (t) t->cwd_inum = (uint32_t)root;
+    }
 
     serial_puts("[FS] formatted: "); serial_put_hex(FS_NBLOCKS);
     serial_puts(" blocks x "); serial_put_hex(FS_BSIZE);

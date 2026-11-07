@@ -27,6 +27,21 @@
 // ============================================================
 
 #define MAX_TASKS 16
+#define TASK_FD_MAX 8
+
+#define TASK_FD_NONE  0
+#define TASK_FD_STDIN 1
+#define TASK_FD_STDOUT 2
+#define TASK_FD_FILE  3
+
+typedef struct {
+    uint32_t inum;
+    uint32_t off;
+    uint8_t kind;
+    uint8_t readable;
+    uint8_t writable;
+    uint8_t append;
+} task_fd_t;
 
 typedef enum {
     TASK_IDLE,     // 调度器空转任务 (启动栈, 不参与轮转)
@@ -59,6 +74,8 @@ typedef struct {
     uint32_t brk;          // 用户堆当前断点
     uint32_t mmap_brk;     // 匿名 mmap 窗口下一个空闲地址
     uint32_t image_end;    // 已装入镜像的页尾
+    uint32_t cwd_inum;     // 进程工作目录 inode
+    task_fd_t fds[TASK_FD_MAX];
 } task_t;
 
 // 多任务演示开关 (start/stop 命令 + 演示任务 A/B/C 使用)
@@ -99,6 +116,8 @@ void task_free_slot(int idx); // 重置任务槽 (收尸后)
 void task_wake_pid(int pid);  // 唤醒等 WAIT_PROC 的睡眠者 (子进程退出时)
 void task_zombie_switch_away(int exit_code);  // 当前任务变 ZOMBIE 并切走, 永不返回
 int  task_slot_of(task_t* t); // 任务在表里的下标
+void task_fd_reset(task_t* t);
+void task_fd_copy(task_t* dst, const task_t* src);
 
 void task_print_status();     // ps 命令
 

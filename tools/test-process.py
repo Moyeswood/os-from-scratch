@@ -135,7 +135,7 @@ def wait_since(needle, timeout=12.0, name=""):
 
 
 check("boot: flat programs installed", wait_for(
-    lambda: "[EXEC] installed 0x00000010/0x00000010 programs in /bin" in log(),
+    lambda: "[EXEC] installed 0x00000012/0x00000012 programs in /bin" in log(),
     15, "flat-install"))
 check("boot: ELF demo installed", wait_for(
     lambda: "[EXEC] installed ELF /bin/elfdemo bytes=" in log(),

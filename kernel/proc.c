@@ -106,6 +106,8 @@ static int build_process(const char* name, const uint8_t* image,
     t->is_user = 1;
     t->exit_code = 0;
     t->parent_pid = detached ? 0 : (int)task_current()->pid;
+    t->cwd_inum = task_current()->cwd_inum;
+    task_fd_reset(t);
 
     uint32_t entry = 0;
     uint32_t initial_esp = 0;
@@ -297,6 +299,8 @@ int proc_fork(user_frame_t* f) {
     child->is_user = 1;
     child->exit_code = 0;
     child->parent_pid = parent->pid;
+    child->cwd_inum = parent->cwd_inum;
+    task_fd_copy(child, parent);
 
     if (vm_clone(parent, child) < 0) {
         task_free_slot(idx);

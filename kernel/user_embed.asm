@@ -59,6 +59,16 @@ user_allocdemo_start: incbin "build/allocdemo.bin"
 global user_allocdemo_end
 user_allocdemo_end:
 
+global user_filedemo_start
+user_filedemo_start: incbin "build/filedemo.bin"
+global user_filedemo_end
+user_filedemo_end:
+
+global user_fdstdin_start
+user_fdstdin_start: incbin "build/fdstdin.bin"
+global user_fdstdin_end
+user_fdstdin_end:
+
 global user_vmtest_start
 user_vmtest_start: incbin "build/vmtest.bin"
 global user_vmtest_end
