@@ -6,9 +6,9 @@
 
 - 项目目录：`/home/mfw/Documents/claude001/NewOS`
 - 分支：`main`
-- 当前进度：里程碑 21
-- 完整回归：18 套测试、文档统计 523 项全部通过
-- 最终内核镜像 178908 字节，低于当前 180KB 引导上限
+- 当前进度：里程碑 22
+- 完整回归：18 套测试、文档统计 535 项全部通过
+- 最终内核镜像 180892 字节，低于 180KB（184320 字节）引导上限
 
 ## 今日完成
 
@@ -23,6 +23,8 @@
    用户态 Shell 和基础工具、`<`/`>`/`>>`/`|`/`&`。
 7. 里程碑 21：四段管道、进程组、控制台前台组、Ctrl+C、
    `jobs/fg/kill/wait` 和后台作业回收。
+8. 里程碑 22：`TASK_STOPPED`、SIGSTOP/SIGCONT、Ctrl+Z、
+   `waitpid(WUNTRACED)`、`bg` 和暂停作业恢复。
 
 关键文档：
 
@@ -31,28 +33,29 @@
 - `docs/MILESTONE_15_PROCESS_ELF.md`
 - `docs/MILESTONE_20_USER_SHELL.md`
 - `docs/MILESTONE_21_JOBS.md`
+- `docs/MILESTONE_22_STOP_RESUME.md`
 - `note/进程模型与ELF开发记录.md`
 
-## 下次继续：里程碑 22
+## 下次继续：里程碑 23
 
-建议主题：**暂停/恢复与最小信号处理**
+建议主题：**持久化磁盘文件系统**
 
 按以下顺序完成：
 
-1. 增加 `TASK_STOPPED` 或可恢复的停止状态。
-2. 实现 `SIGSTOP/SIGCONT` 和 Ctrl+Z。
-3. 扩展 `waitpid` 的 `WUNTRACED` 语义。
-4. 加入 `bg %n`，支持暂停作业后台恢复。
-5. 实现最小用户态信号处理回调与返回现场。
-6. 为 `/bin` 多调用工具增加硬链接，降低重复数据块。
+1. 实现 ATA PIO 扇区读写驱动。
+2. 把现有 1MB 内存 FS 的超级块、inode 和目录格式落盘。
+3. 增加挂载检查与最小一致性修复。
+4. 验证断电重启后文件、目录和 CWD 对象仍可用。
+5. 增加读缓存与脏块回写策略。
+6. 在持久化层稳定后补充硬链接、`rename` 和 `stat`。
 
 建议先只支持：
 
 ```text
-cmd1 | cmd2 | cmd3 | cmd4
-Ctrl+C → 当前前台进程组
-Ctrl+Z → 暂停当前作业
-jobs / fg %n / bg %n
+ATA PIO read/write sector
+mkfs / mount
+create / write / close
+reboot → mount → cat file
 ```
 
 ## 当前已知限制
@@ -63,9 +66,9 @@ jobs / fg %n / bg %n
 - 文件系统为 1MB 内存 FS，单文件最大 48KB。
 - 默认 Shell 仍在内核态；fd/CWD 已支持每进程。
 - 最多四段管道；已有进程组、前台 Ctrl+C 和基础作业表。
-- 信号只有默认终止；尚无 Ctrl+Z、`SIGSTOP/SIGCONT`、`bg` 或用户处理函数。
+- 信号只有默认终止/暂停/恢复；尚无用户态处理函数和待处理信号队列。
 - 无引号、转义、变量展开、通配符和 `;`。
-- fd 上限 16，pipe 缓冲区 1KB；fork 后文件偏移和 pipe 端点已共享。
+- fd 上限 16，pipe 缓冲区 1KB；暂停进程保留全部 VM 和 fd 资源。
 
 ## 下次开始前检查
 

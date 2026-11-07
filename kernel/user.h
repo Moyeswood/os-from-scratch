@@ -73,6 +73,8 @@ typedef struct {
 #define SIGINT   2
 #define SIGKILL  9
 #define SIGTERM 15
+#define SIGCONT 18
+#define SIGSTOP 19
 
 #define O_RDONLY     0x0001
 #define O_WRONLY     0x0002

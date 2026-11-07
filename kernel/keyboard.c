@@ -48,9 +48,12 @@ void keyboard_handler() {
     if (key == SC_CTRL) irq_ctrl_pressed = !(sc & 0x80);
     // Ctrl+C 是终端的中断键: 前台作业存在时直接杀整个进程组,
     // 不再把 'c' 塞进输入缓冲。没有前台作业时仍按普通字符处理。
-    if (key == 0x2E && !(sc & 0x80) && irq_ctrl_pressed &&
-        proc_signal_foreground(SIGINT) == 0)
-        return;
+    if (!(sc & 0x80) && irq_ctrl_pressed) {
+        if (key == 0x2E && proc_signal_foreground(SIGINT) == 0)
+            return;
+        if (key == 0x2C && proc_signal_foreground(SIGSTOP) == 0)
+            return;
+    }
     kbd_push(sc);
     task_wake_kbd();                 // 唤醒等键盘的任务 (下次 IRQ0 把它们切上 CPU)
 }

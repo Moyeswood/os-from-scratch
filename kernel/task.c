@@ -440,6 +440,7 @@ void task_print_status() {
         case TASK_RUNNING:  vga_puts("RUNNING\n\r");  break;
         case TASK_READY:    vga_puts("READY\n\r");    break;
         case TASK_SLEEPING: vga_puts("SLEEPING\n\r"); break;
+        case TASK_STOPPED:  vga_puts("STOPPED\n\r");  break;
         case TASK_ZOMBIE:   vga_puts("ZOMBIE\n\r");   break;
         default:            vga_puts("IDLE\n\r");     break;
         }

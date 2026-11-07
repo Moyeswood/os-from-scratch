@@ -21,11 +21,11 @@ typedef struct {
     int pgid;
     int pids[PIPE_MAX];
     int pid_count;
+    int stopped;
     char text[JOB_TEXT];
 } job_t;
 
 static job_t jobs[JOB_MAX];
-static int next_job_id = 1;
 
 static int slen(const char* s) {
     int n = 0;
@@ -306,7 +306,7 @@ static int execute_builtin(const command_t* cmd) {
         return 0;
     }
     if (scmp(name, "help") == 0) {
-        swrite(1, "builtins: cd exit jobs fg kill wait help\n");
+        swrite(1, "builtins: cd exit jobs fg bg kill wait help\n");
         swrite(1, "tools: echo cat ls pwd mkdir rm\n");
         swrite(1, "syntax: cmd [args] [< in] [> out] [>> out] [| cmd...] [&]\n");
         return 0;
@@ -350,7 +350,8 @@ static int is_parent_builtin(const command_t* cmd) {
     const char* name = basename(cmd->argv[0]);
     return scmp(name, "cd") == 0 || scmp(name, "exit") == 0 ||
            scmp(name, "jobs") == 0 || scmp(name, "fg") == 0 ||
-           scmp(name, "kill") == 0 || scmp(name, "wait") == 0;
+           scmp(name, "bg") == 0 || scmp(name, "kill") == 0 ||
+           scmp(name, "wait") == 0;
 }
 
 static int job_pid_count(const job_t* job) {
@@ -358,6 +359,33 @@ static int job_pid_count(const job_t* job) {
     for (int i = 0; i < job->pid_count; ++i)
         if (job->pids[i] > 0) ++count;
     return count;
+}
+
+static int job_wait(job_t* job) {
+    int status = 0;
+    for (int i = 0; i < job->pid_count; ++i) {
+        if (job->pids[i] <= 0) continue;
+        int result = waitpid_flags(job->pids[i], &status, WUNTRACED);
+        if (result == job->pids[i]) {
+            if (WIFSTOPPED(status)) {
+                job->stopped = 1;
+                return status;
+            }
+            job->pids[i] = 0;
+        } else if (result < 0) {
+            job->pids[i] = 0;
+        }
+    }
+    if (!job_pid_count(job)) job->used = 0;
+    return status;
+}
+
+static void report_stopped(const job_t* job) {
+    swrite(1, "[JOB] stopped ");
+    putdec((uint32_t)job->id);
+    swrite(1, ": ");
+    swrite(1, job->text);
+    swrite(1, "\n");
 }
 
 static void job_remove_pid(int pid) {
@@ -384,27 +412,32 @@ static job_t* find_job(int id) {
 }
 
 static job_t* add_job(int pgid, const int pids[PIPE_MAX], int count,
-                      const char* text) {
+                      const char* text, int announce) {
     job_t* slot = 0;
+    int slot_id = 0;
     for (int i = 0; i < JOB_MAX; ++i) {
         if (!jobs[i].used) {
             slot = &jobs[i];
+            slot_id = i + 1;
             break;
         }
     }
     if (!slot) return 0;
     slot->used = 1;
-    slot->id = next_job_id++;
+    slot->id = slot_id;
     slot->pgid = pgid;
     slot->pid_count = count;
+    slot->stopped = 0;
     for (int i = 0; i < PIPE_MAX; ++i)
         slot->pids[i] = i < count ? pids[i] : 0;
     scopy(slot->text, text, JOB_TEXT);
-    swrite(1, "[JOB] started ");
-    putdec((uint32_t)slot->id);
-    swrite(1, ": ");
-    swrite(1, slot->text);
-    swrite(1, "\n");
+    if (announce) {
+        swrite(1, "[JOB] started ");
+        putdec((uint32_t)slot->id);
+        swrite(1, ": ");
+        swrite(1, slot->text);
+        swrite(1, "\n");
+    }
     return slot;
 }
 
@@ -418,7 +451,7 @@ static int builtin_jobs(void) {
         swrite(1, "[JOB] ");
         putdec((uint32_t)job->id);
         swrite(1, " ");
-        swrite(1, alive ? "RUNNING " : "DONE ");
+        swrite(1, alive ? (job->stopped ? "STOPPED " : "RUNNING ") : "DONE ");
         swrite(1, job->text);
         swrite(1, "\n");
         shown = 1;
@@ -446,18 +479,52 @@ static int builtin_fg(const command_t* cmd) {
         job->used = 0;
         return 0;
     }
+    if (job->stopped) {
+        if (kill(-job->pgid, SIGCONT) < 0) {
+            swrite(2, "fg: cannot resume job\n");
+            return 1;
+        }
+        job->stopped = 0;
+    }
     swrite(1, "[JOB] foreground ");
     putdec((uint32_t)job->id);
     swrite(1, "\n");
     tcsetpgrp(job->pgid);
-    int status = 0;
-    for (int i = 0; i < job->pid_count; ++i) {
-        if (job->pids[i] > 0 && waitpid(job->pids[i], &status) > 0)
-            job->pids[i] = 0;
-    }
+    int status = job_wait(job);
     tcsetpgrp(0);
-    job->used = 0;
-    return status & 0xFF;
+    if (job->stopped) {
+        report_stopped(job);
+        return WSTOPSIG(status);
+    }
+    return WEXITSTATUS(status);
+}
+
+static int builtin_bg(const command_t* cmd) {
+    if (cmd->argc < 2) {
+        swrite(2, "bg: missing job\n");
+        return 1;
+    }
+    int id;
+    if (parse_number(cmd->argv[1], &id) < 0) return 1;
+    reap_background();
+    job_t* job = find_job(id);
+    if (!job) {
+        swrite(2, "bg: no such job\n");
+        return 1;
+    }
+    if (!job->stopped) {
+        swrite(2, "bg: job is not stopped\n");
+        return 1;
+    }
+    if (kill(-job->pgid, SIGCONT) < 0) {
+        swrite(2, "bg: cannot resume job\n");
+        return 1;
+    }
+    job->stopped = 0;
+    swrite(1, "[JOB] background ");
+    putdec((uint32_t)job->id);
+    swrite(1, "\n");
+    return 0;
 }
 
 static int builtin_kill(const command_t* cmd) {
@@ -496,22 +563,24 @@ static int builtin_wait(void) {
     for (int j = 0; j < JOB_MAX; ++j) {
         job_t* job = &jobs[j];
         if (!job->used) continue;
-        for (int i = 0; i < job->pid_count; ++i) {
-            if (job->pids[i] > 0 && waitpid(job->pids[i], &status) > 0)
-                job->pids[i] = 0;
-        }
-        job->used = 0;
+        status = job_wait(job);
+        if (job->stopped) return WSTOPSIG(status);
     }
-    return status & 0xFF;
+    return WEXITSTATUS(status);
 }
 
 static int execute_pipeline(command_t cmds[PIPE_MAX], int count,
                             int background, const char* text) {
     if (count == 1 && !background && is_parent_builtin(&cmds[0])) {
         const char* name = basename(cmds[0].argv[0]);
-        if (scmp(name, "exit") == 0) return -1;
+        if (scmp(name, "exit") == 0) {
+            for (int i = 0; i < JOB_MAX; ++i)
+                if (jobs[i].used) kill(-jobs[i].pgid, SIGTERM);
+            return -1;
+        }
         if (scmp(name, "jobs") == 0) return builtin_jobs();
         if (scmp(name, "fg") == 0) return builtin_fg(&cmds[0]);
+        if (scmp(name, "bg") == 0) return builtin_bg(&cmds[0]);
         if (scmp(name, "kill") == 0) return builtin_kill(&cmds[0]);
         if (scmp(name, "wait") == 0) return builtin_wait();
         return run_command(&cmds[0], 0);
@@ -559,21 +628,22 @@ static int execute_pipeline(command_t cmds[PIPE_MAX], int count,
     }
     if (pids[0] < 0) return 1;
 
-    if (background) {
-        if (!add_job(pids[0], pids, count, text)) {
-            swrite(2, "sh: job table full\n");
-            kill(-pids[0], SIGTERM);
-            return 1;
-        }
-        return 0;
+    job_t* job = add_job(pids[0], pids, count, text, background);
+    if (!job) {
+        swrite(2, "sh: job table full\n");
+        kill(-pids[0], SIGTERM);
+        return 1;
     }
+    if (background) return 0;
 
     tcsetpgrp(pids[0]);
-    int status = 0;
-    for (int i = 0; i < count; ++i)
-        if (pids[i] > 0 && waitpid(pids[i], &status) < 0) status = 1;
+    int status = job_wait(job);
     tcsetpgrp(0);
-    return status & 0xFF;
+    if (job->stopped) {
+        report_stopped(job);
+        return WSTOPSIG(status);
+    }
+    return WEXITSTATUS(status);
 }
 
 static void shell_prompt(void) {

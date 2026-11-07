@@ -54,8 +54,16 @@ static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 #define SIGINT   2
 #define SIGKILL  9
 #define SIGTERM 15
+#define SIGCONT 18
+#define SIGSTOP 19
 
-#define WNOHANG 1
+#define WNOHANG   1
+#define WUNTRACED 2
+
+#define WAIT_STOPPED 0x7F
+#define WIFSTOPPED(status) (((status) & 0xFF) == WAIT_STOPPED)
+#define WSTOPSIG(status) (((status) >> 8) & 0xFF)
+#define WEXITSTATUS(status) ((status) & 0xFF)
 
 typedef struct {
     uint32_t inum;

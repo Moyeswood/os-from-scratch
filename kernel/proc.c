@@ -185,12 +185,34 @@ static task_t* find_child(task_t* parent, int requested_pid, int zombie_only) {
     return 0;
 }
 
+static task_t* find_stopped_child(task_t* parent, int requested_pid) {
+    if (!parent) return 0;
+    for (int i = 5; i < MAX_TASKS; ++i) {
+        task_t* t = task_at(i);
+        if (!t || !t->is_user ||
+            t->parent_pid != (int)parent->pid ||
+            t->state != TASK_STOPPED) continue;
+        if (requested_pid != -1 && (int)t->pid != requested_pid) continue;
+        return t;
+    }
+    return 0;
+}
+
 static int reap_child(task_t* child) {
     int pid = (int)child->pid;
     int idx = task_slot_of(child);
     vm_destroy(child);
     task_free_slot(idx);
     return pid;
+}
+
+static int write_wait_status(task_t* parent, int* status, int value) {
+    if (!status) return 0;
+    if (vm_write_user(parent, (uint32_t)status, &value, sizeof(value)) < 0) {
+        serial_puts("[PROC] waitpid: status write failed\n\r");
+        return -1;
+    }
+    return 0;
 }
 
 static void detach_children(int parent_pid) {
@@ -233,16 +255,26 @@ int proc_waitpid(int pid, int* status, int flags) {
         task_t* child = find_child(parent, pid, 1);
         if (child) {
             int code = child->exit_code;
-            if (status &&
-                vm_write_user(parent, (uint32_t)status, &code,
-                              sizeof(code)) < 0) {
+            if (write_wait_status(parent, status, code) < 0) {
                 __asm__ volatile("sti");
-                serial_puts("[PROC] waitpid: status write failed\n\r");
                 return -1;
             }
             int result = reap_child(child);
             __asm__ volatile("sti");
             return result;
+        }
+        if (flags & 2) {   // WUNTRACED
+            child = find_stopped_child(parent, pid);
+            if (child) {
+                int code = (SIGSTOP << 8) | 0x7F;
+                if (write_wait_status(parent, status, code) < 0) {
+                    __asm__ volatile("sti");
+                    return -1;
+                }
+                int result = (int)child->pid;
+                __asm__ volatile("sti");
+                return result;
+            }
         }
         if (!find_child(parent, pid, 0)) {
             __asm__ volatile("sti");
@@ -363,6 +395,33 @@ static int kill_task(task_t* t, const char* reason) {
     return 0;
 }
 
+static int stop_task(task_t* t) {
+    if (!t || !t->is_user || t->state == TASK_ZOMBIE ||
+        t->state == TASK_STOPPED) return -1;
+    serial_puts("[PROC] pid ");
+    serial_put_hex(t->pid);
+    serial_puts(" (");
+    serial_puts(t->name);
+    serial_puts(") stopped by SIGSTOP\n\r");
+    t->state = TASK_STOPPED;
+    task_wake_pid(t->pid);
+    return 0;
+}
+
+static int continue_task(task_t* t) {
+    if (!t || !t->is_user || t->state != TASK_STOPPED) return -1;
+    serial_puts("[PROC] pid ");
+    serial_put_hex(t->pid);
+    serial_puts(" (");
+    serial_puts(t->name);
+    serial_puts(") resumed by SIGCONT\n\r");
+    t->state = TASK_READY;
+    t->wait_flags = 0;
+    t->sleep_until = 0;
+    task_wake_pid(t->pid);
+    return 0;
+}
+
 int proc_kill(int pid) {
     return kill_task(task_by_pid(pid), "kill command");
 }
@@ -388,22 +447,39 @@ int proc_set_foreground(int pgid) {
 }
 
 int proc_signal(int pid, int sig) {
-    if (!pid || (sig != SIGINT && sig != SIGKILL && sig != SIGTERM))
+    if (!pid || (sig != SIGINT && sig != SIGKILL && sig != SIGTERM &&
+                 sig != SIGSTOP && sig != SIGCONT))
         return -1;
-    int killed = 0;
+    int affected = 0;
+    int direction = pid < 0 ? -pid : pid;
     if (pid < 0) {
-        int pgid = -pid;
         for (int i = 5; i < MAX_TASKS; ++i) {
             task_t* t = task_at(i);
-            if (t && t->is_user && t->pgid == pgid &&
-                kill_task(t, sig == SIGINT ? "SIGINT" : "SIGTERM") == 0)
-                ++killed;
+            if (!t || !t->is_user || t->pgid != direction ||
+                t->state == TASK_ZOMBIE) continue;
+            if (sig == SIGSTOP) {
+                if (t->state == TASK_STOPPED || stop_task(t) == 0) ++affected;
+            } else if (sig == SIGCONT) {
+                if (t->state != TASK_STOPPED || continue_task(t) == 0) ++affected;
+            } else {
+                ++affected;
+                kill_task(t, sig == SIGINT ? "SIGINT" : "SIGTERM");
+            }
         }
     } else {
-        killed = kill_task(task_by_pid(pid),
-                           sig == SIGINT ? "SIGINT" : "SIGTERM") == 0;
+        task_t* t = task_by_pid(pid);
+        if (t && t->is_user && t->state != TASK_ZOMBIE) {
+            if (sig == SIGSTOP) {
+                if (t->state == TASK_STOPPED || stop_task(t) == 0) ++affected;
+            } else if (sig == SIGCONT) {
+                if (t->state != TASK_STOPPED || continue_task(t) == 0) ++affected;
+            } else {
+                ++affected;
+                kill_task(t, sig == SIGINT ? "SIGINT" : "SIGTERM");
+            }
+        }
     }
-    return killed ? 0 : -1;
+    return affected ? 0 : -1;
 }
 
 int proc_signal_foreground(int sig) {

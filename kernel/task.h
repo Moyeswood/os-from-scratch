@@ -35,6 +35,7 @@ typedef enum {
     TASK_READY,    // 就绪, 等 CPU
     TASK_RUNNING,  // 正在执行
     TASK_SLEEPING, // 睡眠 (wait_flags 说明等什么)
+    TASK_STOPPED,  // 里程碑 22: 作业暂停, SIGCONT 后可恢复
     TASK_ZOMBIE    // 里程碑 11b: 已退出, 等父进程收尸
 } task_state_t;
 

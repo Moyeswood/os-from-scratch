@@ -97,7 +97,7 @@ def mark():
 
 
 def since():
-    return log()[base:]
+    return serial_buf[base:].decode(errors="replace")
 
 
 results = []
@@ -181,17 +181,35 @@ try:
     run("wait", "sh:/>", name="wait background group")
     run("jobs", "sh:/>", "[JOB] no jobs", name="jobs clears reaped job")
 
-    run("spinner &", "sh:/>", "[JOB] started 2: spinner &",
+    run("spinner &", "sh:/>", "[JOB] started 1: spinner &",
         name="second background job")
     mark()
-    type_text("fg %2\n")
-    check("fg moves job to foreground", wait_since("[JOB] foreground 2",
+    type_text("fg %1\n")
+    check("fg moves job to foreground", wait_since("[JOB] foreground 1",
                                                    10.0, "fg-command"))
+    send("sendkey ctrl-z", wait=0.3)
+    check("ctrl-z stops foreground group", wait_since(
+        "stopped by SIGSTOP", 10.0, "ctrl-z-stop"))
+    check("stopped job state reported", wait_since(
+        "[JOB] stopped 1: spinner &", 10.0, "stopped-report"))
+    check("ctrl-z restores shell", wait_since("sh:/> ", 10.0,
+                                              "ctrl-z-prompt"))
+    run("jobs", "sh:/>", "[JOB] 1 STOPPED spinner &",
+        name="jobs lists stopped job")
+    run("bg %1", "sh:/>", "[JOB] background 1",
+        name="bg resumes stopped job")
+    run("jobs", "sh:/>", "[JOB] 1 RUNNING spinner &",
+        name="bg job runs again")
+    mark()
+    type_text("fg %1\n")
+    check("fg reacquires running job", wait_since("[JOB] foreground 1",
+                                                  10.0, "fg-resume"))
     send("sendkey ctrl-c", wait=0.3)
     check("ctrl-c ends resumed job", wait_since(
         "[PROC] console signal pgid=", 10.0, "fg-ctrl-c"))
     check("fg ctrl-c restores shell", wait_since("sh:/> ", 10.0,
                                                  "fg-prompt"))
+    run("jobs", "sh:/>", "[JOB] no jobs", name="fg job reaped")
 
     run("echo bg-ok > /bgout &", "sh:/>", name="background redirect")
     time.sleep(0.5)
