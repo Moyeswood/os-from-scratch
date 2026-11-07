@@ -100,7 +100,7 @@ static inline void* sbrk(int delta) {
     return (void*)old_addr;
 }
 
-// 教学版用户堆分配器 (里程碑 13):
+// 教学版用户堆分配器 (里程碑 16):
 //   - 16 字节块头, 对齐后返回 8 字节对齐的 payload;
 //   - 空闲块按地址排序的单链表, malloc 首适配;
 //   - free 与相邻空闲块合并, 堆尾空闲块直接 sbrk 收缩;

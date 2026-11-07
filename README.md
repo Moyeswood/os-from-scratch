@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-17%2F17%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-428%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-18%2F18%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-434%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -25,7 +25,7 @@ NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编�
 ## ✨ 核心特性
 
 ### 🖥️ 底层基础
-- **引导加载器**：512 字节手写引导扇区，从软盘加载内核（150KB 上限，含 64KB 段回绕处理）
+- **引导加载器**：512 字节手写引导扇区，从软盘加载内核（180KB 上限，含 64KB 段回绕处理）
 - **保护模式**：GDT 段机制、A20 门、32 位保护模式切换
 - **内存管理**：BIOS E820 内存地图解析 + 保留区保护位图 + 物理页分配器与引用计数 + 内核 `kmalloc/kfree/krealloc` 堆 + 32MB 恒等映射分页
 - **按进程虚拟内存**：独立页目录/页表、首次访问补零页、fork COW、栈 guard page、`brk` 堆收缩与匿名 `mmap` 窗口
@@ -77,7 +77,7 @@ nano 风格的 `edit` 命令：
 
 ### 🎮 娱乐与应用
 - **俄罗斯方块**：7-bag 随机、wall kick、锁定延迟、暂存、消行动画、5 套主题、蜂鸣音效
-- **超级马里奥**：16×16 图块横版跳跃（卷轴镜头+视差背景、8.8 定点物理、板栗仔、金币/问号块/水管/旗杆）
+- **超级马里奥**：双主题关卡、超级/星星能力、检查点、连踩计分、可变跳跃、跳跃缓冲/Coyote time、粒子与震屏、中途重试和精致 HUD
 - **🚀 开机画面**：深蓝渐变星空（DAC 调色板编程）+ 32px 彩色 "HELLO WORLD" 逐字揭示动画 + "NEWOS!" 副标题，任意键跳过，`splash` 命令可重放
 
 ## 💻 命令参考
@@ -166,9 +166,13 @@ printf("read %d: %s\n", n, buf); return 0; }
 |---|
 | <img src="note/memdemo.png" width="480" alt="用户堆、fork 堆隔离与 waitpid"/> |
 
+| 超级马里奥标题 | 超级马里奥游戏画面 |
+|---|---|
+| <img src="note/mario-title.png" width="360" alt="超级马里奥标题"/> | <img src="note/mario.png" width="360" alt="超级马里奥游戏画面"/> |
+
 ## 🧪 自动化测试
 
-16 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**文档统计 428 项**：
+16 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**文档统计 434 项**：
 
 ```bash
 python3 tools/test-memory.py  # E820 + 页分配 + 内核堆 (15 项)
@@ -178,7 +182,7 @@ python3 tools/test-fs.py       # 文件系统 (43 项)
 python3 tools/test-edit.py     # 编辑器/撤销/搜索/光标 (67 项)
 python3 tools/test-cc.py       # C 编译器 (41 项)
 python3 tools/test-preempt.py  # 抢占调度 (7 项)
-python3 tools/test-mario.py    # 马里奥   (12 项)
+python3 tools/test-mario.py    # 马里奥/道具/界面/双主题 (18 项)
 python3 tools/test-user.py     # Ring 3 用户态 (36 项)
 python3 tools/test-sched.py    # PCB 调度器 + 键盘缓冲 (15 项)
 python3 tools/test-proc.py     # 多进程/fork/后台/kill (36 项)
@@ -258,6 +262,7 @@ python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 项)
 | 15 | `waitpid` + argv/envp 初始栈 + ELF32 PT_LOAD/BSS + 只读代码页 |
 | 16 | 用户态空闲链表 allocator（首适配 + 分裂 + 相邻合并 + 堆尾收缩 + calloc/realloc） |
 | 17 | 编辑器增强（光标残影修复 + 撤销重做 + 搜索跳行 + 按词导航） |
+| 18 | 马里奥增强（双关卡、能力块、检查点、连踩、粒子震屏、精致 HUD） |
 
 每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
 

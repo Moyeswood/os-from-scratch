@@ -26,9 +26,11 @@
 #define HUD_H    8
 #define MW       12      // 马里奥碰撞盒
 #define MH       16
-#define TIME_START 600
-#define GOOMBA_N 6
+#define TIME_START 500
+#define GOOMBA_N 8
+#define PARTICLE_N 28
 #define FLAG_COL 155
+#define CHECKPOINT_COL 76
 
 // 定点数 (8.8): 物理量全部用 256 倍整数, 免浮点
 #define FIX8(n) ((int)((n) * 256))
@@ -51,9 +53,11 @@ enum {
     COL_RED = 18, COL_SKIN = 19, COL_HAIR = 20,
     COL_OVER = 21, COL_SHOE = 22,
     COL_GOOMBA = 23, COL_GOOMBA_L = 24, COL_FEET = 25,
+    COL_RED_D = 26, COL_BLUE_L = 27, COL_GOLD_D = 28,
+    COL_PANEL = 29, COL_PANEL_L = 30, COL_STAR = 31,
 };
 
-static void mario_palette() {
+static void mario_palette(int stage) {
     gfx_set_color(COL_SKY, 36, 58, 63);
     gfx_set_color(COL_WHITE, 63, 63, 63);
     gfx_set_color(COL_HILL, 20, 48, 12);
@@ -79,6 +83,23 @@ static void mario_palette() {
     gfx_set_color(COL_GOOMBA, 46, 18, 10);
     gfx_set_color(COL_GOOMBA_L, 58, 30, 14);
     gfx_set_color(COL_FEET, 8, 6, 4);
+    gfx_set_color(COL_RED_D, 36, 2, 4);
+    gfx_set_color(COL_BLUE_L, 20, 38, 62);
+    gfx_set_color(COL_GOLD_D, 42, 28, 2);
+    gfx_set_color(COL_PANEL, 3, 7, 18);
+    gfx_set_color(COL_PANEL_L, 16, 28, 52);
+    gfx_set_color(COL_STAR, 63, 56, 22);
+    if (stage == 1) {
+        gfx_set_color(COL_SKY, 10, 10, 34);
+        gfx_set_color(COL_HILL, 20, 18, 48);
+        gfx_set_color(COL_GROUND, 48, 34, 30);
+        gfx_set_color(COL_GROUND_D, 26, 20, 24);
+        gfx_set_color(COL_BRICK, 34, 16, 30);
+        gfx_set_color(COL_BRICK_L, 55, 26, 38);
+        gfx_set_color(COL_PIPE, 28, 24, 54);
+        gfx_set_color(COL_PIPE_L, 48, 42, 62);
+        gfx_set_color(COL_PIPE_D, 12, 10, 30);
+    }
 }
 
 // ---------- 关卡 (文本画, 每行 160 字符) ----------
@@ -92,7 +113,7 @@ static const char* level_rom[ROWS] = {
     "................................................................................................................................................................",
     "................................................................................................................................................................",
     ".....................CCC..........................................CCC...................................B....................CCC.......................................",
-    "......................?.........................BBB..................................?.............B..............................?........................|....",
+    "......................M.........................BBB..................................S.............B..............................?........................|....",
     "..................................................................................................BB.......................................................|....",
     "........................................TR.......................................................BBB..........TR...........................................|....",
     "........................................LJ....................TR................................BBBB..........LJ............................TR.............|....",
@@ -103,7 +124,7 @@ static const char* level_rom[ROWS] = {
 enum {
     T_GROUND = 1, T_BRICK = 2, T_QUES = 3, T_USED = 4,
     T_PIPE_TL = 5, T_PIPE_TR = 6, T_PIPE_BL = 7, T_PIPE_BR = 8,
-    T_POLE = 9, T_COIN = 10,
+    T_POLE = 9, T_COIN = 10, T_QUES_M = 11, T_QUES_S = 12,
 };
 
 // ---------- 像素画 (字符 = 颜色, 见 mario_palette) ----------
@@ -429,6 +450,11 @@ static int vx, vy;
 static int on_ground, face, mframe;
 static int lives, score, coins, time_left, time_tick;
 static int invuln, dead, gameover, won, win_timer, paused;
+static int power, star_timer, coyote, jump_buffer;
+static int combo, combo_timer;
+static int stage, checkpoint_col, transition, title_select;
+static int shake, message_timer;
+static char message[28];
 static int cam;              // 镜头 (px)
 static int held_left, held_right, held_jump;
 static int jump_pressed;     // 跳跃按下锁存 (瞬时按下+释放对也不丢)
@@ -442,8 +468,14 @@ typedef struct {
 } goomba_t;
 static goomba_t goombas[GOOMBA_N];
 
+typedef struct {
+    int x, y, vx, vy, life;
+    uint8_t color;
+} particle_t;
+static particle_t particles[PARTICLE_N];
+
 // 转换后的像素画缓冲
-static uint8_t tile_art[11][256];
+static uint8_t tile_art[13][256];
 static uint8_t mario_art[3][192];
 static uint8_t goomba_art[3][256];
 static uint8_t coin_art[4][64];
@@ -485,6 +517,8 @@ static uint8_t level_char(char ch) {
         case '#': return T_GROUND;
         case 'B': return T_BRICK;
         case '?': return T_QUES;
+        case 'M': return T_QUES_M;
+        case 'S': return T_QUES_S;
         case 'U': return T_USED;
         case 'T': return T_PIPE_TL;
         case 'R': return T_PIPE_TR;
@@ -503,10 +537,12 @@ static void art_load(const char* art[], int w, int h, uint8_t* out) {
 }
 
 static void mario_init() {
-    mario_palette();
+    mario_palette(0);
     art_load(art_ground, 16, 16, tile_art[T_GROUND]);
     art_load(art_brick, 16, 16, tile_art[T_BRICK]);
     art_load(art_ques, 16, 16, tile_art[T_QUES]);
+    art_load(art_ques, 16, 16, tile_art[T_QUES_M]);
+    art_load(art_ques, 16, 16, tile_art[T_QUES_S]);
     art_load(art_used, 16, 16, tile_art[T_USED]);
     art_load(art_pipe_l, 16, 16, tile_art[T_PIPE_TL]);
     art_load(art_pipe_r, 16, 16, tile_art[T_PIPE_TR]);
@@ -529,9 +565,14 @@ static void mario_init() {
 
 // ---------- 关卡/碰撞 ----------
 static int tile_solid(int t) {
-    return t == T_GROUND || t == T_BRICK || t == T_QUES || t == T_USED
+    return t == T_GROUND || t == T_BRICK || t == T_QUES ||
+        t == T_QUES_M || t == T_QUES_S || t == T_USED
         || t == T_PIPE_TL || t == T_PIPE_TR || t == T_PIPE_BL || t == T_PIPE_BR
         || t == T_POLE;
+}
+
+static int tile_question(int t) {
+    return t == T_QUES || t == T_QUES_M || t == T_QUES_S;
 }
 
 // 屏幕像素 (px,py) 处的图块是否实心 (越界: 左右=墙, 上下=开放)
@@ -544,22 +585,48 @@ static int solid_at(int px, int py) {
 }
 
 // ---------- 游戏状态 ----------
-static void init_game() {
+static void spawn_burst(int x, int y, uint8_t color, int count);
+static void set_message(const char* text, int ticks);
+
+static void clear_dynamic_state(void) {
+    for (int i = 0; i < PARTICLE_N; i++) particles[i].life = 0;
+    shake = 0; message_timer = 0; message[0] = '\0';
+}
+
+static void load_stage(int index, int from_checkpoint, int keep_power) {
+    stage = index;
+    mario_palette(stage);
     for (int r = 0; r < ROWS; r++)
         for (int c = 0; c < COLS; c++)
             level[r][c] = level_char(level_rom[r][c]);
 
-    mx = FIX8(32); my = FIX8(168);
+    level[7][8] = T_QUES_M;
+    if (stage == 1) {
+        level[7][12] = T_QUES_S;
+        for (int c = 34; c < 39; c++) level[11][c] = 0;
+        for (int c = 100; c < 106; c++) level[11][c] = 0;
+        for (int c = 38; c < 42; c++) level[8][c] = T_BRICK;
+        for (int c = 38; c < 42; c += 2) level[6][c] = T_COIN;
+        for (int c = 108; c < 113; c++) level[7][c] = T_BRICK;
+    }
+
+    int start_col = from_checkpoint ? checkpoint_col : 2;
+    mx = start_col * TILE << 8;
+    my = FIX8(168);
     vx = 0; vy = 0;
     on_ground = 0; face = 1; mframe = 0;
-    lives = 3; score = 0; coins = 0;
     time_left = TIME_START; time_tick = 2;
     invuln = 0; dead = 0; gameover = 0; won = 0; win_timer = 0; paused = 0;
     cam = 0;
     held_left = held_right = held_jump = 0;
-    jump_pressed = 0;
+    jump_pressed = 0; coyote = 0; jump_buffer = 0;
+    combo = 0; combo_timer = 0; transition = 0;
+    if (!keep_power) { power = 0; star_timer = 0; }
+    clear_dynamic_state();
 
-    static const int gcols[GOOMBA_N] = { 26, 50, 75, 92, 120, 135 };
+    static const int gcols0[GOOMBA_N] = { 26, 50, 66, 87, 104, 120, 132, 145 };
+    static const int gcols1[GOOMBA_N] = { 22, 42, 58, 77, 90, 114, 131, 146 };
+    const int* gcols = stage ? gcols1 : gcols0;
     for (int i = 0; i < GOOMBA_N; i++) {
         goombas[i].x = gcols[i] * TILE << 8;
         goombas[i].y = FIX8(168);
@@ -568,6 +635,25 @@ static void init_game() {
         goombas[i].alive = 1;
         goombas[i].squashed = 0;
         goombas[i].sq_timer = 0;
+    }
+}
+
+static void init_game(void) {
+    lives = 3; score = 0; coins = 0;
+    checkpoint_col = 0; power = 0; star_timer = 0;
+    load_stage(title_select, 0, 0);
+}
+
+static void retry_stage(void) {
+    load_stage(stage, checkpoint_col != 0, 0);
+}
+
+static void next_stage(void) {
+    checkpoint_col = 0;
+    if (stage == 0) load_stage(1, 0, 1);
+    else {
+        won = 2;
+        win_timer = 260;
     }
 }
 
@@ -585,8 +671,12 @@ static void handle_key(int sc) {
 
     if (k == 0x01 && press) { quit = 1; return; }              // ESC 退出
     if (gameover && press) { title_screen(); init_game(); return; }
-    if (k == 0x13 && press) { init_game(); return; }           // R 重开
-    if (k == 0x19 && press) { paused ^= 1; return; }           // P 暂停
+    if (k == 0x13 && press) { retry_stage(); return; }         // R 重开当前关
+    if (k == 0x19 && press) {                                  // P 暂停
+        paused ^= 1;
+        frame_dirty = 1;
+        return;
+    }
 
     if (k == 0x4B || k == 0x1E) held_left = press;             // 左 / A
     if (k == 0x4D || k == 0x20) held_right = press;            // 右 / D
@@ -621,16 +711,61 @@ static void move_mario_x() {
     }
 }
 
+static void spawn_burst(int x, int y, uint8_t color, int count) {
+    for (int n = 0; n < count; n++) {
+        for (int i = 0; i < PARTICLE_N; i++) {
+            particle_t* p = &particles[i];
+            if (p->life) continue;
+            p->x = x;
+            p->y = y;
+            p->vx = ((n & 1) ? 1 : -1) * (32 + (n * 19) % 48);
+            p->vy = -80 - (n * 23) % 96;
+            p->life = 18 + (n * 7) % 18;
+            p->color = color;
+            break;
+        }
+    }
+}
+
+static void coin_reward(void) {
+    coins++;
+    score += 200;
+    if (coins >= 100) {
+        coins = 0;
+        lives++;
+        beep(2711);
+    }
+}
+
 static void bump_block(int c, int r) {
     if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return;
     uint8_t* t = &level[r][c];
-    if (*t == T_QUES) {           // 顶问号块: 出金币
+    if (tile_question(*t)) {
+        int kind = *t;
         *t = T_USED;
-        coins++;
-        score += 200;
-        beep(1356);
-    } else if (*t == T_BRICK) {   // 顶砖块: 只有响声 (小马里奥顶不碎)
-        beep(905);
+        if (kind == T_QUES_M) {
+            power = 1;
+            set_message("SUPER CHARGE!", 90);
+        } else if (kind == T_QUES_S) {
+            star_timer = 420;
+            set_message("STAR POWER!", 90);
+        }
+        else coin_reward();
+        spawn_burst(c * TILE + 8, r * TILE + HUD_H + 4,
+                    kind == T_QUES_S ? COL_STAR : COL_COIN, 7);
+        shake = 5;
+        beep(kind == T_QUES ? 1356 : 1808);
+    } else if (*t == T_BRICK) {
+        if (power) {
+            *t = 0;
+            score += 50;
+            spawn_burst(c * TILE + 8, r * TILE + HUD_H + 8, COL_BRICK_L, 10);
+            shake = 7;
+            beep(1356);
+        } else {
+            shake = 3;
+            beep(905);
+        }
     }
 }
 
@@ -675,8 +810,9 @@ static void collect_coins() {
             if (c < 0 || c >= COLS || r < 0 || r >= ROWS) continue;
             if (level[r][c] == T_COIN) {
                 level[r][c] = 0;
-                coins++;
-                score += 200;
+                coin_reward();
+                spawn_burst(c * TILE + 8, r * TILE + HUD_H + 8,
+                            COL_COIN, 5);
                 beep(1356);
             }
         }
@@ -686,7 +822,22 @@ static void start_death() {
     dead = 1;
     vy = FIX8(-6);       // 死亡跳起后坠落
     vx = 0;
+    shake = 9;
+    spawn_burst((mx >> 8) + 6, (my >> 8) + 8, COL_WHITE, 12);
     beep(10847);
+}
+
+static void hurt_mario(void) {
+    if (star_timer || invuln) return;
+    if (power) {
+        power = 0;
+        invuln = 100;
+        shake = 8;
+        spawn_burst((mx >> 8) + 6, (my >> 8) + 8, COL_PANEL_L, 12);
+        beep(1808);
+    } else {
+        start_death();
+    }
 }
 
 static void update_dead() {
@@ -695,11 +846,32 @@ static void update_dead() {
     if ((my >> 8) > 240) {          // 掉出屏幕: 扣命重来
         lives--;
         if (lives > 0) {
-            init_game();
+            retry_stage();
             invuln = 90;            // 重生短暂无敌
         } else {
             gameover = 1;
         }
+    }
+}
+
+static void set_message(const char* text, int ticks) {
+    int i = 0;
+    while (text[i] && i < (int)sizeof(message) - 1) {
+        message[i] = text[i];
+        i++;
+    }
+    message[i] = '\0';
+    message_timer = ticks;
+}
+
+static void update_particles(void) {
+    for (int i = 0; i < PARTICLE_N; i++) {
+        particle_t* p = &particles[i];
+        if (!p->life) continue;
+        p->x += p->vx >> 4;
+        p->y += p->vy >> 4;
+        p->vy += 14;
+        p->life--;
     }
 }
 
@@ -740,16 +912,26 @@ static void update_goombas() {
         // 与马里奥的碰撞
         if (mpx + MW - 1 >= gx && mpx <= gx + 15 &&
             mpy + MH - 1 >= gy && mpy <= gy + 15) {
-            if (vy > 0 && (mpy + MH - 1) <= gy + 9) {
+            if (star_timer) {
+                g->squashed = 1;
+                g->sq_timer = 25;
+                score += 300;
+                spawn_burst(gx + 8, gy + 8, COL_STAR, 9);
+                beep(5423);
+            } else if (vy > 0 && (mpy + MH - 1) <= gy + 9) {
                 // 踩扁: 加分 + 反弹
                 g->squashed = 1;
                 g->sq_timer = 25;
-                score += 100;
+                combo = combo_timer > 0 ? combo + 1 : 1;
+                if (combo > 5) combo = 5;
+                combo_timer = 100;
+                score += 100 * combo;
+                spawn_burst(gx + 8, gy + 8, COL_WHITE, 6);
                 beep(5423);
                 vy = FIX8(-4);
                 on_ground = 0;
-            } else if (!invuln) {
-                start_death();
+            } else {
+                hurt_mario();
             }
         }
     }
@@ -757,10 +939,18 @@ static void update_goombas() {
 
 static void update() {
     frame_dirty = 1;
-    if (dead) { update_dead(); return; }
+    if (dead) { update_dead(); update_particles(); return; }
     if (gameover) return;
     if (won) {
-        if (--win_timer <= 0) { title_screen(); init_game(); }
+        if (--win_timer <= 0) {
+            if (won == 1) {
+                won = 0;
+                next_stage();
+            } else {
+                title_screen();
+                init_game();
+            }
+        }
         return;
     }
 
@@ -770,22 +960,34 @@ static void update() {
         if (--time_left <= 0) { start_death(); return; }
     }
     if (invuln > 0) invuln--;
+    if (star_timer > 0) star_timer--;
+    if (combo_timer > 0) combo_timer--;
+    if (message_timer > 0) message_timer--;
+    if (shake > 0) shake--;
 
     // 输入 → 速度
     if (held_left && !held_right) { vx = -RUN_V; face = -1; }
     else if (held_right && !held_left) { vx = RUN_V; face = 1; }
     else vx = 0;
 
-    // 跳跃 (按下沿触发, 消费锁存)
-    if (jump_pressed && on_ground) {
+    // 跳跃缓冲 + coyote time: 更宽容的起跳窗口。
+    if (jump_pressed) jump_buffer = 7;
+    if (on_ground) coyote = 6;
+    else if (coyote > 0) coyote--;
+    if (jump_buffer > 0 && coyote > 0) {
         vy = JUMP_V;
         on_ground = 0;
+        coyote = 0;
+        jump_buffer = 0;
+        spawn_burst((mx >> 8) + 4, (my >> 8) + MH, COL_WHITE, 3);
         beep(1808);
+    } else if (jump_buffer > 0) {
+        jump_buffer--;
     }
     jump_pressed = 0;
 
-    // 重力 (每滴答加速, 限速)
-    vy += GRAV;
+    // 按住跳键获得稍高的上升段，形成可变跳跃高度。
+    vy += (held_jump && vy < 0) ? GRAV - FIX8(0.08) : GRAV;
     if (vy > MAX_FALL) vy = MAX_FALL;
 
     // 物理 + 交互
@@ -793,13 +995,27 @@ static void update() {
     move_mario_y();
     collect_coins();
     update_goombas();
+    update_particles();
+
+    if (on_ground && combo_timer == 0) combo = 0;
+
+    // 中途检查点：死亡后不会永远退回关卡开头。
+    if (!checkpoint_col &&
+        (mx >> 8) >= CHECKPOINT_COL * TILE) {
+        checkpoint_col = CHECKPOINT_COL;
+        score += 500;
+        set_message("CHECKPOINT!", 100);
+        spawn_burst((mx >> 8) + 6, (my >> 8) + 8, COL_STAR, 12);
+        beep(2711);
+    }
 
     // 旗杆胜利
     if ((mx >> 8) + MW - 1 >= FLAG_COL * TILE) {
         won = 1;
-        win_timer = 220;
-        score += time_left * 10;
-        beep(905);
+        win_timer = 190;
+        score += time_left * 20;
+        spawn_burst((mx >> 8) + 6, (my >> 8) + 8, COL_STAR, 24);
+        beep(2711);
         return;
     }
     // 掉进深渊
@@ -819,7 +1035,7 @@ static void update() {
 
 // ---------- 渲染 ----------
 static void hud_num(int x, int y, int v, int digits) {
-    gfx_fillrect(x, y, digits * 8, HUD_H, COL_SKY);
+    gfx_fillrect(x, y, digits * 8, HUD_H, COL_PANEL);
     char buf[8];
     int n = 0;
     do { buf[n++] = '0' + v % 10; v /= 10; } while (v);
@@ -829,15 +1045,24 @@ static void hud_num(int x, int y, int v, int digits) {
 }
 
 static void draw_hud() {
-    gfx_fillrect(0, 0, GFX_WIDTH, HUD_H, COL_SKY);
-    gfx_set_cursor(0, 0); gfx_puts("SCORE");
-    hud_num(5 * 8, 0, score, 6);
-    gfx_set_cursor(13 * 8, 0); gfx_puts("COINS");
-    hud_num(19 * 8, 0, coins, 2);
-    gfx_set_cursor(23 * 8, 0); gfx_puts("TIME");
-    hud_num(28 * 8, 0, time_left, 3);
-    gfx_set_cursor(33 * 8, 0); gfx_puts("LIVES");
-    hud_num(39 * 8, 0, lives, 1);
+    gfx_fillrect(0, 0, GFX_WIDTH, HUD_H, COL_PANEL);
+    gfx_fillrect(0, HUD_H - 1, GFX_WIDTH, 1, COL_PANEL_L);
+    gfx_set_cursor(0, 0); gfx_puts("M");
+    hud_num(8, 0, score, 6);
+    gfx_set_cursor(9 * 8, 0); gfx_puts(" C");
+    hud_num(11 * 8, 0, coins, 2);
+    gfx_set_cursor(14 * 8, 0); gfx_puts(" W");
+    hud_num(16 * 8, 0, stage + 1, 1);
+    gfx_set_cursor(17 * 8, 0); gfx_puts("-1");
+    gfx_set_cursor(20 * 8, 0); gfx_puts(" T");
+    hud_num(22 * 8, 0, time_left, 3);
+    gfx_set_cursor(26 * 8, 0); gfx_puts(" L");
+    hud_num(28 * 8, 0, lives, 1);
+    gfx_set_cursor(30 * 8, 0); gfx_puts(" PWR");
+    if (power || star_timer) {
+        gfx_fillrect(34 * 8, 1, 6, 6,
+                     star_timer ? COL_STAR : COL_RED_D);
+    }
 }
 
 static void center_text(const char* s, int row) {
@@ -848,6 +1073,21 @@ static void center_text(const char* s, int row) {
 }
 
 static void draw_bg() {
+    if (stage == 0) {
+        gfx_fillrect(252 - (cam >> 4), 20, 28, 20, COL_QUES);
+        gfx_fillrect(256 - (cam >> 4), 16, 20, 28, COL_QUES);
+        gfx_fillrect(260 - (cam >> 4), 20, 12, 20, COL_QUES_L);
+    } else {
+        for (int i = 0; i < 24; i++) {
+            int x = i * 67 - ((cam >> 3) % 1609);
+            if (x < -2) x += 1609;
+            if (x >= 0 && x < GFX_WIDTH && (((g_ticks >> 4) + i) & 3))
+                gfx_fillrect(x, 12 + (i * 37) % 112, 2, 2, COL_STAR);
+        }
+        gfx_fillrect(252 - (cam >> 4), 22, 24, 24, COL_WHITE);
+        gfx_fillrect(260 - (cam >> 4), 20, 12, 24, COL_PANEL_L);
+    }
+
     int off_c = (cam / 3) % 660;         // 云: 1/3 视差
     for (int i = -1; i < 3; i++) {
         int x = i * 220 + 60 - off_c;
@@ -862,18 +1102,45 @@ static void draw_bg() {
             gfx_blit(x, 156, 24, 12, hill_art);
         }
     }
+    int off_b = (cam / 2) % 520;
+    for (int i = -1; i < 2; i++) {
+        int x = i * 260 + 120 - off_b;
+        if (x > -40 && x < GFX_WIDTH) {
+            gfx_fillrect(x, 176, 32, 8, COL_HILL);
+            gfx_fillrect(x + 6, 170, 8, 8, COL_HILL);
+            gfx_fillrect(x + 18, 172, 7, 6, COL_HILL);
+        }
+    }
+}
+
+static void draw_particles(void) {
+    for (int i = 0; i < PARTICLE_N; i++) {
+        particle_t* p = &particles[i];
+        if (!p->life) continue;
+        int size = p->life > 10 ? 3 : 2;
+        gfx_fillrect(p->x - cam, p->y, size, size, p->color);
+    }
+}
+
+static void draw_center_panel(const char* title, const char* subtitle) {
+    gfx_fillrect(58, 72, 204, 56, COL_PANEL);
+    gfx_fillrect(58, 72, 204, 2, COL_STAR);
+    gfx_fillrect(58, 126, 204, 2, COL_PANEL_L);
+    center_text(title, 10);
+    if (subtitle) center_text(subtitle, 13);
 }
 
 static void render() {
     gfx_clear(COL_SKY);
     draw_bg();
+    int jitter = shake ? ((g_ticks & 1) ? 2 : -2) : 0;
 
     // 图块
     int c0 = cam >> 4;
     for (int c = c0; c <= c0 + 20; c++) {
         for (int r = 0; r < ROWS; r++) {
             uint8_t t = level[r][c];
-            int sx = c * TILE - cam;
+            int sx = c * TILE - cam + jitter;
             int sy = HUD_H + r * TILE;
             if (t == 0) continue;
             if (t == T_COIN) {          // 金币: 旋转动画
@@ -888,7 +1155,7 @@ static void render() {
     for (int i = 0; i < GOOMBA_N; i++) {
         goomba_t* g = &goombas[i];
         if (!g->alive) continue;
-        int sx = (g->x >> 8) - cam;
+        int sx = (g->x >> 8) - cam + jitter;
         int sy = g->y >> 8;
         if (g->squashed) {
             gfx_blit(sx, sy + 8, 16, 16, goomba_art[2]);
@@ -899,38 +1166,77 @@ static void render() {
 
     // 马里奥 (无敌时闪烁)
     if (!(invuln && (g_ticks & 2))) {
-        gfx_blit((mx >> 8) - cam, my >> 8, 12, 16, mario_art[mframe]);
+        int sx = (mx >> 8) - cam + jitter;
+        int sy = my >> 8;
+        if (power) {
+            gfx_fillrect(sx - 2, sy + 3, 16, 4, COL_RED_D);
+            gfx_fillrect(sx, sy + 7, 12, 2, COL_RED);
+        }
+        if (star_timer && ((g_ticks >> 1) & 1)) {
+            gfx_fillrect(sx - 3, sy + 2, 2, 2, COL_STAR);
+            gfx_fillrect(sx + 13, sy + 6, 2, 2, COL_WHITE);
+            gfx_fillrect(sx + 10, sy - 2, 2, 2, COL_STAR);
+        }
+        gfx_blit(sx, sy, 12, 16, mario_art[mframe]);
     }
 
+    draw_particles();
     draw_hud();
 
-    if (paused) center_text("PAUSED", 6);
-    if (gameover) {
-        center_text("GAME OVER", 5);
-        center_text("PRESS ANY KEY", 7);
+    if (message_timer > 0) {
+        gfx_fillrect(74, 32, 172, 11, COL_PANEL);
+        center_text(message, 4);
     }
-    if (won) center_text("COURSE CLEAR!", 5);
+    if (paused) {
+        draw_center_panel("PAUSED", "P TO RESUME");
+    }
+    if (gameover) {
+        draw_center_panel("GAME OVER", "PRESS ANY KEY");
+    }
+    if (won) {
+        const char* sub = stage == 0 ? "NEXT: STARRY NIGHT" :
+                          "THANK YOU FOR PLAYING";
+        draw_center_panel(won == 1 ? "COURSE CLEAR!" : "WORLD COMPLETE",
+                          sub);
+    }
 }
 
 // ---------- 标题画面 ----------
 static void title_screen() {
+    stage = 0;
+    mario_palette(0);
     gfx_clear(COL_SKY);
+    draw_bg();
+    gfx_fillrect(50, 10, 220, 80, COL_PANEL);
+    gfx_fillrect(50, 10, 220, 2, COL_QUES_L);
+    gfx_fillrect(50, 88, 220, 2, COL_PANEL_L);
+    gfx_fillrect(8, 156, 48, 8, COL_HILL);
+    gfx_fillrect(12, 148, 10, 10, COL_HILL);
+    gfx_fillrect(34, 150, 9, 8, COL_HILL);
     for (int x = 0; x < GFX_WIDTH; x += 16) {
         gfx_blit(x, 184, 16, 16, tile_art[T_GROUND]);
     }
     gfx_blit(118, 168, 12, 16, mario_art[0]);
     gfx_blit(192, 168, 16, 16, goomba_art[0]);
+    gfx_fillrect(150, 156, 8, 8, COL_COIN);
+    gfx_fillrect(154, 154, 2, 12, COL_COIN);
 
     gfx_set_cursor(15 * 8, 3 * 8); gfx_puts("SUPER MARIO");
-    gfx_set_cursor(13 * 8, 5 * 8); gfx_puts("MyQwen-OS EDITION");
-    gfx_set_cursor(9 * 8, 9 * 8);  gfx_puts("ARROWS/WASD RUN  SPACE JUMP");
-    gfx_set_cursor(11 * 8, 11 * 8); gfx_puts("P PAUSE  R RESTART");
-    gfx_set_cursor(13 * 8, 13 * 8); gfx_puts("PRESS ANY KEY");
+    gfx_set_cursor(12 * 8, 5 * 8); gfx_puts("STARRY NIGHT EDITION");
+    gfx_set_cursor(8 * 8, 8 * 8);  gfx_puts("RUN: ARROWS / WASD");
+    gfx_set_cursor(8 * 8, 10 * 8); gfx_puts("JUMP: SPACE / UP / W");
+    center_text("1 DAYLIGHT  2 STARRY NIGHT", 12);
+    center_text("P PAUSE  R RETRY", 14);
+    center_text("PRESS 1/2 OR ANY KEY", 17);
 
     // 等一个"按下"事件 (释放码不算)
+    title_select = 0;
     while (1) {
         int k = mario_key();
-        if (k >= 0 && k < 0x80) break;
+        if (k >= 0 && k < 0x80) {
+            if (k == 0x03) title_select = 1;
+            break;
+        }
         __asm__ volatile("hlt");
     }
 }

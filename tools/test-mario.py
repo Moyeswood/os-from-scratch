@@ -86,12 +86,20 @@ time.sleep(1.5)
 check("title: sky color=1", pixel(10, 100) == 1)
 check("title: ground drawn", pixel(5, 190) in (4, 5))
 check("title: mario sprite", pixel(122, 168) == 18)
+check("title: framed logo panel", pixel(50, 10) == 9)
 
 send("sendkey spc", wait=0.4)      # 开始游戏
 time.sleep(0.4)
 b0 = freeze_scan()
 print("spawn bbox:", b0)
 check("game: mario at spawn", b0 and b0[0] < 50 and b0[1] > 160, str(b0))
+check("hud: dark instrument panel", pixel(0, 0) == 29)
+check("hud: accent divider", pixel(0, 7) == 30)
+
+send("sendkey p", wait=0.4)
+time.sleep(0.8)
+check("pause: centered status panel", pixel(60, 72) == 31)
+send("sendkey p", wait=0.3)
 
 # --- 向右跑 1.2 秒 ---
 send("sendkey d 1200", wait=0.3)
@@ -117,6 +125,17 @@ bl = freeze_scan()
 print("landed bbox:", bl)
 check("jump: landed", bl and bl[1] >= 160, str(bl))
 
+# --- 问号块增强道具 ---
+send("sendkey d 800", wait=0.3)
+send("sendkey spc", wait=0.3)
+time.sleep(1.4)
+send("sendkey p", wait=0.4)
+time.sleep(0.8)
+check("power block: HUD super state", pixel(274, 2) == 26)
+send("sendkey p", wait=0.3)
+send("sendkey r", wait=0.4)
+time.sleep(1.0)
+
 # --- 掉坑死亡重生 (无敌帧 90 滴答闪烁, 多等一会) ---
 send("sendkey d 5000", wait=4.0)   # 按住右 5 秒 → 跑进第一个坑
 time.sleep(9.0)                    # 死亡动画 + 重生 + 无敌帧 (90 滴答) 结束
@@ -135,6 +154,16 @@ for _ in range(10):
         mode = lines[0].split(':')[1].strip()
         if '0x03' in mode: break
 check("ESC back to text mode", mode is not None and '0x03' in mode, f"mode={mode}")
+
+# --- 关卡选择: 第二关星空主题 ---
+type_text("mario\n")
+time.sleep(1.5)
+send("sendkey 2", wait=0.4)
+time.sleep(1.5)
+check("world select: stage 2 moon", pixel(252, 22) == 2)
+check("world select: dark sky still renders", pixel(10, 100) == 1)
+send("sendkey esc", wait=0.5)
+time.sleep(1.0)
 
 # --- shell 回归: help 里有 mario ---
 type_text("help\n")

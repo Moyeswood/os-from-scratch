@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-17%2F17%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-428%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-18%2F18%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-434%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -25,7 +25,7 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 ## ✨ Features
 
 ### 🖥️ Core
-- **Bootloader**: a hand-written 512-byte boot sector that loads the kernel from a floppy (150 KB limit, with 64 KB segment wrap-around handling)
+- **Bootloader**: a hand-written 512-byte boot sector that loads the kernel from a floppy (180 KB limit, with 64 KB segment wrap-around handling)
 - **Protected mode**: GDT segmentation, A20 gate, 32-bit mode switch
 - **Memory management**: BIOS E820 map parsing + reserved-page protection + reference-counted physical pages + `kmalloc/kfree/krealloc` kernel heap + 32 MB identity-mapped paging
 - **Per-process virtual memory**: independent page directories/tables, zero-filled demand pages, fork COW, stack guard page, shrinking `brk`, and an anonymous `mmap` arena
@@ -77,7 +77,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 
 ### 🎮 Fun & Applications
 - **Tetris**: 7-bag randomizer, wall kicks, lock delay, hold piece, line-clear animation, 5 color themes, beep SFX
-- **Super Mario**: a 16×16-tile side-scrolling platformer (scrolling camera + parallax background, 8.8 fixed-point physics, Goombas, coins/? blocks/pipes/stairs/flagpole)
+- **Super Mario**: two themed stages, super/star abilities, checkpoints, stomp combos, variable jumps, jump buffering/coyote time, particles, screen shake, mid-stage retry, and a polished HUD
 - **🚀 Boot screen**: deep-blue gradient starfield (DAC palette programming) + 32px colorful "HELLO WORLD" letter-by-letter reveal animation + "NEWOS!" subtitle; press any key to skip; replayable via the `splash` command
 
 ## 💻 Command Reference
@@ -162,9 +162,13 @@ printf("read %d: %s\n", n, buf); return 0; }
 |---|
 | <img src="note/memdemo.png" width="480" alt="user heap, fork heap isolation and waitpid"/> |
 
+| Super Mario title | Super Mario gameplay |
+|---|---|
+| <img src="note/mario-title.png" width="360" alt="Super Mario title"/> | <img src="note/mario.png" width="360" alt="Super Mario gameplay"/> |
+
 ## 🧪 Automated Tests
 
-16 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **428 documented checks**:
+16 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **434 documented checks**:
 
 ```bash
 python3 tools/test-memory.py  # E820 + page allocator + kernel heap (15 checks)
@@ -174,7 +178,7 @@ python3 tools/test-fs.py       # filesystem   (43 checks)
 python3 tools/test-edit.py     # editor/undo/find/caret (67 checks)
 python3 tools/test-cc.py       # C compiler   (41 checks)
 python3 tools/test-preempt.py  # preemption   (7 checks)
-python3 tools/test-mario.py    # Mario        (12 checks)
+python3 tools/test-mario.py    # Mario/powerups/UI/two themes (18 checks)
 python3 tools/test-user.py     # Ring 3 user  (36 checks)
 python3 tools/test-sched.py    # PCB scheduler + keyboard buffer (15 checks)
 python3 tools/test-proc.py     # processes/fork/background/kill (36 checks)
@@ -254,6 +258,7 @@ python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 checks)
 | 15 | `waitpid` + argv/envp stacks + ELF32 PT_LOAD/BSS + read-only code pages |
 | 16 | User-space free-list allocator (first fit + splitting + adjacent coalescing + tail shrinking + calloc/realloc) |
 | 17 | Editor enhancements (caret ghost fix + undo/redo + find/goto + word navigation) |
+| 18 | Mario enhancements (two stages, ability blocks, checkpoint, stomp combos, particles/shake, polished HUD) |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 

@@ -25,13 +25,10 @@
 //   proc_fault_kill()  → 异常: 同上, 退出码 -1
 //   proc_fork(frame)   → SYS_FORK: 复制地址空间+现场, 子进程返回 0
 //   proc_kill(pid)     → kill 命令: 直接判死
-//   proc_sbrk(delta)   → SYS_SBRK: 用户堆扩容/收缩, 返回旧断点
 //   proc_waitpid(...)  → SYS_WAITPID: 父进程等子进程并写退出状态
 //
-//  里程碑 12: 用户堆从 USER_BASE+64KB 开始, 到栈保护区之前结束。
-//  fork 继承当前 brk 并复制已使用的堆页。后台进程 parent_pid=0,
-//  没有父进程的僵尸在下一次 proc_spawn 时清扫; 仍有存活父进程的
-//  ZOMBIE 保留下来, 由 waitpid 收尸。
+//  用户堆由 vm_brk 管理，mmap 由 vm_mmap 预留；fork 通过 COW 共享页。
+//  后台进程 parent_pid=0，孤儿僵尸在 spawn 时清扫。
 // ============================================================
 
 int  proc_spawn(const char* name);     // 建用户进程任务, 返回 pid (失败 -1)

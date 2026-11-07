@@ -149,7 +149,7 @@ static void cmd_help() {
     vga_puts("  stop     - Stop multitasking demo\n\r");
     vga_puts("  testmode - Test graphics mode round trip (BIOS INT 10h)\n\r");
     vga_puts("  tetris   - Play Tetris (ESC to exit)\n\r");
-    vga_puts("  mario    - Play Super Mario (ESC to exit)\n\r");
+    vga_puts("  mario    - Play Super Mario (1/2 world, ESC exit)\n\r");
     vga_puts("  font N   - Change font size (rows): 12(33) 14(28) 16(25) 18(22) 20(20)\n\r");
     vga_puts("  pwd      - Print working directory\n\r");
     vga_puts("  ls [d]   - List directory\n\r");
