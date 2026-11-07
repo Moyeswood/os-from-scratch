@@ -481,6 +481,15 @@ void syscall_dispatch(user_frame_t* f) {
                                        (const char*)f->ebx, f->ecx,
                                        (user_dirent_t*)f->edx);
         break;
+    case SYS_SETPGID:
+        f->eax = (uint32_t)proc_setpgid((int)f->ebx, (int)f->ecx);
+        break;
+    case SYS_TCSETPGRP:
+        f->eax = (uint32_t)proc_set_foreground((int)f->ebx);
+        break;
+    case SYS_KILL:
+        f->eax = (uint32_t)proc_signal((int)f->ebx, (int)f->ecx);
+        break;
     default:
         serial_puts("[SYS] unknown syscall #");
         serial_put_hex(f->eax);

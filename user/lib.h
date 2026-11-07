@@ -47,6 +47,13 @@ static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 #define SYS_DUP2     22
 #define SYS_REMOVE   23
 #define SYS_READDIR  24
+#define SYS_SETPGID  25
+#define SYS_TCSETPGRP 26
+#define SYS_KILL     27
+
+#define SIGINT   2
+#define SIGKILL  9
+#define SIGTERM 15
 
 #define WNOHANG 1
 
@@ -154,6 +161,15 @@ static inline int readdir(const char* path, uint32_t index,
                           user_dirent_t* entry) {
     return (int)syscall3(SYS_READDIR, (uint32_t)path, index,
                          (uint32_t)entry);
+}
+static inline int setpgid(int pid, int pgid) {
+    return (int)syscall3(SYS_SETPGID, (uint32_t)pid, (uint32_t)pgid, 0);
+}
+static inline int tcsetpgrp(int pgid) {
+    return (int)syscall1(SYS_TCSETPGRP, (uint32_t)pgid);
+}
+static inline int kill(int pid, int sig) {
+    return (int)syscall3(SYS_KILL, (uint32_t)pid, (uint32_t)sig, 0);
 }
 
 // 里程碑 12 的 sbrk 接口在里程碑 13 的 brk 之上保持兼容。

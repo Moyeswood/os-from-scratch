@@ -1,9 +1,11 @@
 #include "lib.h"
 
 #define LINE_MAX  256
-#define WORD_MAX  24
+#define WORD_MAX  64
 #define ARGS_MAX  12
-#define PIPE_MAX  2
+#define PIPE_MAX  4
+#define JOB_MAX   4
+#define JOB_TEXT  128
 
 typedef struct {
     char* argv[ARGS_MAX];
@@ -13,10 +15,45 @@ typedef struct {
     int append;
 } command_t;
 
+typedef struct {
+    int used;
+    int id;
+    int pgid;
+    int pids[PIPE_MAX];
+    int pid_count;
+    char text[JOB_TEXT];
+} job_t;
+
+static job_t jobs[JOB_MAX];
+static int next_job_id = 1;
+
 static int slen(const char* s) {
     int n = 0;
     while (s && s[n]) n++;
     return n;
+}
+
+static void scopy(char* dst, const char* src, int cap) {
+    int i = 0;
+    while (src && src[i] && i + 1 < cap) {
+        dst[i] = src[i];
+        ++i;
+    }
+    if (cap) dst[i] = '\0';
+}
+
+static int parse_number(const char* text, int* value) {
+    if (!text || !*text) return -1;
+    if (*text == '%') ++text;
+    int n = 0;
+    int digits = 0;
+    while (*text >= '0' && *text <= '9') {
+        n = n * 10 + (*text++ - '0');
+        ++digits;
+    }
+    if (!digits || *text) return -1;
+    *value = n;
+    return 0;
 }
 
 static int scmp(const char* a, const char* b) {
@@ -269,8 +306,9 @@ static int execute_builtin(const command_t* cmd) {
         return 0;
     }
     if (scmp(name, "help") == 0) {
-        swrite(1, "builtins: cd exit help; tools: echo cat ls pwd mkdir rm\n");
-        swrite(1, "syntax: cmd [args] [< in] [> out] [>> out] [| cmd2] [&]\n");
+        swrite(1, "builtins: cd exit jobs fg kill wait help\n");
+        swrite(1, "tools: echo cat ls pwd mkdir rm\n");
+        swrite(1, "syntax: cmd [args] [< in] [> out] [>> out] [| cmd...] [&]\n");
         return 0;
     }
     return -1;
@@ -308,48 +346,202 @@ static int run_command(const command_t* cmd, int child) {
     return 127;
 }
 
-static int wait_foreground(int pid) {
-    int status = 0;
-    return waitpid(pid, &status) < 0 ? 1 : (status & 0xFF);
-}
-
-static void reap_background(void) {
-    int status;
-    while (waitpid_flags(-1, &status, WNOHANG) > 0) {}
-}
-
 static int is_parent_builtin(const command_t* cmd) {
     const char* name = basename(cmd->argv[0]);
-    return scmp(name, "cd") == 0 || scmp(name, "exit") == 0;
+    return scmp(name, "cd") == 0 || scmp(name, "exit") == 0 ||
+           scmp(name, "jobs") == 0 || scmp(name, "fg") == 0 ||
+           scmp(name, "kill") == 0 || scmp(name, "wait") == 0;
+}
+
+static int job_pid_count(const job_t* job) {
+    int count = 0;
+    for (int i = 0; i < job->pid_count; ++i)
+        if (job->pids[i] > 0) ++count;
+    return count;
+}
+
+static void job_remove_pid(int pid) {
+    for (int j = 0; j < JOB_MAX; ++j)
+        for (int i = 0; i < jobs[j].pid_count; ++i)
+            if (jobs[j].pids[i] == pid) jobs[j].pids[i] = 0;
+}
+
+static int reap_background(void) {
+    int status;
+    int reaped = 0;
+    int pid;
+    while ((pid = waitpid_flags(-1, &status, WNOHANG)) > 0) {
+        job_remove_pid(pid);
+        ++reaped;
+    }
+    return reaped;
+}
+
+static job_t* find_job(int id) {
+    for (int i = 0; i < JOB_MAX; ++i)
+        if (jobs[i].used && jobs[i].id == id) return &jobs[i];
+    return 0;
+}
+
+static job_t* add_job(int pgid, const int pids[PIPE_MAX], int count,
+                      const char* text) {
+    job_t* slot = 0;
+    for (int i = 0; i < JOB_MAX; ++i) {
+        if (!jobs[i].used) {
+            slot = &jobs[i];
+            break;
+        }
+    }
+    if (!slot) return 0;
+    slot->used = 1;
+    slot->id = next_job_id++;
+    slot->pgid = pgid;
+    slot->pid_count = count;
+    for (int i = 0; i < PIPE_MAX; ++i)
+        slot->pids[i] = i < count ? pids[i] : 0;
+    scopy(slot->text, text, JOB_TEXT);
+    swrite(1, "[JOB] started ");
+    putdec((uint32_t)slot->id);
+    swrite(1, ": ");
+    swrite(1, slot->text);
+    swrite(1, "\n");
+    return slot;
+}
+
+static int builtin_jobs(void) {
+    reap_background();
+    int shown = 0;
+    for (int i = 0; i < JOB_MAX; ++i) {
+        job_t* job = &jobs[i];
+        if (!job->used) continue;
+        int alive = job_pid_count(job);
+        swrite(1, "[JOB] ");
+        putdec((uint32_t)job->id);
+        swrite(1, " ");
+        swrite(1, alive ? "RUNNING " : "DONE ");
+        swrite(1, job->text);
+        swrite(1, "\n");
+        shown = 1;
+        if (!alive) job->used = 0;
+    }
+    if (!shown) swrite(1, "[JOB] no jobs\n");
+    return 0;
+}
+
+static int builtin_fg(const command_t* cmd) {
+    if (cmd->argc < 2) {
+        swrite(2, "fg: missing job\n");
+        return 1;
+    }
+    int id;
+    if (parse_number(cmd->argv[1], &id) < 0) return 1;
+    reap_background();
+    job_t* job = find_job(id);
+    if (!job) {
+        swrite(2, "fg: no such job\n");
+        return 1;
+    }
+    if (!job_pid_count(job)) {
+        swrite(1, "[JOB] already done\n");
+        job->used = 0;
+        return 0;
+    }
+    swrite(1, "[JOB] foreground ");
+    putdec((uint32_t)job->id);
+    swrite(1, "\n");
+    tcsetpgrp(job->pgid);
+    int status = 0;
+    for (int i = 0; i < job->pid_count; ++i) {
+        if (job->pids[i] > 0 && waitpid(job->pids[i], &status) > 0)
+            job->pids[i] = 0;
+    }
+    tcsetpgrp(0);
+    job->used = 0;
+    return status & 0xFF;
+}
+
+static int builtin_kill(const command_t* cmd) {
+    if (cmd->argc < 2) {
+        swrite(2, "kill: missing target\n");
+        return 1;
+    }
+    int sig = SIGTERM;
+    int arg = 1;
+    if (cmd->argc > 2 && cmd->argv[1][0] == '-') {
+        int parsed;
+        if (parse_number(cmd->argv[1] + 1, &parsed) == 0) {
+            sig = parsed;
+            arg = 2;
+        }
+    }
+    if (cmd->argv[arg][0] == '%') {
+        int id;
+        if (parse_number(cmd->argv[arg], &id) < 0) return 1;
+        reap_background();
+        job_t* job = find_job(id);
+        if (!job) {
+            swrite(2, "kill: no such job\n");
+            return 1;
+        }
+        return kill(-job->pgid, sig) < 0 ? 1 : 0;
+    }
+    int pid;
+    if (parse_number(cmd->argv[arg], &pid) < 0 || pid <= 0) return 1;
+    return kill(pid, sig) < 0 ? 1 : 0;
+}
+
+static int builtin_wait(void) {
+    tcsetpgrp(0);
+    int status = 0;
+    for (int j = 0; j < JOB_MAX; ++j) {
+        job_t* job = &jobs[j];
+        if (!job->used) continue;
+        for (int i = 0; i < job->pid_count; ++i) {
+            if (job->pids[i] > 0 && waitpid(job->pids[i], &status) > 0)
+                job->pids[i] = 0;
+        }
+        job->used = 0;
+    }
+    return status & 0xFF;
 }
 
 static int execute_pipeline(command_t cmds[PIPE_MAX], int count,
-                            int background) {
+                            int background, const char* text) {
     if (count == 1 && !background && is_parent_builtin(&cmds[0])) {
-        if (scmp(basename(cmds[0].argv[0]), "exit") == 0) return -1;
+        const char* name = basename(cmds[0].argv[0]);
+        if (scmp(name, "exit") == 0) return -1;
+        if (scmp(name, "jobs") == 0) return builtin_jobs();
+        if (scmp(name, "fg") == 0) return builtin_fg(&cmds[0]);
+        if (scmp(name, "kill") == 0) return builtin_kill(&cmds[0]);
+        if (scmp(name, "wait") == 0) return builtin_wait();
         return run_command(&cmds[0], 0);
     }
 
-    int pipefd[2] = { -1, -1 };
-    if (count == 2 && pipe(pipefd) < 0) {
-        swrite(2, "sh: pipe failed\n");
-        return 1;
+    int pipes[PIPE_MAX - 1][2];
+    for (int i = 0; i < count - 1; ++i) {
+        pipes[i][0] = -1;
+        pipes[i][1] = -1;
+        if (pipe(pipes[i]) < 0) {
+            swrite(2, "sh: pipe failed\n");
+            for (int j = 0; j < i; ++j) {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+            return 1;
+        }
     }
 
-    int pids[PIPE_MAX] = { -1, -1 };
+    int pids[PIPE_MAX] = { -1, -1, -1, -1 };
     for (int i = 0; i < count; ++i) {
         int pid = fork();
         if (pid == 0) {
-            if (count == 2) {
-                if (i == 0) {
-                    close(pipefd[0]);
-                    if (dup2(pipefd[1], 1) < 0) exit(1);
-                    close(pipefd[1]);
-                } else {
-                    close(pipefd[1]);
-                    if (dup2(pipefd[0], 0) < 0) exit(1);
-                    close(pipefd[0]);
-                }
+            int group = i == 0 ? 0 : pids[0];
+            setpgid(0, group);
+            if (i > 0 && dup2(pipes[i - 1][0], 0) < 0) exit(1);
+            if (i < count - 1 && dup2(pipes[i][1], 1) < 0) exit(1);
+            for (int j = 0; j < count - 1; ++j) {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
             }
             exit(run_command(&cmds[i], 1));
         }
@@ -358,19 +550,30 @@ static int execute_pipeline(command_t cmds[PIPE_MAX], int count,
             break;
         }
         pids[i] = pid;
+        setpgid(pid, i == 0 ? pid : pids[0]);
     }
 
-    if (count == 2) {
-        close(pipefd[0]);
-        close(pipefd[1]);
+    for (int i = 0; i < count - 1; ++i) {
+        close(pipes[i][0]);
+        close(pipes[i][1]);
     }
-    if (!background) {
-        int status = 0;
-        for (int i = 0; i < count; ++i)
-            if (pids[i] > 0 && waitpid(pids[i], &status) < 0) status = 1;
-        return status & 0xFF;
+    if (pids[0] < 0) return 1;
+
+    if (background) {
+        if (!add_job(pids[0], pids, count, text)) {
+            swrite(2, "sh: job table full\n");
+            kill(-pids[0], SIGTERM);
+            return 1;
+        }
+        return 0;
     }
-    return 0;
+
+    tcsetpgrp(pids[0]);
+    int status = 0;
+    for (int i = 0; i < count; ++i)
+        if (pids[i] > 0 && waitpid(pids[i], &status) < 0) status = 1;
+    tcsetpgrp(0);
+    return status & 0xFF;
 }
 
 static void shell_prompt(void) {
@@ -414,6 +617,8 @@ static int shell_loop(void) {
         line[len] = '\0';
         len = 0;
         reap_background();
+        char command_text[JOB_TEXT];
+        scopy(command_text, line, sizeof(command_text));
         int nwords = tokenize(line, words, WORD_MAX);
         command_t cmds[PIPE_MAX];
         int count = 0;
@@ -422,7 +627,9 @@ static int shell_loop(void) {
         if (parsed < 0) {
             swrite(2, "sh: syntax error\n");
         } else if (parsed > 0) {
-            if (execute_pipeline(cmds, count, background) < 0) return 0;
+            if (execute_pipeline(cmds, count, background,
+                                 command_text) < 0)
+                return 0;
         }
         shell_prompt();
     }

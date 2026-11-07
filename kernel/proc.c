@@ -32,6 +32,7 @@
 #define PROC_STACK_SIZE  4096
 
 static uint8_t proc_stacks[MAX_TASKS][PROC_STACK_SIZE];
+static int console_fg_pgid = 0;
 
 // ---------- 查程序表 ----------
 static const user_prog_t* prog_lookup(const char* name) {
@@ -106,6 +107,7 @@ static int build_process(const char* name, const uint8_t* image,
     t->is_user = 1;
     t->exit_code = 0;
     t->parent_pid = detached ? 0 : (int)task_current()->pid;
+    t->pgid = (int)t->pid;   // 新程序默认独立进程组, 父进程可再合并流水线
     t->cwd_inum = task_current()->cwd_inum;
     task_fd_reset(t);
 
@@ -305,6 +307,7 @@ int proc_fork(user_frame_t* f) {
     child->is_user = 1;
     child->exit_code = 0;
     child->parent_pid = parent->pid;
+    child->pgid = parent->pgid;
     child->cwd_inum = parent->cwd_inum;
     task_fd_copy(child, parent);
 
@@ -340,14 +343,15 @@ int proc_fork(user_frame_t* f) {
     return child->pid;   // 父进程看到子 pid
 }
 
-int proc_kill(int pid) {
-    task_t* t = task_by_pid(pid);
-    if (!t || !t->is_user) return -1;
+static int kill_task(task_t* t, const char* reason) {
+    if (!t || !t->is_user || t->state == TASK_ZOMBIE) return -1;
     serial_puts("[PROC] pid ");
     serial_put_hex(t->pid);
     serial_puts(" (");
     serial_puts(t->name);
-    serial_puts(") killed by kill command\n\r");
+    serial_puts(") killed by ");
+    serial_puts(reason);
+    serial_puts("\n\r");
     task_fd_close_all(t);
     detach_children(t->pid);
     // 直接判死: 在跑就跑到下一个滴答 (pick_next 不会再看它),
@@ -355,5 +359,59 @@ int proc_kill(int pid) {
     t->state = TASK_ZOMBIE;
     t->exit_code = -1;
     t->wait_flags = 0;
+    task_wake_pid(t->pid);
     return 0;
+}
+
+int proc_kill(int pid) {
+    return kill_task(task_by_pid(pid), "kill command");
+}
+
+int proc_setpgid(int pid, int pgid) {
+    task_t* me = task_current();
+    if (!me || !me->is_user) return -1;
+    task_t* target = pid ? task_by_pid(pid) : me;
+    if (!target || !target->is_user || target->state == TASK_ZOMBIE)
+        return -1;
+    if (pid && target->parent_pid != (int)me->pid &&
+        target != me) return -1;
+    if (!pgid) pgid = (int)target->pid;
+    if (pgid <= 0) return -1;
+    target->pgid = pgid;
+    return 0;
+}
+
+int proc_set_foreground(int pgid) {
+    if (pgid < 0) return -1;
+    console_fg_pgid = pgid;
+    return 0;
+}
+
+int proc_signal(int pid, int sig) {
+    if (!pid || (sig != SIGINT && sig != SIGKILL && sig != SIGTERM))
+        return -1;
+    int killed = 0;
+    if (pid < 0) {
+        int pgid = -pid;
+        for (int i = 5; i < MAX_TASKS; ++i) {
+            task_t* t = task_at(i);
+            if (t && t->is_user && t->pgid == pgid &&
+                kill_task(t, sig == SIGINT ? "SIGINT" : "SIGTERM") == 0)
+                ++killed;
+        }
+    } else {
+        killed = kill_task(task_by_pid(pid),
+                           sig == SIGINT ? "SIGINT" : "SIGTERM") == 0;
+    }
+    return killed ? 0 : -1;
+}
+
+int proc_signal_foreground(int sig) {
+    if (console_fg_pgid <= 0) return -1;
+    serial_puts("[PROC] console signal pgid=");
+    serial_put_hex((uint32_t)console_fg_pgid);
+    serial_puts(" sig=");
+    serial_put_hex((uint32_t)sig);
+    serial_puts("\n\r");
+    return proc_signal(-console_fg_pgid, sig);
 }

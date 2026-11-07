@@ -39,6 +39,10 @@ int  proc_spawn_file_args(const char* path, int argc, char* const* argv,
                           int envc, char* const* envp, int detached);
 int  proc_wait(int pid);               // 睡到它退出并收尸, 返回退出码 (-1=被杀)
 int  proc_waitpid(int pid, int* status, int flags); // 用户父进程等待并回收直接子进程
+int  proc_setpgid(int pid, int pgid);  // 设置进程组; pid/pgid=0 按 POSIX 语义
+int  proc_set_foreground(int pgid);    // 设置控制台前台进程组 (0 = 无)
+int  proc_signal(int pid, int sig);    // 正 pid 单进程, 负 pid 表示整组
+int  proc_signal_foreground(int sig);  // 键盘 Ctrl+C 使用
 void proc_exit(int code);              // SYS_EXIT 内核侧 (永不返回)
 int  proc_fork(user_frame_t* f);       // SYS_FORK 内核侧: 父得子 pid, 子得 0
 void proc_fault_kill(void);            // 异常处理调用 (永不返回)

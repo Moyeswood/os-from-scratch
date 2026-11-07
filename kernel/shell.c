@@ -674,7 +674,7 @@ static void execute_command() {
             vga_puts("  filedemo - open/read/write/lseek + per-process cwd\n\r");
             vga_puts("  fdstdin  - read from fd 0 (type hello, then Enter)\n\r");
             vga_puts("  fdpipe   - fork-shared offset + pipe + dup2 demo\n\r");
-            vga_puts("  sh       - Ring 3 shell with pipes/redirection, ESC not needed\n\r");
+            vga_puts("  sh       - Ring 3 shell: pipelines/jobs/Ctrl+C\n\r");
             vga_puts("  vmtest   - demand paging + COW + brk/mmap\n\r");
             vga_puts("  vmguard  - write the stack guard page (expected #PF)\n\r");
             vga_puts("  execdemo - replace this process with /bin/hello\n\r");

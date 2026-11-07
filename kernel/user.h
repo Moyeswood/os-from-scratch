@@ -66,6 +66,13 @@ typedef struct {
 #define SYS_DUP2     22  // 里程碑 20: 重定向 fd
 #define SYS_REMOVE   23  // 里程碑 20: 删除文件/空目录
 #define SYS_READDIR  24  // 里程碑 20: 用户态目录迭代
+#define SYS_SETPGID  25  // 里程碑 21: 设置进程组
+#define SYS_TCSETPGRP 26 // 里程碑 21: 控制台前台进程组
+#define SYS_KILL     27  // 里程碑 21: 向进程或进程组发送终止信号
+
+#define SIGINT   2
+#define SIGKILL  9
+#define SIGTERM 15
 
 #define O_RDONLY     0x0001
 #define O_WRONLY     0x0002

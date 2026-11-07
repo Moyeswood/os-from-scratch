@@ -117,7 +117,7 @@ $(ELF_DEMO): user/elfdemo.c user/lib.h user/elf_linker.ld
 	$(CC) $(CFLAGS32) -O2 -c user/elfdemo.c -o $(BUILD_DIR)/elfdemo.o
 	$(LD) -m elf_i386 -T user/elf_linker.ld $(BUILD_DIR)/elfdemo.o -o $@
 
-$(KERNEL_DIR)/%.o: $(KERNEL_DIR)/%.c
+$(KERNEL_DIR)/%.o: $(KERNEL_DIR)/%.c $(wildcard $(KERNEL_DIR)/*.h)
 	$(CC) $(CFLAGS32) -g -c $< -o $@
 
 $(KERNEL_ELF): $(KERNEL_OBJS)

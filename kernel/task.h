@@ -28,7 +28,7 @@
 // ============================================================
 
 #define MAX_TASKS 16
-#define TASK_FD_MAX 8
+#define TASK_FD_MAX 16
 
 typedef enum {
     TASK_IDLE,     // 调度器空转任务 (启动栈, 不参与轮转)
@@ -58,6 +58,7 @@ typedef struct {
     int is_user;           // 用户进程标志
     int exit_code;         // 退出码 (ZOMBIE 时有效; 被杀 = -1)
     int parent_pid;        // 父任务 pid (wait 用)
+    int pgid;              // 里程碑 21: 进程组 id
     // ---- 里程碑 13: 按需虚拟内存 ----
     uint32_t brk;          // 用户堆当前断点
     uint32_t mmap_brk;     // 匿名 mmap 窗口下一个空闲地址

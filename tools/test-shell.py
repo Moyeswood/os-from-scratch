@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 里程碑 20: 用户态 Shell、基础工具、管道与重定向
+# 里程碑 20/21: 用户态 Shell、管道、重定向与作业控制
 import os
 import socket
 import subprocess
@@ -70,7 +70,7 @@ def send(cmd, wait=0.08):
 
 KEYS = {
     " ": "spc", "/": "slash", ".": "dot",
-    "-": "minus",
+    "-": "minus", "%": "shift-5",
     "<": "shift-comma", ">": "shift-dot",
     "|": "shift-backslash", "&": "shift-7",
 }
@@ -158,8 +158,41 @@ try:
     run("cat < a.txt | cat", "sh:/shdir>", "hello world\nsecond line\n",
         name="input redirect + pipe")
     run("echo pipe-ok | cat", "sh:/shdir>", "pipe-ok\n", name="pipe")
+    run("echo stages | cat | cat | cat", "sh:/shdir>", "stages\n",
+        name="multi-stage pipe")
     run("ls", "sh:/shdir>", "a.txt\n", name="ls utility")
     run("cd /", "sh:/>", name="cd root")
+
+    mark()
+    type_text("spinner\n")
+    check("foreground job starts", wait_since("spinner: pid=", 10.0,
+                                              "foreground-start"))
+    send("sendkey ctrl-c", wait=0.3)
+    check("ctrl-c targets foreground group", wait_since(
+        "[PROC] console signal pgid=", 10.0, "ctrl-c-signal"))
+    check("ctrl-c restores shell", wait_since("sh:/> ", 10.0,
+                                              "ctrl-c-prompt"))
+
+    run("spinner &", "sh:/>", "[JOB] started 1: spinner",
+        name="background job starts")
+    run("jobs", "sh:/>", "[JOB] 1 RUNNING spinner",
+        name="jobs lists process group")
+    run("kill %1", "sh:/>", name="kill background group")
+    run("wait", "sh:/>", name="wait background group")
+    run("jobs", "sh:/>", "[JOB] no jobs", name="jobs clears reaped job")
+
+    run("spinner &", "sh:/>", "[JOB] started 2: spinner &",
+        name="second background job")
+    mark()
+    type_text("fg %2\n")
+    check("fg moves job to foreground", wait_since("[JOB] foreground 2",
+                                                   10.0, "fg-command"))
+    send("sendkey ctrl-c", wait=0.3)
+    check("ctrl-c ends resumed job", wait_since(
+        "[PROC] console signal pgid=", 10.0, "fg-ctrl-c"))
+    check("fg ctrl-c restores shell", wait_since("sh:/> ", 10.0,
+                                                 "fg-prompt"))
+
     run("echo bg-ok > /bgout &", "sh:/>", name="background redirect")
     time.sleep(0.5)
     run("cat /bgout", "sh:/>", "bg-ok\n", name="background output")

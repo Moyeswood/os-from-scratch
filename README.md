@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-20%2F20%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-505%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-21%2F21%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-523%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -35,14 +35,14 @@ NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编�
 
 ### 🛡️ Ring 3 用户态
 - **特权级隔离**：TSS 内核栈切换、用户代码/数据段（DPL3）、页表 U/S 位保护——用户程序碰内核内存直接 #PF
-- **系统调用**：`int 0x80`（门 DPL3）——putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir，内核逐页校验用户传入的指针
-- **独立用户态 Shell**：`run sh` 启动；支持 `/bin` PATH 查找、`fork/execve/waitpid`、`<`/`>`/`>>`、单级管道 `|`、后台任务 `&` 和 `WNOHANG` 回收
+- **系统调用**：`int 0x80`（门 DPL3）——putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/setpgid/tcsetpgrp/kill，内核逐页校验用户传入的指针
+- **独立用户态 Shell**：`run sh` 启动；支持 `/bin` PATH 查找、四段管道、`<`/`>`/`>>`、进程组、Ctrl+C、后台 `&` 与 `jobs/fg/kill/wait`
 - **异常处理**：32 个异常处理器打印完整现场（EIP/CS/EFLAGS/ESP/CR2 + 页错误码 P/W/U 位解读），用户态异常杀进程回 shell，内核态异常 panic
 - **20 个 flat 程序 + 1 个 ELF32 演示程序**：覆盖用户 Shell、共享打开文件、管道、waitpid、execve、ELF32、fork 堆隔离、空闲链表 allocator 和每进程工作目录
 
 ### ⏱️ 多任务与设备
 - **抢占式多任务**：PIT IRQ0（18.2Hz）时间片轮转，协作式/抢占式统一上下文帧可互恢复，带"恶霸任务"演示
-- **完整进程生命周期**：独立页目录与地址空间、fork、后台进程、`ps`/`kill`、孤儿僵尸回收；每进程拥有 8 项 fd 表和独立 CWD，`fork` 继承、`exec` 保留；用户堆提供 `malloc/free/calloc/realloc`
+- **完整进程生命周期**：独立页目录与地址空间、fork、进程组、后台作业、`ps`/`kill`、孤儿僵尸回收；每进程拥有 16 项 fd 表和独立 CWD，`fork` 继承、`exec` 保留；用户堆提供 `malloc/free/calloc/realloc`
 - **设备驱动**：VGA 文本/图形、串口 COM1、PS/2 键盘、PIT 定时器、PC 扬声器蜂鸣
 - **图形库**：模式 13h（320×200×256）调色板/画点/矩形/精灵/字体
 - **🎨 可调字体**：纯 VGA 硬件编程加载 **Terminus** 位图字体（写字符发生器平面 2 + CRTC 行高重配），`font` 命令五档字号（12/14/16/18/20 → 33/28/25/22/20 行，默认 18；18/20 由 8x16 垂直放大生成），每次加载硬件级自测
@@ -174,7 +174,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 自动化测试
 
-18 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**文档统计 505 项**：
+18 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**文档统计 523 项**：
 
 ```bash
 python3 tools/test-memory.py  # E820 + 页分配 + 内核堆 (15 项)
@@ -194,7 +194,7 @@ python3 tools/test-vm.py       # 按需分页/COW/guard/brk/mmap (22 项)
 python3 tools/test-exec.py     # 文件加载/exec/失败回滚 (26 项)
 python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 项)
 python3 tools/test-fd.py       # fd/CWD/共享偏移/pipe/dup2 (42 项)
-python3 tools/test-shell.py    # 用户态 Shell/工具/管道/重定向 (29 项)
+python3 tools/test-shell.py    # Shell/多级管道/进程组/作业控制 (47 项)
 ```
 
 > test-preempt / test-mario 是附着式测试（argv[1]=monitor socket），请用
@@ -271,6 +271,7 @@ python3 tools/test-shell.py    # 用户态 Shell/工具/管道/重定向 (29 项
 | 18 | 马里奥增强（双关卡、能力块、检查点、连踩、粒子震屏、精致 HUD） |
 | 19 | 进程级 fd 表（open/read/write/close/lseek）+ 每进程 CWD + fd 0/1/2 |
 | 20 | 用户态 Shell + echo/cat/ls/pwd/mkdir/rm + 共享文件对象 + pipe/dup2 + `<`/`>`/`>>`/`\|`/`&` |
+| 21 | 四段管道 + 进程组 + 前台 Ctrl+C + `jobs/fg/kill/wait` + 后台作业回收 |
 
 每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
 

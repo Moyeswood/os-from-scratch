@@ -15,6 +15,7 @@
 // ============================================================
 #include "io.h"
 #include "keyboard.h"
+#include "proc.h"
 #include "task.h"
 #include "types.h"
 
@@ -29,6 +30,8 @@ static volatile int kbd_tail = 0;   // 读游标 (消费者)
 // 翻译状态 (pop 时维护, 见 kbd_pop)
 static int shift_pressed = 0;
 static int caps_lock_on = 0;
+static int ctrl_pressed = 0;
+static int irq_ctrl_pressed = 0;
 
 static void kbd_push(uint8_t sc) {
     int next = (kbd_head + 1) % KBD_BUF_SIZE;
@@ -40,7 +43,15 @@ static void kbd_push(uint8_t sc) {
 // IRQ1 入口 (irq.asm 调, EOI 在 irq.asm 里发)
 void keyboard_handler() {
     if (!(inb(0x64) & 1)) return;    // 幽灵 IRQ1: 无数据就不读 (读 0x60 会吃到脏字节)
-    kbd_push(inb(0x60));
+    uint8_t sc = inb(0x60);
+    uint8_t key = sc & 0x7F;
+    if (key == SC_CTRL) irq_ctrl_pressed = !(sc & 0x80);
+    // Ctrl+C 是终端的中断键: 前台作业存在时直接杀整个进程组,
+    // 不再把 'c' 塞进输入缓冲。没有前台作业时仍按普通字符处理。
+    if (key == 0x2E && !(sc & 0x80) && irq_ctrl_pressed &&
+        proc_signal_foreground(SIGINT) == 0)
+        return;
+    kbd_push(sc);
     task_wake_kbd();                 // 唤醒等键盘的任务 (下次 IRQ0 把它们切上 CPU)
 }
 
@@ -54,6 +65,7 @@ int kbd_pop() {
     // 会因"游戏吞了 shift 按下、shell 只看到释放"而漂移。
     uint8_t key = sc & 0x7F;
     if (key == 0x2A || key == 0x36) shift_pressed = !(sc & 0x80);
+    if (key == SC_CTRL) ctrl_pressed = !(sc & 0x80);
     if (key == 0x3A && !(sc & 0x80)) caps_lock_on = !caps_lock_on;
     return sc;
 }
@@ -73,6 +85,7 @@ int kbd_getchar(int esc_to_27) {
         if (key == 0x50) return '\x12';          // 下方向键
         int is_upper = shift_pressed ^ caps_lock_on;
         char c = is_upper ? keymap_shift[key] : keymap_normal[key];
+        if (ctrl_pressed && (c == 'c' || c == 'C')) return 3;
         if (c) return c;
     }
 }
@@ -124,4 +137,5 @@ void kbd_drain() {
     // shift 状态可能因吞掉了配对的释放码而粘住 (例如按住 shift
     // 时 drain), 归零兜底; 下一次真实的 shift 按/放会自愈。
     shift_pressed = 0;
+    ctrl_pressed = 0;
 }

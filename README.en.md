@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-20%2F20%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-505%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-21%2F21%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-523%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -35,14 +35,14 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 
 ### 🛡️ Ring 3 User Mode
 - **Privilege isolation**: TSS kernel-stack switch, user code/data segments (DPL3), page-table U/S protection — a user program touching kernel memory gets a #PF
-- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir; user pointers are validated page by page
-- **Standalone user shell**: launch with `run sh`; supports `/bin` lookup, `fork/execve/waitpid`, `<`/`>`/`>>`, a single `|` pipeline, background `&`, and `WNOHANG` reaping
+- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/setpgid/tcsetpgrp/kill; user pointers are validated page by page
+- **Standalone user shell**: launch with `run sh`; supports `/bin` lookup, four-stage pipelines, `<`/`>`/`>>`, process groups, Ctrl+C, background `&`, and `jobs/fg/kill/wait`
 - **Exception handling**: 32 exception handlers print the full fault context (EIP/CS/EFLAGS/ESP/CR2 + page-fault error code P/W/U decoding); a user-mode fault kills the process and returns to the shell, a kernel-mode fault panics
 - **20 flat programs + 1 ELF32 demo**: coverage includes the user shell, shared opens, pipes, waitpid, execve, ELF32, fork heap isolation, the free-list allocator, and per-process working directories
 
 ### ⏱️ Multitasking & Devices
 - **Preemptive multitasking**: PIT IRQ0 (18.2 Hz) round-robin scheduling; cooperative and preemptive context frames are mutually restorable; includes a "bully task" demo
-- **Full process lifecycle**: per-process address spaces and CWDs, fork, background jobs, process reaping, and an 8-entry per-process fd table inherited by fork and preserved by exec; the user heap provides `malloc/free/calloc/realloc`
+- **Full process lifecycle**: per-process address spaces and CWDs, fork, process groups, background jobs, process reaping, and a 16-entry per-process fd table inherited by fork and preserved by exec; the user heap provides `malloc/free/calloc/realloc`
 - **Device drivers**: VGA text/graphics, COM1 serial, PS/2 keyboard, PIT timer, PC speaker beep
 - **Graphics library**: mode 13h (320×200×256) palette/pixel/rect/sprite/font
 - **🎨 Adjustable fonts**: pure VGA hardware programming to load **Terminus** bitmap fonts (writing character-generator plane 2 + CRTC row reprogramming); `font` command with 5 sizes (12/14/16/18/20 → 33/28/25/22/20 lines, default 18; 18/20 vertically scaled from 8x16), hardware-level self-test on every load
@@ -170,7 +170,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 Automated Tests
 
-18 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **505 documented checks**:
+18 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **523 documented checks**:
 
 ```bash
 python3 tools/test-memory.py  # E820 + page allocator + kernel heap (15 checks)
@@ -190,7 +190,7 @@ python3 tools/test-vm.py       # demand paging/COW/guard (22 checks)
 python3 tools/test-exec.py     # file loader/exec/rollback (26 checks)
 python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 checks)
 python3 tools/test-fd.py       # fd/CWD/shared offsets/pipes/dup2 (42 checks)
-python3 tools/test-shell.py    # user shell/tools/pipes/redirection (29 checks)
+python3 tools/test-shell.py    # shell/pipelines/process groups/job control (47 checks)
 ```
 
 > test-preempt / test-mario are attached tests (argv[1] = monitor socket);
@@ -267,6 +267,7 @@ python3 tools/test-shell.py    # user shell/tools/pipes/redirection (29 checks)
 | 18 | Mario enhancements (two stages, ability blocks, checkpoint, stomp combos, particles/shake, polished HUD) |
 | 19 | Per-process fd table (open/read/write/close/lseek) + per-process CWD + fd 0/1/2 |
 | 20 | User shell + echo/cat/ls/pwd/mkdir/rm + shared open objects + pipe/dup2 + `<`/`>`/`>>`/`\|`/`&` |
+| 21 | Four-stage pipelines + process groups + foreground Ctrl+C + `jobs/fg/kill/wait` + background reaping |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 
