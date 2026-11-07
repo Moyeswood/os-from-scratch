@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-14%2F14%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-351%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-17%2F17%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-428%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -20,22 +20,24 @@
   <img src="note/splash-mid.png" width="480" alt="boot screen"/>
 </p>
 
-NewOS is an educational 32-bit x86 operating system written from scratch in C and a bit of assembly, running in QEMU. It covers the full OS learning path: **booting → protected mode → interrupts → memory management → multitasking → graphics → filesystem → editor → C compiler → Ring 3 user mode** — so that in the end you can write a C program with the built-in editor, compile it with the built-in compiler, run it, and also run user-mode processes and watch the kernel catch them red-handed when they go out of bounds. Processes can `fork`, allocate memory through `sbrk`/`malloc`, run in the background, and reap children with `waitpid`.
+NewOS is an educational 32-bit x86 operating system written from scratch in C and a bit of assembly, running in QEMU. It covers the full OS learning path: **booting → protected mode → interrupts → memory management → multitasking → graphics → filesystem → editor → C compiler → Ring 3 user mode** — so that in the end you can write and compile C programs, load flat or ELF32 executables from `/bin`, manage processes with `fork/waitpid/execve`, and use demand paging, COW, guard pages, and a reclaiming user-space free-list allocator.
 
 ## ✨ Features
 
 ### 🖥️ Core
 - **Bootloader**: a hand-written 512-byte boot sector that loads the kernel from a floppy (150 KB limit, with 64 KB segment wrap-around handling)
 - **Protected mode**: GDT segmentation, A20 gate, 32-bit mode switch
-- **Memory management**: bitmap physical page allocator (including contiguous multi-page `alloc_pages`) + paging (32 MB kernel identity map + 4 MB user region)
+- **Memory management**: BIOS E820 map parsing + reserved-page protection + reference-counted physical pages + `kmalloc/kfree/krealloc` kernel heap + 32 MB identity-mapped paging
+- **Per-process virtual memory**: independent page directories/tables, zero-filled demand pages, fork COW, stack guard page, shrinking `brk`, and an anonymous `mmap` arena
+- **Executables and process lifecycle**: `/bin` accepts flat and ELF32 images, parses PT_LOAD/data/BSS, constructs `argc/argv/envp` stacks, and implements `fork/waitpid/execve` with transactional replacement and child reaping
 - **Interrupts**: full IDT (32 exception handlers + IRQs + syscall gate), 8259A PIC remap, PS/2 keyboard interrupt driver
 - **Real-mode round trips**: drop back to real mode to call the BIOS (video mode switching) and return to protected mode automatically — the trampoline saves/restores all callee-saved registers
 
 ### 🛡️ Ring 3 User Mode
 - **Privilege isolation**: TSS kernel-stack switch, user code/data segments (DPL3), page-table U/S protection — a user program touching kernel memory gets a #PF
-- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/read_key/get_ticks/exit/fork/getpid/sleep/sbrk/waitpid; the kernel validates that user-supplied pointers fall inside the user region
+- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/read_key/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve; user pointers are validated page by page
 - **Exception handling**: 32 exception handlers print the full fault context (EIP/CS/EFLAGS/ESP/CR2 + page-fault error code P/W/U decoding); a user-mode fault kills the process and returns to the shell, a kernel-mode fault panics
-- **10 built-in demo programs** (host-gcc compiled → incbin → loaded by the `run` command): `hello` (minimal user process), `count` (timer keeps ticking in user mode), `crash` (write to 0xB8000 → #PF), `div0` (divide by zero → #DE), `echo` (keyboard echo), `badptr` (syscall argument validation), `forkdemo` (address-space isolation), `spinner` (background process), `memdemo` (dynamic memory + waitpid), and `allocdemo` (free-list allocator)
+- **16 flat demos + 1 ELF32 demo**: programs cover waitpid, execve argument stacks, ELF32, fork heap isolation, and the free-list allocator
 
 ### ⏱️ Multitasking & Devices
 - **Preemptive multitasking**: PIT IRQ0 (18.2 Hz) round-robin scheduling; cooperative and preemptive context frames are mutually restorable; includes a "bully task" demo
@@ -85,6 +87,10 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `help` | List all commands |
 | `clear` | Clear the screen |
 | `meminfo` | Memory statistics (pages) |
+| `memmap` | Show the BIOS E820 memory map |
+| `heap` | Show kernel heap statistics and integrity |
+| `heap blocks` | Show heap blocks after split/coalesce |
+| `heaptest` | Run allocation/reallocation/free stress test |
 | `echo [text]` | Print text; `echo text > file` writes (overwrites) a file |
 | `date` | CMOS real-time clock |
 | `version` / `reboot` | Version / reboot |
@@ -102,7 +108,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `df` | Filesystem usage |
 | `edit file` | Open the editor (^S save, ^X asks to save on exit) |
 | `cc file.c [args...]` | Compile and run a C program (args go to main) |
-| `run prog [&]` | Run a user program in Ring 3 (`&` = background; includes forkdemo/spinner/memdemo/allocdemo) |
+| `run prog [args] [&]` | Run an embedded or `/bin` executable (`args` enter the initial stack; `&` = detached background) |
 | `splash` | Replay the boot screen |
 
 ## 🚀 Quick Start
@@ -158,9 +164,10 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 Automated Tests
 
-12 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **351 checks in total**:
+16 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **428 documented checks**:
 
 ```bash
+python3 tools/test-memory.py  # E820 + page allocator + kernel heap (15 checks)
 python3 tools/test-splash.py   # boot screen  (14 checks)
 python3 tools/test-font.py     # fonts        (30 checks)
 python3 tools/test-fs.py       # filesystem   (43 checks)
@@ -170,9 +177,12 @@ python3 tools/test-preempt.py  # preemption   (7 checks)
 python3 tools/test-mario.py    # Mario        (12 checks)
 python3 tools/test-user.py     # Ring 3 user  (36 checks)
 python3 tools/test-sched.py    # PCB scheduler + keyboard buffer (15 checks)
-python3 tools/test-proc.py     # fork/background/kill (36 checks)
+python3 tools/test-proc.py     # processes/fork/background/kill (36 checks)
 python3 tools/test-memproc.py  # user heap/fork isolation/waitpid (26 checks)
 python3 tools/test-alloc.py    # free list/coalescing/realloc (24 checks)
+python3 tools/test-vm.py       # demand paging/COW/guard (22 checks)
+python3 tools/test-exec.py     # file loader/exec/rollback (26 checks)
+python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 checks)
 ```
 
 > test-preempt / test-mario are attached tests (argv[1] = monitor socket);
@@ -185,8 +195,12 @@ python3 tools/test-alloc.py    # free list/coalescing/realloc (24 checks)
 ├── boot/boot.asm       # 512-byte boot sector
 ├── kernel/             # kernel source (C + asm)
 │   ├── kernel.c        # kernel entry
-│   ├── memory.c/h      # bitmap physical memory allocation
-│   ├── paging.c/h      # paging (kernel identity map + user region)
+│   ├── memory.c/h      # E820 parsing + reserved-page protection + physical pages
+│   ├── heap.c/h        # kernel heap split/coalesce/realloc/integrity checks
+│   ├── paging.c/h      # page directories/tables and mapping primitives
+│   ├── vm.c/h          # address spaces, demand paging, COW, brk/mmap
+│   ├── exec.c/h        # /bin publishing, flat loader, transactional exec
+│   │                    # (vm.c/h also contains the ELF32 loader and initial stack)
 │   ├── gdt.c/h         # kernel GDT (user segments + TSS)
 │   ├── idt.c/h pic.c   # interrupts & 8259A
 │   ├── irq.asm         # IRQ assembly stubs
@@ -210,9 +224,11 @@ python3 tools/test-alloc.py    # free list/coalescing/realloc (24 checks)
 ├── user/               # user-mode demo programs (host-gcc built, incbin'd into the kernel)
 │   ├── lib.h           # syscall wrappers (int 0x80)
 │   ├── linker.ld       # linked at 0x2000000 (user region)
-│   └── hello.c count.c crash.c div0.c echo.c badptr.c forkdemo.c spinner.c memdemo.c allocdemo.c
+│   └── hello.c count.c crash.c div0.c echo.c badptr.c forkdemo.c
+│       spinner.c vmtest.c vmguard.c execdemo.c execbad.c
+│       waittest.c execargv.c elfdemo.c memdemo.c allocdemo.c
 ├── tetris/             # original real-mode assembly version (port reference)
-├── tools/              # font converter + 12 test suites
+├── tools/              # font converter + 16 test suites
 ├── note/               # development notes + screenshots
 └── Makefile
 ```
@@ -231,12 +247,21 @@ python3 tools/test-alloc.py    # free list/coalescing/realloc (24 checks)
 | 8 | c4 mini C compiler (the write-C → compile → run loop) |
 | 9 | Boot screen (a 32-bit port & polish of a hand-written hello.asm) |
 | 10 | Ring 3 user mode (TSS + page-table U/S protection + int 0x80 syscalls + exception handling) |
-| 11 | Multiprocessing (PCB scheduler + keyboard ring buffer + per-process address spaces + fork + background jobs) |
-| 12 | User dynamic memory (sbrk + bump allocator) + fork heap copy + waitpid + precise orphan reaping |
-| 13 | User-space free-list allocator (first fit + splitting + adjacent coalescing + tail shrinking + calloc/realloc) |
-| 14 | Editor enhancements (caret ghost fix + undo/redo + find/goto + word navigation) |
+| 11 | PCB scheduler + per-process address spaces + fork + background processes |
+| 12 | E820 map + reserved-page protection + kernel heap + `memmap`/`heap` diagnostics |
+| 13 | Independent virtual address spaces + demand paging + fork COW + guard page + `brk`/`mmap` |
+| 14 | `/bin` executables + flat loader + transactional `exec` + PID preservation |
+| 15 | `waitpid` + argv/envp stacks + ELF32 PT_LOAD/BSS + read-only code pages |
+| 16 | User-space free-list allocator (first fit + splitting + adjacent coalescing + tail shrinking + calloc/realloc) |
+| 17 | Editor enhancements (caret ghost fix + undo/redo + find/goto + word navigation) |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
+
+The step-by-step Chinese guides for the latest phases are
+[`docs/MILESTONE_12_E820_HEAP.md`](docs/MILESTONE_12_E820_HEAP.md) and
+[`docs/MILESTONE_13_VM.md`](docs/MILESTONE_13_VM.md),
+[`docs/MILESTONE_14_EXEC.md`](docs/MILESTONE_14_EXEC.md),
+[`docs/MILESTONE_15_PROCESS_ELF.md`](docs/MILESTONE_15_PROCESS_ELF.md).
 
 ## 📄 Credits
 

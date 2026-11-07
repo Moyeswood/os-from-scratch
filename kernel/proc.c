@@ -1,19 +1,20 @@
 // ============================================================
-//  里程碑 11b: 用户进程管理 (独立地址空间 + fork + 后台进程)
+//  里程碑 11b/13: 用户进程管理 (独立虚拟地址空间 + fork + 后台进程)
 //
-//  见 proc.h 头注释。核心技巧:
+//  见 proc.h/vm.h 头注释。核心技巧:
 //
-//  1. 草稿窗口 (paging.c): 新进程的物理页在 32MB 之外, 内核
-//     恒等映射够不着。写页目录/页表/用户区时, 先用窗口把目标
-//     物理页临时映到虚拟 0x7800000, 写完摘掉。★必须 cli 成对
-//     使用 (窗口是全局共享的, 被抢占后可能被别的任务改写)。
+//  1. 每个进程只有独立页目录和实际触及的页表。镜像页在 spawn
+//     时装入；栈、堆、mmap 页由 #PF 按需补零。
 //
-//  2. fork 的现场复制: int 0x80 的帧 (user_frame_t) 恰好就是
+//  2. fork 只复制页表，物理页先共享并标 COW。用户写共享页时
+//     #PF 再分配新页并复制 4KB。
+//
+//  3. fork 的现场复制: int 0x80 的帧 (user_frame_t) 恰好就是
 //     用户任务的 52 字节上下文帧布局 — 直接抄到子进程内核栈,
 //     把 eax 槽改成 0 (子进程返回值), popa+iret 就落在子进程
 //     的"int 0x80 之后一条指令", 从 Ring 3 继续跑。
 //
-//  3. 收尸与释放: 退出时只标 ZOMBIE + 切走 (此时 CR3 已换走,
+//  4. 收尸与释放: 退出时只标 ZOMBIE + 切走 (此时 CR3 已换走,
 //     页目录不再被引用); 物理内存由父进程 proc_wait 收尸时释放
 //     (父进程跑在自己的 CR3 下, 释放孩子的页安全)。孤儿僵尸
 //     (后台进程) 在下次 spawn 时统一清扫。
@@ -22,24 +23,15 @@
 #include "task.h"
 #include "paging.h"
 #include "memory.h"
+#include "vm.h"
+#include "exec.h"
+#include "heap.h"
 #include "serial.h"
 #include "string.h"
 
-// 用户区连续物理块: 页目录 + 页表8 + 1024 用户页
-#define PROC_BLOCK_PAGES 1026
 #define PROC_STACK_SIZE  4096
 
-// 教学简化: 用户区 4MB 全映射, 但只初始化程序实际用到的部分 —
-//   spawn: 清零低 64KB (镜像 + BSS 预算)
-//   fork:  复制低 64KB + 已用堆 + 栈区 (顶部 64KB)
-// 未用中段页保持未初始化 (真实 OS 用按需零页/写时复制, 这里留作引子)。
-#define PROC_STACK_COPY_BYTES 65536  // 栈预算 (fork 时复制顶部这一段)
-
 static uint8_t proc_stacks[MAX_TASKS][PROC_STACK_SIZE];
-
-// 页目录/页表草稿 (静态缓冲: 内容都是可计算的, 不必先读目标页)
-static uint32_t pd_scratch[1024];
-static uint32_t pt8_scratch[1024];
 
 // ---------- 查程序表 ----------
 static const user_prog_t* prog_lookup(const char* name) {
@@ -49,16 +41,16 @@ static const user_prog_t* prog_lookup(const char* name) {
     return 0;
 }
 
-// 清扫孤儿僵尸: 释放内存 + 空出槽位。后台进程 parent_pid=0;
-// 父进程已经消失/退出的孩子也是孤儿。仍有存活父进程的 ZOMBIE
-// 必须保留, 否则 waitpid 会永远看不到孩子 (里程碑 12 修复)。
+// 清扫孤儿僵尸 (后台进程或父进程已消失): 释放内存 + 空出槽位。
+// 仍有存活父进程的 ZOMBIE 必须保留到 waitpid 收尸。
 static void sweep_zombies(void) {
     for (int i = 5; i < MAX_TASKS; i++) {
         task_t* t = task_at(i);
-        task_t* parent = (t && t->parent_pid) ? task_by_pid(t->parent_pid) : 0;
+        task_t* parent = (t && t->parent_pid) ?
+                         task_by_pid(t->parent_pid) : 0;
         int orphan = !parent || parent->state == TASK_ZOMBIE;
         if (t && t->state == TASK_ZOMBIE && orphan) {
-            free_pages(t->user_block, PROC_BLOCK_PAGES);
+            vm_destroy(t);
             task_free_slot(i);
             serial_puts("[PROC] swept orphan zombie (slot ");
             serial_put_hex((uint32_t)i);
@@ -67,42 +59,33 @@ static void sweep_zombies(void) {
     }
 }
 
-// 页目录/页表草稿内容 (spawn/fork 共用): 内核 PDE0-7 + 窗口 PDE30/31
-// + 自己的 PDE8 → 用户区页表
-static void fill_scratch(uint32_t block) {
-    uint32_t* kpd = (uint32_t*)PAGE_DIR_ADDR;
-    for (int i = 0; i < 8; i++) pd_scratch[i] = kpd[i];
-    for (int i = 8; i < 30; i++) pd_scratch[i] = 0;
-    pd_scratch[30] = kpd[30];
-    pd_scratch[31] = kpd[31];
-    pd_scratch[8] = (block + 0x1000) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
-    for (int i = 0; i < 1024; i++) {
-        pt8_scratch[i] = (block + 0x2000 + (uint32_t)i * 4096)
-                       | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
-    }
-}
-
 // 在任务槽上搭一个用户进程的初始 Ring 3 帧 (52 字节):
 // (低) 8 寄存器 | EIP | CS | EFLAGS | ESP(用户) | SS(用户) (高)
 // 首次被调度: popa + iret; iret 见 CS.RPL=3 → 继续弹 ESP/SS,
 // 落进用户栈, 从 USER_BASE 开始执行。
-static void build_user_frame(task_t* t) {
+static void build_user_frame(task_t* t, uint32_t entry, uint32_t user_esp) {
     uint32_t* stack = (uint32_t*)t->kstack_top;
     *(--stack) = 0x23;                       // SS = 用户数据段
-    *(--stack) = USER_BASE + USER_SIZE;      // ESP = 用户栈顶
+    *(--stack) = user_esp;
     *(--stack) = 0x202;                      // EFLAGS: IF=1 (IRQ0 照常滴答)
     *(--stack) = 0x1B;                       // CS = 用户代码段 (RPL=3)
-    *(--stack) = USER_BASE;                  // EIP = 用户入口
+    *(--stack) = entry;
     for (int i = 0; i < 8; i++) *(--stack) = 0;
     t->esp = (uint32_t)stack;
 }
 
 // ---------- 建进程 ----------
-static int build_process(const char* name, const user_prog_t* p, int detached) {
+static int build_process(const char* name, const uint8_t* image,
+                         uint32_t image_size, int argc, char* const* argv,
+                         int envc, char* const* envp, int detached) {
     sweep_zombies();   // 顺手回收孤儿僵尸的槽位和内存
 
-    if (p->size > PROC_IMAGE_BYTES) {
-        serial_puts("[PROC] spawn fail: program image > 64KB\n\r");
+    if (!image || image_size == 0) {
+        serial_puts("[PROC] spawn fail: empty program image\n\r");
+        return -1;
+    }
+    if (image_size > VM_IMAGE_LIMIT - VM_IMAGE_BASE) {
+        serial_puts("[PROC] spawn fail: program image > 256KB\n\r");
         return -1;
     }
 
@@ -111,132 +94,132 @@ static int build_process(const char* name, const user_prog_t* p, int detached) {
         serial_puts("[PROC] spawn fail: no task slots\n\r");
         return -1;
     }
-    uint32_t block = alloc_pages(PROC_BLOCK_PAGES);
-    if (!block) {
-        task_free_slot(idx);
-        serial_puts("[PROC] spawn fail: out of memory (4MB block)\n\r");
-        return -1;
-    }
 
-    __asm__ volatile("cli");   // ★窗口临界区: 见文件头注释
-
-    // 1. 写页目录 + 页表 8 (窗口映前 2 页)
-    fill_scratch(block);
-    window_map(block, 2);
-    k_memcpy((void*)WINDOW_BASE, pd_scratch, 4096);
-    k_memcpy((void*)(WINDOW_BASE + 0x1000), pt8_scratch, 4096);
-
-    // 2. 用户区: 清零低 16KB (镜像+BSS 预算) + 拷镜像
-    window_map(block + 0x2000, 1024);
-    k_memset((void*)WINDOW_BASE, 0, PROC_IMAGE_BYTES);
-    k_memcpy((void*)WINDOW_BASE, p->data, p->size);
-    window_unmap();
-
-    // 3. 任务槽: 名字/内核栈/CR3/初始帧, 就绪
+    // 任务槽: 名字/内核栈/初始帧。地址空间只分配镜像实际页；
+    // 栈、堆和 mmap 都由首次访问触发 #PF 补页。
     task_t* t = task_at(idx);
     k_strcpy(t->name, name);
     t->pid = task_alloc_pid();
     t->kstack_top = proc_stacks[idx] + PROC_STACK_SIZE;
-    t->state = TASK_READY;
+    t->state = TASK_IDLE;   // 地址空间完整前绝不能被调度
     t->wait_flags = 0;
-    t->cr3 = block;
     t->is_user = 1;
     t->exit_code = 0;
-    t->parent_pid = detached ? 0 : task_current()->pid;   // 后台无父进程收尸
-    t->user_block = block;
-    t->brk = PROC_HEAP_BASE;
-    build_user_frame(t);
+    t->parent_pid = detached ? 0 : (int)task_current()->pid;
 
-    __asm__ volatile("sti");
+    uint32_t entry = 0;
+    uint32_t initial_esp = 0;
+    if (vm_init_program(t, image, image_size, &entry) < 0) {
+        task_free_slot(idx);
+        serial_puts("[PROC] spawn fail: virtual address space\n\r");
+        return -1;
+    }
+    if (vm_build_initial_stack(t, argc, (const char* const*)argv,
+                               envc, (const char* const*)envp,
+                               &initial_esp) < 0) {
+        vm_destroy(t);
+        task_free_slot(idx);
+        serial_puts("[PROC] spawn fail: initial stack\n\r");
+        return -1;
+    }
+    build_user_frame(t, entry, initial_esp);
+    t->state = TASK_READY;
 
     serial_puts("[PROC] spawn ");
     serial_puts(name);
     serial_puts(" -> pid ");
     serial_put_hex(t->pid);
-    serial_puts(" (block=");
-    serial_put_hex(block);
+    serial_puts(" (pd=");
+    serial_put_hex(t->cr3);
     serial_puts(")\n\r");
     return t->pid;
 }
 
 // ---------- 对外接口 ----------
-int proc_spawn(const char* name, int detached) {
+int proc_spawn(const char* name) {
+    char* argv[1] = { (char*)name };
+    return proc_spawn_args(name, 1, argv, 0, 0, 0);
+}
+
+int proc_spawn_args(const char* name, int argc, char* const* argv,
+                    int envc, char* const* envp, int detached) {
     const user_prog_t* p = prog_lookup(name);
     if (!p) return -1;
-    return build_process(name, p, detached);
+    return build_process(name, p->data, p->size, argc, argv, envc, envp,
+                         detached);
 }
 
-// 前台等待: 睡到孩子 ZOMBIE → 收尸 (释放物理块 + 空槽) → 返回退出码
-int proc_wait(int pid) {
-    task_t* child = task_by_pid(pid);
-    if (!child) return -1;
-
-    while (1) {
-        __asm__ volatile("cli");
-        if (child->state == TASK_ZOMBIE) { __asm__ volatile("sti"); break; }
-        task_sleep_switch_locked(TASK_WAIT_PROC, 0);
-        __asm__ volatile("sti");
-        child = task_by_pid(pid);
-        if (!child) return -1;
-    }
-
-    int code = child->exit_code;
-    uint32_t block = child->user_block;
-    int idx = task_slot_of(child);
-    free_pages(block, PROC_BLOCK_PAGES);
-    task_free_slot(idx);
-    return code;
+int proc_spawn_file(const char* path) {
+    char* argv[1] = { (char*)path };
+    return proc_spawn_file_args(path, 1, argv, 0, 0, 0);
 }
 
-// 里程碑 12: 调整当前用户进程的堆顶。
-// delta > 0 时先清零新增区域 (教学版保证 malloc 的内存初值为 0),
-// delta < 0 时只收缩断点; 物理页仍属于进程, 供栈/后续分配使用。
-uint32_t proc_sbrk(int delta) {
-    task_t* me = task_current();
-    if (!me || !me->is_user) return (uint32_t)-1;
+int proc_spawn_file_args(const char* path, int argc, char* const* argv,
+                         int envc, char* const* envp, int detached) {
+    uint8_t* image = 0;
+    uint32_t size = 0;
+    if (exec_load_file(path, &image, &size) < 0) return -1;
 
-    uint32_t old_brk = me->brk;
-    uint32_t new_brk;
-    if (delta < 0) {
-        uint32_t decrease = (uint32_t)(-(delta + 1)) + 1u;  // 安全处理 INT_MIN
-        if (old_brk < PROC_HEAP_BASE + decrease) return (uint32_t)-1;
-        new_brk = old_brk - decrease;
-    } else {
-        uint32_t increase = (uint32_t)delta;
-        if (increase > PROC_HEAP_LIMIT - old_brk) return (uint32_t)-1;
-        new_brk = old_brk + increase;
-        if (increase) k_memset((void*)old_brk, 0, increase);
-    }
-
-    me->brk = new_brk;
-    return old_brk;
+    char name[16];
+    exec_basename(name, sizeof(name), path);
+    int pid = build_process(name, image, size, argc, argv, envc, envp,
+                            detached);
+    kfree(image);
+    return pid;
 }
 
-static task_t* find_child(task_t* parent, int requested_pid, int only_zombie) {
-    for (int i = 5; i < MAX_TASKS; i++) {
+static task_t* find_child(task_t* parent, int requested_pid, int zombie_only) {
+    if (!parent) return 0;
+    for (int i = 5; i < MAX_TASKS; ++i) {
         task_t* t = task_at(i);
-        if (!t || t->state == TASK_IDLE || t->parent_pid != parent->pid) continue;
+        if (!t || !t->is_user ||
+            t->parent_pid != (int)parent->pid) continue;
         if (requested_pid != -1 && (int)t->pid != requested_pid) continue;
-        if (only_zombie && t->state != TASK_ZOMBIE) continue;
+        if (zombie_only && t->state != TASK_ZOMBIE) continue;
         return t;
     }
     return 0;
 }
 
-static int reap_child(task_t* child, int* status) {
-    int code = child->exit_code;
+static int reap_child(task_t* child) {
     int pid = (int)child->pid;
-    uint32_t block = child->user_block;
     int idx = task_slot_of(child);
-    if (status) *status = code;
-    free_pages(block, PROC_BLOCK_PAGES);
+    vm_destroy(child);
     task_free_slot(idx);
     return pid;
 }
 
-// 里程碑 12: waitpid(pid, &status); pid=-1 等任一个孩子。
-// 调用者当前 CR3 是父进程自己的页目录, 所以收尸时释放孩子
-// 的物理块是安全的 (孩子的 CR3 已经切走)。
+static void detach_children(int parent_pid) {
+    for (int i = 5; i < MAX_TASKS; ++i) {
+        task_t* t = task_at(i);
+        if (t && t->is_user && t->parent_pid == parent_pid)
+            t->parent_pid = 0;
+    }
+}
+
+// 前台等待: 睡到孩子 ZOMBIE → 收尸 (销毁地址空间 + 空槽) → 返回退出码
+int proc_wait(int pid) {
+    task_t* parent = task_current();
+    task_t* child = find_child(parent, pid, 0);
+    if (!child) return -1;
+
+    while (1) {
+        __asm__ volatile("cli");
+        child = find_child(parent, pid, 1);
+        if (child) break;
+        if (!find_child(parent, pid, 0)) {
+            __asm__ volatile("sti");
+            return -1;
+        }
+        task_sleep_switch_locked(TASK_WAIT_PROC, 0);
+        __asm__ volatile("sti");
+    }
+
+    int code = child->exit_code;
+    reap_child(child);
+    return code;
+}
+
 int proc_waitpid(int pid, int* status) {
     task_t* parent = task_current();
     if (!parent || !parent->is_user || pid == 0 || pid < -1) return -1;
@@ -245,7 +228,15 @@ int proc_waitpid(int pid, int* status) {
         __asm__ volatile("cli");
         task_t* child = find_child(parent, pid, 1);
         if (child) {
-            int result = reap_child(child, status);
+            int code = child->exit_code;
+            if (status &&
+                vm_write_user(parent, (uint32_t)status, &code,
+                              sizeof(code)) < 0) {
+                __asm__ volatile("sti");
+                serial_puts("[PROC] waitpid: status write failed\n\r");
+                return -1;
+            }
+            int result = reap_child(child);
             __asm__ volatile("sti");
             return result;
         }
@@ -267,6 +258,7 @@ void proc_exit(int code) {
     serial_puts(") exited code=");
     serial_put_hex((uint32_t)code);
     serial_puts("\n\r");
+    detach_children(me->pid);
     task_zombie_switch_away(code);   // 永不返回
     while (1) { __asm__ volatile("hlt"); }
 }
@@ -282,6 +274,7 @@ void proc_fault_kill(void) {
     serial_puts(" (");
     serial_puts(me->name);
     serial_puts(") killed by exception\n\r");
+    detach_children(me->pid);
     task_zombie_switch_away(-1);     // 永不返回
     while (1) { __asm__ volatile("hlt"); }
 }
@@ -293,39 +286,24 @@ int proc_fork(user_frame_t* f) {
         serial_puts("[PROC] fork fail: no task slots\n\r");
         return -1;
     }
-    uint32_t child_block = alloc_pages(PROC_BLOCK_PAGES);
-    if (!child_block) {
-        task_free_slot(idx);
-        serial_puts("[PROC] fork fail: out of memory\n\r");
-        return -1;
-    }
-
-    __asm__ volatile("cli");   // ★窗口临界区
-
-    // 页目录/页表: 内核页同款 + PDE8 指向子块 (内容可计算, 见 fill_scratch)
-    fill_scratch(child_block);
-    window_map(child_block, 2);
-    k_memcpy((void*)WINDOW_BASE, pd_scratch, 4096);
-    k_memcpy((void*)(WINDOW_BASE + 0x1000), pt8_scratch, 4096);
-
-    // 拷贝用户区 (跑在父 CR3 下, 父进程自己的 USER_BASE 直接可读):
-    //   低 64KB (程序+BSS) + 已用堆 + 栈区 (顶部 64KB, 子进程恢复
-    //   fork 现场后要接着用父进程的调用栈 — 返回地址全在里面)
-    window_map(child_block + 0x2000, 1024);
-    k_memcpy((void*)WINDOW_BASE, (void*)USER_BASE, PROC_IMAGE_BYTES);
-    uint32_t heap_bytes = parent->brk - PROC_HEAP_BASE;
-    if (heap_bytes) {
-        k_memcpy((void*)(WINDOW_BASE + PROC_IMAGE_BYTES),
-                 (void*)PROC_HEAP_BASE, heap_bytes);
-    }
-    k_memcpy((void*)(WINDOW_BASE + USER_SIZE - PROC_STACK_COPY_BYTES),
-             (void*)(USER_BASE + USER_SIZE - PROC_STACK_COPY_BYTES),
-             PROC_STACK_COPY_BYTES);
-    window_unmap();
 
     // 子进程任务: 内核栈上的现场 = 父进程的 int 0x80 帧 (52 字节布局
     // 恰好一致), eax 槽改成 0 → 子进程看到 fork() 返回 0
     task_t* child = task_at(idx);
+    k_strcpy(child->name, parent->name);
+    child->pid = task_alloc_pid();
+    child->state = TASK_IDLE;   // 帧/页表完整前不可调度
+    child->wait_flags = 0;
+    child->is_user = 1;
+    child->exit_code = 0;
+    child->parent_pid = parent->pid;
+
+    if (vm_clone(parent, child) < 0) {
+        task_free_slot(idx);
+        serial_puts("[PROC] fork fail: virtual address space\n\r");
+        return -1;
+    }
+
     child->kstack_top = proc_stacks[idx] + PROC_STACK_SIZE;   // ★先设栈再建帧
     uint32_t* stack = (uint32_t*)child->kstack_top;
     *(--stack) = f->ss_user;
@@ -342,19 +320,7 @@ int proc_fork(user_frame_t* f) {
     *(--stack) = f->esi;
     *(--stack) = f->edi;
     child->esp = (uint32_t)stack;
-
-    k_strcpy(child->name, parent->name);
-    child->pid = task_alloc_pid();
     child->state = TASK_READY;
-    child->wait_flags = 0;
-    child->cr3 = child_block;
-    child->is_user = 1;
-    child->exit_code = 0;
-    child->parent_pid = parent->pid;
-    child->user_block = child_block;
-    child->brk = parent->brk;
-
-    __asm__ volatile("sti");
 
     serial_puts("[PROC] fork: pid ");
     serial_put_hex(parent->pid);
@@ -372,6 +338,7 @@ int proc_kill(int pid) {
     serial_puts(" (");
     serial_puts(t->name);
     serial_puts(") killed by kill command\n\r");
+    detach_children(t->pid);
     // 直接判死: 在跑就跑到下一个滴答 (pick_next 不会再看它),
     // 在睡就永远睡下去; 内存由下一次 spawn 的清扫回收
     t->state = TASK_ZOMBIE;

@@ -1,5 +1,5 @@
 ; ============================================================
-;  用户程序镜像嵌入 (里程碑 10; 里程碑 11b: + forkdemo/spinner)
+;  用户程序镜像嵌入 (里程碑 10; 里程碑 13: + forkdemo/spinner/vmtest/vmguard)
 ;
 ;  user/*.c 由主机 gcc -m32 编译链接成 flat bin (入口 0x2000000),
 ;  这里 incbin 进内核, run 命令再拷到用户区执行。
@@ -58,3 +58,38 @@ global user_allocdemo_start
 user_allocdemo_start: incbin "build/allocdemo.bin"
 global user_allocdemo_end
 user_allocdemo_end:
+
+global user_vmtest_start
+user_vmtest_start: incbin "build/vmtest.bin"
+global user_vmtest_end
+user_vmtest_end:
+
+global user_vmguard_start
+user_vmguard_start: incbin "build/vmguard.bin"
+global user_vmguard_end
+user_vmguard_end:
+
+global user_execdemo_start
+user_execdemo_start: incbin "build/execdemo.bin"
+global user_execdemo_end
+user_execdemo_end:
+
+global user_execbad_start
+user_execbad_start: incbin "build/execbad.bin"
+global user_execbad_end
+user_execbad_end:
+
+global user_waittest_start
+user_waittest_start: incbin "build/waittest.bin"
+global user_waittest_end
+user_waittest_end:
+
+global user_execargv_start
+user_execargv_start: incbin "build/execargv.bin"
+global user_execargv_end
+user_execargv_end:
+
+global user_elfdemo_elf_start
+user_elfdemo_elf_start: incbin "build/elfdemo.elf"
+global user_elfdemo_elf_end
+user_elfdemo_elf_end:

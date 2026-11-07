@@ -1,4 +1,5 @@
 #include "paging.h"
+#include "memory.h"
 #include "serial.h"
 #include "types.h"
 
@@ -122,4 +123,85 @@ void window_unmap(void) {
     uint32_t cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
     __asm__ volatile("mov %0, %%cr3" : : "r"(cr3));
+}
+
+// ============================================================
+//  里程碑 13: 动态用户地址空间基础
+//
+//  用户进程只预分配一个页目录。PDE8 对应的页表在第一次映射
+//  32~36MB 内页面时才分配；每个虚拟页再单独绑定物理页。
+// ============================================================
+
+uint32_t paging_create_user_dir(void) {
+    uint32_t pd_phys = alloc_page();
+    if (!pd_phys) return 0;
+
+    uint32_t* pd = (uint32_t*)pd_phys;
+    uint32_t* kpd = (uint32_t*)PAGE_DIR_ADDR;
+    for (int i = 0; i < 1024; i++) pd[i] = 0;
+
+    // 内核恒等映射 0~32MB 与草稿窗口仍共享内核的页表。
+    for (int i = 0; i < 8; i++) pd[i] = kpd[i];
+    pd[30] = kpd[30];
+    pd[31] = kpd[31];
+
+    // PDE8 留给本进程的用户页表，先不分配。
+    pd[8] = 0;
+    return pd_phys;
+}
+
+static uint32_t* paging_user_pt(uint32_t pd_phys, uint32_t virt) {
+    uint32_t pdi = virt >> 22;
+    if (pdi < 8 || pdi >= 30) return 0;   // 只允许 32~120MB 的用户窗口
+    uint32_t* pd = (uint32_t*)pd_phys;
+    if (!(pd[pdi] & PAGE_PRESENT)) return 0;
+    return (uint32_t*)(pd[pdi] & 0xFFFFF000u);
+}
+
+int paging_map_page(uint32_t pd_phys, uint32_t virt, uint32_t phys,
+                    uint32_t flags) {
+    uint32_t pdi = virt >> 22;
+    if (pdi < 8 || pdi >= 30) return -1;
+    if ((virt & 0xFFF) || (phys & 0xFFF)) return -1;
+
+    uint32_t* pd = (uint32_t*)pd_phys;
+    if (!(pd[pdi] & PAGE_PRESENT)) {
+        uint32_t pt_phys = alloc_page();
+        if (!pt_phys) return -1;
+        uint32_t* pt = (uint32_t*)pt_phys;
+        for (int i = 0; i < 1024; i++) pt[i] = 0;
+        pd[pdi] = pt_phys | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+    }
+
+    uint32_t* pt = (uint32_t*)(pd[pdi] & 0xFFFFF000u);
+    pt[(virt >> 12) & 0x3FF] = phys | PAGE_PRESENT | flags;
+    return 0;
+}
+
+uint32_t* paging_user_pte(uint32_t pd_phys, uint32_t virt) {
+    uint32_t* pt = paging_user_pt(pd_phys, virt);
+    return pt ? &pt[(virt >> 12) & 0x3FF] : 0;
+}
+
+int paging_unmap_page(uint32_t pd_phys, uint32_t virt) {
+    uint32_t* pte = paging_user_pte(pd_phys, virt);
+    if (!pte || !(*pte & PAGE_PRESENT)) return -1;
+    *pte = 0;
+    return 0;
+}
+
+uint32_t paging_translate(uint32_t pd_phys, uint32_t virt) {
+    uint32_t* pte = paging_user_pte(pd_phys, virt);
+    if (!pte || !(*pte & PAGE_PRESENT)) return 0;
+    return (*pte & 0xFFFFF000u) | (virt & 0xFFF);
+}
+
+void paging_invalidate_page(uint32_t virt) {
+    __asm__ volatile("invlpg (%0)" : : "r"(virt) : "memory");
+}
+
+void paging_flush_all(void) {
+    uint32_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    __asm__ volatile("mov %0, %%cr3" : : "r"(cr3) : "memory");
 }

@@ -33,6 +33,9 @@ void fs_init(void);
 // 路径查找 → inode 号 (不存在或非法路径 → -1)
 int fs_lookup(const char* path);
 
+// 文件大小 (字节); 不存在、目录或非法路径 → -1
+int fs_size(const char* path);
+
 // 创建文件 (FS_FILE) 或目录 (FS_DIR) → inode 号, 失败 -1
 int fs_create(const char* path, uint32_t type);
 

@@ -204,6 +204,12 @@ int fs_lookup(const char* path) {
     return dir_lookup((uint32_t)parent, last);
 }
 
+int fs_size(const char* path) {
+    int inum = fs_lookup(path);
+    if (inum < 0 || itab[inum].type != FS_FILE) return -1;
+    return (int)itab[inum].size;
+}
+
 int fs_create(const char* path, uint32_t type) {
     char last[FS_MAXNAME + 1];
     int parent = namex(path, last);

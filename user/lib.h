@@ -30,8 +30,21 @@ static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 #define SYS_FORK     5   // 里程碑 11b: 复制地址空间+现场, 父得子 pid, 子得 0
 #define SYS_GETPID   6   // 里程碑 11b: 读自己的 pid
 #define SYS_SLEEP    7   // 里程碑 11b: 睡 N 个滴答 (~55ms 每滴答)
-#define SYS_SBRK     8   // 里程碑 12: 调整堆顶, 返回旧断点 ((void*)-1=失败)
-#define SYS_WAITPID  9   // 里程碑 12: 等 pid (或 -1), 状态写到第二个参数
+#define SYS_BRK      8   // 里程碑 13: 设置堆断点, 返回旧断点
+#define SYS_MMAP     9   // 里程碑 13: 预留匿名映射, 返回虚拟地址
+#define SYS_EXEC     10  // 里程碑 14: 用文件系统镜像替换当前进程
+#define SYS_WAITPID  11  // 里程碑 15: 等待 pid/-1, 状态写入 int*
+
+// 与 kernel/vm.h 保持一致的用户虚拟布局。
+#define VM_IMAGE_BASE   0x2000000u
+#define VM_IMAGE_LIMIT  0x2040000u
+#define VM_HEAP_BASE    0x2040000u
+#define VM_HEAP_LIMIT   0x20C0000u
+#define VM_MMAP_BASE    0x20C0000u
+#define VM_MMAP_LIMIT   0x22F0000u
+#define VM_STACK_GUARD  0x22F0000u
+#define VM_STACK_BOTTOM 0x22F1000u
+#define VM_STACK_TOP    0x2400000u
 
 // exit 不会返回 (进程变 ZOMBIE 被切走); 写个死循环兜底
 static inline void exit(int code) {
@@ -46,9 +59,45 @@ static inline uint32_t ticks(void) { return syscall0(SYS_GETTICKS); }
 static inline int  fork(void) { return (int)syscall0(SYS_FORK); }
 static inline int  getpid(void) { return (int)syscall0(SYS_GETPID); }
 static inline void sleep(uint32_t n) { syscall1(SYS_SLEEP, n); }
-static inline void* sbrk(int delta) { return (void*)syscall1(SYS_SBRK, (uint32_t)delta); }
+static inline void* brk(void* address) {
+    return (void*)syscall1(SYS_BRK, (uint32_t)address);
+}
+static inline void* mmap(uint32_t length) {
+    return (void*)syscall1(SYS_MMAP, length);
+}
+static inline int execve(const char* path, char* const argv[],
+                         char* const envp[]) {
+    return (int)syscall3(SYS_EXEC, (uint32_t)path, (uint32_t)argv,
+                         (uint32_t)envp);
+}
+static inline int exec(const char* path) {
+    return execve(path, 0, 0);
+}
 static inline int waitpid(int pid, int* status) {
     return (int)syscall3(SYS_WAITPID, (uint32_t)pid, (uint32_t)status, 0);
+}
+
+// 里程碑 12 的 sbrk 接口在里程碑 13 的 brk 之上保持兼容。
+// 新 syscall 没有“读取 brk”操作，因此这里维护本程序的镜像值。
+static uint32_t user_sbrk_cur = 0;
+static inline void* sbrk(int delta) {
+    if (!user_sbrk_cur) user_sbrk_cur = VM_HEAP_BASE;
+    uint32_t old_addr = user_sbrk_cur;
+    if (delta == 0) return (void*)old_addr;
+
+    uint32_t new_addr;
+    if (delta > 0) {
+        uint32_t increase = (uint32_t)delta;
+        if (increase > 0xFFFFFFFFu - old_addr) return (void*)-1;
+        new_addr = old_addr + increase;
+    } else {
+        uint32_t decrease = (uint32_t)(-(delta + 1)) + 1u;
+        if (decrease > old_addr) return (void*)-1;
+        new_addr = old_addr - decrease;
+    }
+    if ((uint32_t)brk((void*)new_addr) != old_addr) return (void*)-1;
+    user_sbrk_cur = new_addr;
+    return (void*)old_addr;
 }
 
 // 教学版用户堆分配器 (里程碑 13):
@@ -97,16 +146,17 @@ static void user_heap_shrink_tail(void) {
             tail->size > 0x7FFFFFFFu) {
             break;
         }
+        uint32_t tail_size = tail->size;
         if (prev) prev->next = 0;
         else user_heap_free_list = 0;
 
-        if (sbrk(-(int)tail->size) == (void*)-1) {
+        if (sbrk(-(int)tail_size) == (void*)-1) {
             tail->next = 0;
             if (prev) prev->next = tail;
             else user_heap_free_list = tail;
             break;
         }
-        user_heap_cur -= tail->size;
+        user_heap_cur -= tail_size;
     }
 }
 
@@ -218,7 +268,6 @@ static void* realloc(void* p, uint32_t n) {
     free(p);
     return fresh;
 }
-
 // 十六进制打印 (8 位定宽, 和内核 serial_put_hex 同款格式, 测试好匹配)
 static void puthex(uint32_t n) {
     puts("0x");

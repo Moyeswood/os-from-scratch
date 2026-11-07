@@ -15,8 +15,14 @@ extern const char user_forkdemo_start[], user_forkdemo_end[];
 extern const char user_spinner_start[], user_spinner_end[];
 extern const char user_memdemo_start[], user_memdemo_end[];
 extern const char user_allocdemo_start[], user_allocdemo_end[];
+extern const char user_vmtest_start[], user_vmtest_end[];
+extern const char user_vmguard_start[], user_vmguard_end[];
+extern const char user_execdemo_start[], user_execdemo_end[];
+extern const char user_execbad_start[], user_execbad_end[];
+extern const char user_waittest_start[], user_waittest_end[];
+extern const char user_execargv_start[], user_execargv_end[];
 
-static user_prog_t progs[10];
+static user_prog_t progs[16];
 const user_prog_t* user_progs = progs;
 const int user_prog_count = sizeof(progs) / sizeof(progs[0]);
 
@@ -53,11 +59,35 @@ void user_progs_init(void) {
     progs[7].data = (const uint8_t*)user_spinner_start;
     progs[7].size = (uint32_t)(user_spinner_end - user_spinner_start);
 
-    progs[8].name = "memdemo";
-    progs[8].data = (const uint8_t*)user_memdemo_start;
-    progs[8].size = (uint32_t)(user_memdemo_end - user_memdemo_start);
+    progs[8].name = "vmtest";
+    progs[8].data = (const uint8_t*)user_vmtest_start;
+    progs[8].size = (uint32_t)(user_vmtest_end - user_vmtest_start);
 
-    progs[9].name = "allocdemo";
-    progs[9].data = (const uint8_t*)user_allocdemo_start;
-    progs[9].size = (uint32_t)(user_allocdemo_end - user_allocdemo_start);
+    progs[9].name = "vmguard";
+    progs[9].data = (const uint8_t*)user_vmguard_start;
+    progs[9].size = (uint32_t)(user_vmguard_end - user_vmguard_start);
+
+    progs[10].name = "execdemo";
+    progs[10].data = (const uint8_t*)user_execdemo_start;
+    progs[10].size = (uint32_t)(user_execdemo_end - user_execdemo_start);
+
+    progs[11].name = "execbad";
+    progs[11].data = (const uint8_t*)user_execbad_start;
+    progs[11].size = (uint32_t)(user_execbad_end - user_execbad_start);
+
+    progs[12].name = "waittest";
+    progs[12].data = (const uint8_t*)user_waittest_start;
+    progs[12].size = (uint32_t)(user_waittest_end - user_waittest_start);
+
+    progs[13].name = "execargv";
+    progs[13].data = (const uint8_t*)user_execargv_start;
+    progs[13].size = (uint32_t)(user_execargv_end - user_execargv_start);
+
+    progs[14].name = "memdemo";
+    progs[14].data = (const uint8_t*)user_memdemo_start;
+    progs[14].size = (uint32_t)(user_memdemo_end - user_memdemo_start);
+
+    progs[15].name = "allocdemo";
+    progs[15].data = (const uint8_t*)user_allocdemo_start;
+    progs[15].size = (uint32_t)(user_allocdemo_end - user_allocdemo_start);
 }
