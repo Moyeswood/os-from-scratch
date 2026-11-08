@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 
-IMG = "build/os.img"
+IMG = "build/os-kernel.img"
 MON = "/tmp/newos-fd-mon.sock"
 SERIAL = "/tmp/newos-fd-serial.log"
 try:

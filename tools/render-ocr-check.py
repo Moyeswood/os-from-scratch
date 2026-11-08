@@ -3,7 +3,7 @@
 import socket, subprocess, time, os, re, threading, sys
 
 NEWOS = "/home/mfw/Documents/claude001/NewOS"
-IMG = f"{NEWOS}/build/os.img"
+IMG = f"{NEWOS}/build/os-kernel.img"
 MON = "/tmp/newos-repro/mon3.sock"
 SHOT = "/tmp/newos-repro/screen.ppm"
 try: os.unlink(MON)

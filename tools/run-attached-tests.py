@@ -3,7 +3,7 @@
 # 需要先起好一个引导完成的 QEMU。这里: 新镜像副本 + 等 [SP] done 后依次跑。
 import socket, subprocess, time, sys, os, threading
 
-IMG = "build/os.img"
+IMG = "build/os-kernel.img"
 COPY = "/tmp/newos-ring3.img"
 MON = "/tmp/newos-ring3-mon.sock"
 try: os.unlink(MON)

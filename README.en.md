@@ -35,10 +35,11 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 
 ### 🛡️ Ring 3 User Mode
 - **Privilege isolation**: TSS kernel-stack switch, user code/data segments (DPL3), page-table U/S protection — a user program touching kernel memory gets a #PF
-- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/link/truncate/setpgid/tcsetpgrp/kill; user pointers are validated page by page
-- **Standalone user shell**: launch with `run sh`; supports `/bin` lookup, four-stage pipelines, `<`/`>`/`>>`, process groups, Ctrl+C/Ctrl+Z, background `&`, `jobs/fg/bg/kill/wait`, plus `mv`, `stat`, and `ls -l`
+- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/link/truncate/sigaction/sigprocmask/sigreturn/setpgid/tcsetpgrp/kill; user pointers are validated page by page
+- **User signals**: install or ignore `SIGINT/SIGTERM/SIGCONT`, with a pending bitmap, signal mask, automatic current-signal blocking, and a SysV-style user-stack return frame
+- **Default user shell**: normal boot enters a Ring 3 `sh:/>`; supports `/bin` lookup, four-stage pipelines, `<`/`>`/`>>`, process groups, Ctrl+C/Ctrl+Z, signals, background `&`, and `mv/ln/truncate/stat/ls -l`. `exit` enters the kernel recovery shell
 - **Exception handling**: 32 exception handlers print the full fault context (EIP/CS/EFLAGS/ESP/CR2 + page-fault error code P/W/U decoding); a user-mode fault kills the process and returns to the shell, a kernel-mode fault panics
-- **21 flat programs + 1 ELF32 demo**: coverage includes the user shell, shared opens, pipes, waitpid, execve, ELF32, fork heap isolation, the free-list allocator, per-process working directories, and filesystem concurrency stress
+- **22 flat programs + 1 ELF32 demo**: coverage includes the user shell, signal handling, shared opens, pipes, waitpid, execve, ELF32, fork heap isolation, the free-list allocator, per-process working directories, and filesystem concurrency stress
 
 ### ⏱️ Multitasking & Devices
 - **Preemptive multitasking**: PIT IRQ0 (18.2 Hz) round-robin scheduling; cooperative and preemptive context frames are mutually restorable; includes a "bully task" demo
@@ -119,7 +120,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `edit file` | Open the editor (^S save, ^X asks to save on exit) |
 | `cc file.c [args...]` | Compile and run a C program (args go to main) |
 | `run prog [args] [&]` | Run an embedded or `/bin` executable (`args` enter the initial stack; `&` = detached background) |
-| `run sh` | Enter the user-mode shell (`exit` returns to the kernel shell) |
+| `run sh` | Re-enter the user shell from recovery mode (the normal image already starts there) |
 | `splash` | Replay the boot screen |
 
 ## 🚀 Quick Start
@@ -127,17 +128,19 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 **Requirements** (Arch Linux): `nasm`, `gcc` (32-bit support), `ld`, `objcopy`, `qemu-system-i386`
 
 ```bash
-make          # build build/os.img
+make          # build Ring-3 os.img and recovery os-kernel.img
 make run      # run in QEMU; build/disk.img stores the persistent filesystem
 make debug    # QEMU + GDB source-level debugging (port 1234)
 make clean    # clean up
 ```
 
-After boot, a ~4 second boot screen plays (press any key to skip), then the shell:
+After boot, a ~4 second boot screen plays (press any key to skip), then the normal image enters a Ring 3 shell:
 
 ```
-OS:/> help
+sh:/> help
 ```
+
+Type `exit` to enter the kernel recovery shell (`OS:/>`) for kernel services such as `font/tetris/edit/cc/splash`.
 
 ## 📝 Typical Workflow
 
@@ -165,6 +168,10 @@ printf("read %d: %s\n", n, buf); return 0; }
 |---|---|---|
 | <img src="note/shell-fs.png" width="240" alt="filesystem ops"/> | <img src="note/editor.png" width="240" alt="editor"/> | <img src="note/cc-demo.png" width="240" alt="cc"/> |
 
+| Default Ring 3 shell | Kernel recovery shell |
+|---|---|
+| <img src="note/splash-shell.png" width="360" alt="default Ring 3 shell"/> | <img src="note/recovery-shell.png" width="360" alt="kernel recovery shell"/> |
+
 | Ring 3 user mode | User fault caught by the kernel |
 |---|---|
 | <img src="note/ring3-hello.png" width="360" alt="ring 3 user mode"/> | <img src="note/ring3-crash.png" width="360" alt="page fault"/> |
@@ -179,7 +186,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 Automated Tests
 
-21 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions):
+23 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions):
 
 ```bash
 python3 tools/test-memory.py  # E820 + page allocator + kernel heap (15 checks)
@@ -189,6 +196,8 @@ python3 tools/test-fs.py       # filesystem   (43 checks)
 python3 tools/test-disk.py     # ATA/mount/reboot persistence (19 checks)
 python3 tools/test-fs2.py      # indirect blocks/rename/hard links/truncate/reboot
 python3 tools/test-fs-journal.py # committed-journal power-loss replay
+python3 tools/test-signals.py  # user handler/mask/pending/sigreturn
+python3 tools/test-boot-shell.py # normal Ring 3 boot / recovery kernel shell
 python3 tools/test-edit.py     # editor/undo/find/caret (67 checks)
 python3 tools/test-cc.py       # C compiler   (41 checks)
 python3 tools/test-preempt.py  # preemption   (7 checks)
@@ -285,6 +294,8 @@ python3 tools/test-shell.py    # shell/pipelines/groups/stop-resume/jobs (59 che
 | 23 | ATA PIO + on-disk superblock/inodes/bitmaps + mount validation + write-through cache + reboot persistence |
 | 24 | Single-indirect blocks + filesystem global critical section + `rename/stat` + user `mv`/`ls -l` + concurrent-write tests |
 | 25 | Sleeping FS mutex + bounded delayed writeback + metadata redo journal + crash replay + rename replacement/hard links/truncate |
+| 26a | User sigaction/sigprocmask/sigreturn + pending/mask + handler stack frame and return trampoline |
+| 26b | Normal Ring 3 boot + boot-mode byte + recovery kernel shell/test image |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 

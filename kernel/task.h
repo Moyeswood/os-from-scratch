@@ -29,6 +29,7 @@
 
 #define MAX_TASKS 16
 #define TASK_FD_MAX 16
+#define TASK_SIGNAL_MAX 32
 
 typedef enum {
     TASK_IDLE,     // 调度器空转任务 (启动栈, 不参与轮转)
@@ -67,6 +68,11 @@ typedef struct {
     uint32_t image_end;    // 已装入镜像的页尾
     uint32_t cwd_inum;     // 进程工作目录 inode
     task_file_t* fds[TASK_FD_MAX];
+    // ---- 里程碑 26: 用户态信号 ----
+    uint32_t signal_pending;              // bit (signo-1)
+    uint32_t signal_mask;                 // bit (signo-1)
+    uint32_t signal_handlers[TASK_SIGNAL_MAX];
+    uint32_t signal_restorer;             // 用户态 sigreturn 跳板地址
 } task_t;
 
 // 多任务演示开关 (start/stop 命令 + 演示任务 A/B/C 使用)

@@ -25,6 +25,7 @@
 #include "memory.h"
 #include "vm.h"
 #include "exec.h"
+#include "fs.h"
 #include "heap.h"
 #include "serial.h"
 #include "string.h"
@@ -33,6 +34,16 @@
 
 static uint8_t proc_stacks[MAX_TASKS][PROC_STACK_SIZE];
 static int console_fg_pgid = 0;
+
+#define SIGNAL_BIT(sig) (1u << ((uint32_t)(sig) - 1))
+#define SIGFRAME_MAGIC 0x53474652u   // "SGFR"
+
+typedef struct {
+    user_frame_t saved;
+    uint32_t saved_mask;
+    uint32_t signal;
+    uint32_t magic;
+} user_signal_frame_t;
 
 // ---------- 查程序表 ----------
 static const user_prog_t* prog_lookup(const char* name) {
@@ -299,6 +310,7 @@ void proc_exit(int code) {
     serial_put_hex((uint32_t)code);
     serial_puts("\n\r");
     task_fd_close_all(me);       // 先关写端, 让管道读者看到 EOF
+    fs_flush();                  // 正常退出是文件 close 的持久化边界
     detach_children(me->pid);
     task_zombie_switch_away(code);   // 永不返回
     while (1) { __asm__ volatile("hlt"); }
@@ -341,6 +353,11 @@ int proc_fork(user_frame_t* f) {
     child->parent_pid = parent->pid;
     child->pgid = parent->pgid;
     child->cwd_inum = parent->cwd_inum;
+    child->signal_pending = parent->signal_pending;
+    child->signal_mask = parent->signal_mask;
+    child->signal_restorer = parent->signal_restorer;
+    k_memcpy(child->signal_handlers, parent->signal_handlers,
+             sizeof(child->signal_handlers));
     task_fd_copy(child, parent);
 
     if (vm_clone(parent, child) < 0) {
@@ -446,9 +463,190 @@ int proc_set_foreground(int pgid) {
     return 0;
 }
 
+static int signal_supported(int sig) {
+    return sig == SIGINT || sig == SIGKILL || sig == SIGTERM ||
+           sig == SIGSTOP || sig == SIGCONT;
+}
+
+int proc_sigaction(int sig, uint32_t handler, uint32_t restorer) {
+    task_t* t = task_current();
+    if (!t || !t->is_user || !signal_supported(sig) ||
+        sig == SIGKILL || sig == SIGSTOP)
+        return -1;
+    if (handler != SIG_DFL && handler != SIG_IGN &&
+        !vm_user_range_ok(t, handler, 1))
+        return -1;
+    if (handler != SIG_DFL && handler != SIG_IGN &&
+        !vm_user_range_ok(t, restorer, 1))
+        return -1;
+
+    uint32_t old = t->signal_handlers[sig - 1];
+    t->signal_handlers[sig - 1] = handler;
+    if (handler != SIG_DFL && handler != SIG_IGN)
+        t->signal_restorer = restorer;
+    serial_puts("[SIG] pid ");
+    serial_put_hex(t->pid);
+    serial_puts(" sig=");
+    serial_put_hex((uint32_t)sig);
+    serial_puts(" action=");
+    serial_put_hex(handler);
+    serial_puts("\n\r");
+    return (int)old;
+}
+
+int proc_sigprocmask(int how, uint32_t set, uint32_t* oldset) {
+    task_t* t = task_current();
+    if (!t || !t->is_user) return -1;
+    if (oldset && !vm_user_range_ok(t, (uint32_t)oldset, sizeof(uint32_t)))
+        return -1;
+    if (set && !vm_user_range_ok(t, set, sizeof(uint32_t))) return -1;
+
+    uint32_t old = t->signal_mask;
+    uint32_t mask = set ? *(const uint32_t*)set : 0;
+    uint32_t immutable = SIGNAL_BIT(SIGKILL) | SIGNAL_BIT(SIGSTOP);
+    mask &= ~immutable;
+    if (how == SIG_BLOCK) t->signal_mask |= mask;
+    else if (how == SIG_UNBLOCK) t->signal_mask &= ~mask;
+    else if (how == SIG_SETMASK) t->signal_mask = mask;
+    else return -1;
+    t->signal_mask &= ~immutable;
+    if (oldset && vm_write_user(t, (uint32_t)oldset, &old, sizeof(old)) < 0)
+        return -1;
+    return 0;
+}
+
+int proc_sigreturn(user_frame_t* f) {
+    task_t* t = task_current();
+    if (!t || !t->is_user || !f || !(f->cs & 3)) return -1;
+    user_signal_frame_t* frame =
+        (user_signal_frame_t*)(f->esp_user + 8);
+    if (!vm_user_range_ok(t, (uint32_t)frame, sizeof(*frame)) ||
+        frame->magic != SIGFRAME_MAGIC || !(frame->saved.cs & 3))
+        return -1;
+    user_frame_t saved = frame->saved;
+    t->signal_mask = frame->saved_mask;
+    frame->magic = 0;
+    *f = saved;
+    return 0;
+}
+
+static int signal_deliver_one(task_t* t, user_frame_t* f) {
+    if (!t || !t->is_user || !f || !(f->cs & 3)) return 0;
+    uint32_t ready = t->signal_pending & ~t->signal_mask;
+    if (!ready) return 0;
+
+    int sig = 1;
+    while (sig <= TASK_SIGNAL_MAX && !(ready & SIGNAL_BIT(sig))) sig++;
+    if (sig > TASK_SIGNAL_MAX) return 0;
+    uint32_t handler = t->signal_handlers[sig - 1];
+    if (handler == SIG_IGN) {
+        t->signal_pending &= ~SIGNAL_BIT(sig);
+        return 1;
+    }
+    if (handler == SIG_DFL) {
+        t->signal_pending &= ~SIGNAL_BIT(sig);
+        if (sig == SIGSTOP) {
+            stop_task(t);
+        } else if (sig == SIGCONT) {
+            continue_task(t);
+        } else {
+            kill_task(t, sig == SIGINT ? "SIGINT" : "SIGTERM");
+        }
+        return 1;
+    }
+    if (!t->signal_restorer ||
+        !vm_user_range_ok(t, handler, 1) ||
+        !vm_user_range_ok(t, t->signal_restorer, 1))
+        return 0;
+
+    uint32_t old_esp = f->esp_user;
+    if (old_esp < VM_STACK_BOTTOM + 128)
+        return 0;
+    uint32_t base = (old_esp - sizeof(user_signal_frame_t) - 16) & ~15u;
+    uint32_t ret_addr = base - 4;
+    user_signal_frame_t frame;
+    frame.saved = *f;
+    frame.saved_mask = t->signal_mask;
+    frame.signal = (uint32_t)sig;
+    frame.magic = SIGFRAME_MAGIC;
+
+    if (vm_write_user(t, ret_addr, &t->signal_restorer, sizeof(uint32_t)) < 0 ||
+        vm_write_user(t, base, &sig, sizeof(uint32_t)) < 0 ||
+        vm_write_user(t, base + 8, &frame, sizeof(frame)) < 0)
+        return 0;
+
+    t->signal_pending &= ~SIGNAL_BIT(sig);
+    t->signal_mask |= SIGNAL_BIT(sig);
+    f->esp_user = ret_addr;
+    f->eip = handler;
+    f->eax = (uint32_t)sig;
+    serial_puts("[SIG] deliver pid ");
+    serial_put_hex(t->pid);
+    serial_puts(" sig=");
+    serial_put_hex((uint32_t)sig);
+    serial_puts(" eip=");
+    serial_put_hex(handler);
+    serial_puts("\n\r");
+    return 1;
+}
+
+void proc_deliver_signal(user_frame_t* f) {
+    task_t* t = task_current();
+    while (signal_deliver_one(t, f)) {
+        if (t->state == TASK_STOPPED || t->state == TASK_ZOMBIE) break;
+    }
+}
+
+void proc_deliver_current_saved(void) {
+    task_t* t = task_current();
+    if (!t || !t->is_user || !t->esp) return;
+    proc_deliver_signal((user_frame_t*)t->esp);
+}
+
+void proc_reset_signals(void) {
+    task_t* t = task_current();
+    if (!t) return;
+    t->signal_pending = 0;
+    t->signal_mask = 0;
+    t->signal_restorer = 0;
+    k_memset(t->signal_handlers, 0, sizeof(t->signal_handlers));
+}
+
+static int send_signal_to_task(task_t* t, int sig) {
+    if (!t || !t->is_user || t->state == TASK_ZOMBIE) return -1;
+    if (sig == SIGKILL) return kill_task(t, "SIGKILL");
+    if (sig == SIGSTOP) {
+        if (t->state == TASK_STOPPED) return 0;
+        return stop_task(t);
+    }
+    if (sig == SIGCONT) {
+        if (t->state == TASK_STOPPED) continue_task(t);
+        if (t->signal_handlers[sig - 1] == SIG_DFL ||
+            t->signal_handlers[sig - 1] == SIG_IGN)
+            return 0;
+    }
+
+    uint32_t handler = t->signal_handlers[sig - 1];
+    if (handler == SIG_IGN) return 0;
+    if (handler == SIG_DFL) {
+        return kill_task(t, sig == SIGINT ? "SIGINT" : "SIGTERM");
+    }
+
+    t->signal_pending |= SIGNAL_BIT(sig);
+    if (t->state == TASK_SLEEPING) {
+        t->state = TASK_READY;
+        t->wait_flags = 0;
+    }
+    serial_puts("[SIG] queued pid ");
+    serial_put_hex(t->pid);
+    serial_puts(" sig=");
+    serial_put_hex((uint32_t)sig);
+    serial_puts("\n\r");
+    return 0;
+}
+
 int proc_signal(int pid, int sig) {
-    if (!pid || (sig != SIGINT && sig != SIGKILL && sig != SIGTERM &&
-                 sig != SIGSTOP && sig != SIGCONT))
+    if (!pid || !signal_supported(sig))
         return -1;
     int affected = 0;
     int direction = pid < 0 ? -pid : pid;
@@ -457,26 +655,12 @@ int proc_signal(int pid, int sig) {
             task_t* t = task_at(i);
             if (!t || !t->is_user || t->pgid != direction ||
                 t->state == TASK_ZOMBIE) continue;
-            if (sig == SIGSTOP) {
-                if (t->state == TASK_STOPPED || stop_task(t) == 0) ++affected;
-            } else if (sig == SIGCONT) {
-                if (t->state != TASK_STOPPED || continue_task(t) == 0) ++affected;
-            } else {
-                ++affected;
-                kill_task(t, sig == SIGINT ? "SIGINT" : "SIGTERM");
-            }
+            if (send_signal_to_task(t, sig) == 0) ++affected;
         }
     } else {
         task_t* t = task_by_pid(pid);
         if (t && t->is_user && t->state != TASK_ZOMBIE) {
-            if (sig == SIGSTOP) {
-                if (t->state == TASK_STOPPED || stop_task(t) == 0) ++affected;
-            } else if (sig == SIGCONT) {
-                if (t->state != TASK_STOPPED || continue_task(t) == 0) ++affected;
-            } else {
-                ++affected;
-                kill_task(t, sig == SIGINT ? "SIGINT" : "SIGTERM");
-            }
+            if (send_signal_to_task(t, sig) == 0) ++affected;
         }
     }
     return affected ? 0 : -1;

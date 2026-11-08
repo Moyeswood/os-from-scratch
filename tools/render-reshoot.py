@@ -83,6 +83,12 @@ if not wait_pat(r"\[SP\] (done|skipped)"): print("TIMEOUT [SP]"); sys.exit(1)
 time.sleep(1.0)
 shot("splash-shell")
 
+# 2b. 默认 Ring 3 shell → exit → recovery kernel shell
+type_text("exit\n", wait=0.1)
+if not wait_pat(r"\[USER\] exit code="): print("TIMEOUT USER SHELL"); sys.exit(1)
+time.sleep(1.0)
+shot("recovery-shell")
+
 # 3. font 20 help (默认字号)
 type_text("help\n", wait=0.1)
 shot("font20")

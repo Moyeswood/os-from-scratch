@@ -191,5 +191,6 @@ gdt_desc:
     dw gdt_end - gdt_start - 1
     dd gdt_start
 
-times 510 - ($ - $$) db 0
+times 509 - ($ - $$) db 0
+boot_mode_marker db 1       ; 1 = boot Ring 3 shell, 0 = recovery kernel shell
 dw 0xAA55

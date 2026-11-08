@@ -8,7 +8,7 @@
 #   - 回归: font 切换 (与用户态无关但同跑一遍 GDT 新环境)
 import socket, subprocess, time, sys, os, re, threading
 
-IMG = "build/os.img"
+IMG = "build/os-kernel.img"
 MON = "/tmp/newos-mon.sock"
 SERIAL = "/tmp/newos-serial.log"
 try: os.unlink(MON)

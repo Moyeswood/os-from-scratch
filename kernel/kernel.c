@@ -49,6 +49,15 @@ void kernel_main() {
     vga_puts("MyQwen-OS v1.0.0\n\r");
     vga_puts("Type 'help' for available commands.\n\r\n\r");
 
+    // The first stage carries a mode byte in the last unused boot-sector
+    // byte. os.img boots Ring 3; os-kernel.img boots the recovery shell.
+    uint8_t boot_mode = *(volatile uint8_t*)0x7DFDu;
+    if (boot_mode == 1) {
+        vga_puts("Starting Ring 3 shell (exit -> recovery shell)...\n\r\n\r");
+        user_run("sh", 0, 0, 0);
+        vga_puts("\n\r[USER] Ring 3 shell exited; recovery shell active\n\r");
+    }
+
     task_wake_shell();      // shell 就绪 — 下一个 IRQ0 把它切上 CPU
     sched_start();          // 空转循环, 永不返回 (没人可跑时 sti;hlt)
 }

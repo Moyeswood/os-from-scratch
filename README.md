@@ -35,10 +35,11 @@ NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编�
 
 ### 🛡️ Ring 3 用户态
 - **特权级隔离**：TSS 内核栈切换、用户代码/数据段（DPL3）、页表 U/S 位保护——用户程序碰内核内存直接 #PF
-- **系统调用**：`int 0x80`（门 DPL3）——putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/link/truncate/setpgid/tcsetpgrp/kill，内核逐页校验用户传入的指针
-- **独立用户态 Shell**：`run sh` 启动；支持 `/bin` PATH 查找、四段管道、`<`/`>`/`>>`、进程组、Ctrl+C/Ctrl+Z、后台 `&` 与 `jobs/fg/bg/kill/wait`，以及 `mv`、`stat`、`ls -l`
+- **系统调用**：`int 0x80`（门 DPL3）——putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/link/truncate/sigaction/sigprocmask/sigreturn/setpgid/tcsetpgrp/kill，内核逐页校验用户传入的指针
+- **用户态信号**：`SIGINT/SIGTERM/SIGCONT` 可安装 handler 或忽略；支持 pending 位图、屏蔽字、自动屏蔽当前信号和 SysV 风格用户栈返回帧
+- **默认用户态 Shell**：正常启动直接进入 Ring 3 `sh:/>`；支持 `/bin` PATH 查找、四段管道、`<`/`>`/`>>`、进程组、Ctrl+C/Ctrl+Z、后台 `&`、信号处理与 `mv/ln/truncate/stat/ls -l`。`exit` 进入内核恢复 Shell
 - **异常处理**：32 个异常处理器打印完整现场（EIP/CS/EFLAGS/ESP/CR2 + 页错误码 P/W/U 位解读），用户态异常杀进程回 shell，内核态异常 panic
-- **21 个 flat 程序 + 1 个 ELF32 演示程序**：覆盖用户 Shell、共享打开文件、管道、waitpid、execve、ELF32、fork 堆隔离、空闲链表 allocator、每进程工作目录和文件系统并发压力测试
+- **22 个 flat 程序 + 1 个 ELF32 演示程序**：覆盖用户 Shell、信号处理、共享打开文件、管道、waitpid、execve、ELF32、fork 堆隔离、空闲链表 allocator、每进程工作目录和文件系统并发压力测试
 
 ### ⏱️ 多任务与设备
 - **抢占式多任务**：PIT IRQ0（18.2Hz）时间片轮转，协作式/抢占式统一上下文帧可互恢复，带"恶霸任务"演示
@@ -119,7 +120,7 @@ nano 风格的 `edit` 命令：
 | `edit file` | 打开编辑器（^S 保存，^X 退出时询问保存） |
 | `cc file.c [args...]` | 编译并运行 C 程序（参数传给 main） |
 | `run prog [args] [&]` | 运行内嵌或 `/bin` 程序；参数进入初始用户栈，& = detached 后台任务 |
-| `run sh` | 进入用户态 Shell（`exit` 返回内核 Shell） |
+| `run sh` | 从恢复 Shell 再进入用户态 Shell（正式镜像默认已进入） |
 | `splash` | 重放开机画面 |
 
 ## 🚀 快速开始
@@ -127,23 +128,26 @@ nano 风格的 `edit` 命令：
 **环境要求**（Arch Linux）：`nasm` `gcc`（32 位支持）`ld` `objcopy` `qemu-system-i386`
 
 ```bash
-make          # 构建 build/os.img
+make          # 构建默认 Ring 3 的 os.img 和内核恢复用 os-kernel.img
 make run      # QEMU 运行；build/disk.img 保存持久化文件系统
 make debug    # QEMU + GDB 源码级调试 (端口 1234)
 make clean    # 清理
 ```
 
-开机后约 4 秒开机画面（任意键跳过），进入 Shell：
+开机后约 4 秒开机画面（任意键跳过），正式镜像直接进入 Ring 3 Shell：
 
 ```
-OS:/> help
+sh:/> help
 ```
+
+输入 `exit` 进入内核恢复 Shell（`OS:/>`），可使用 `font/tetris/edit/cc/splash` 等内核服务。
 
 ## 📝 典型工作流
 
 ```
-OS:/> mkdir src
-OS:/> cd src
+sh:/> mkdir src
+sh:/> cd src
+sh:/src> exit                  ← 进入内核恢复 Shell
 OS:/src> edit hello.c          ← 编辑器写 C 程序
 OS:/src> cc hello.c            ← 编译并运行
 hello from C! (42)
@@ -165,6 +169,10 @@ printf("read %d: %s\n", n, buf); return 0; }
 |---|---|---|
 | <img src="note/shell-fs.png" width="240" alt="文件系统操作"/> | <img src="note/editor.png" width="240" alt="内置编辑器"/> | <img src="note/cc-demo.png" width="240" alt="C 编译运行"/> |
 
+| 默认 Ring 3 Shell | 内核恢复 Shell |
+|---|---|
+| <img src="note/splash-shell.png" width="360" alt="默认 Ring 3 Shell"/> | <img src="note/recovery-shell.png" width="360" alt="内核恢复 Shell"/> |
+
 | Ring 3 用户态 | 用户态越界被内核抓获 |
 |---|---|
 | <img src="note/ring3-hello.png" width="360" alt="Ring 3 用户态"/> | <img src="note/ring3-crash.png" width="360" alt="页错误现场"/> |
@@ -183,7 +191,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 自动化测试
 
-21 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言）：
+23 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言）：
 
 ```bash
 python3 tools/test-memory.py  # E820 + 页分配 + 内核堆 (15 项)
@@ -193,6 +201,8 @@ python3 tools/test-fs.py       # 文件系统 (43 项)
 python3 tools/test-disk.py     # ATA/挂载/重启持久化 (19 项)
 python3 tools/test-fs2.py      # 间接块/rename/硬链接/truncate/重启
 python3 tools/test-fs-journal.py # 日志提交后断电与启动重放
+python3 tools/test-signals.py  # 用户 handler/屏蔽/pending/sigreturn
+python3 tools/test-boot-shell.py # 正式镜像 Ring 3 / 恢复镜像内核 Shell
 python3 tools/test-edit.py     # 编辑器/撤销/搜索/光标 (67 项)
 python3 tools/test-cc.py       # C 编译器 (41 项)
 python3 tools/test-preempt.py  # 抢占调度 (7 项)
@@ -289,6 +299,8 @@ python3 tools/test-shell.py    # Shell/管道/进程组/暂停恢复/作业 (59 
 | 23 | ATA PIO + 磁盘超级块/inode/块位图 + 挂载检查 + 写穿缓存 + 重启持久化 |
 | 24 | 一级间接块 + 文件系统全局临界区 + `rename/stat` + 用户态 `mv`/`ls -l` + 并发写测试 |
 | 25 | 可睡眠 FS mutex + 有界延迟回写 + 元数据 redo journal + 断电重放 + rename 覆盖/硬链接/truncate |
+| 26a | 用户态 sigaction/sigprocmask/sigreturn + pending/mask + handler 栈帧与返回跳板 |
+| 26b | 正式镜像默认 Ring 3 Shell + 启动模式字节 + 内核恢复 Shell/测试镜像 |
 
 每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
 

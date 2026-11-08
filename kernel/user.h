@@ -73,12 +73,21 @@ typedef struct {
 #define SYS_STAT     29  // 里程碑 24: 查询文件或目录元数据
 #define SYS_LINK     30  // 里程碑 25: 创建普通文件硬链接
 #define SYS_TRUNCATE 31  // 里程碑 25: 按字节收缩或扩展文件
+#define SYS_SIGACTION 32 // 里程碑 26: 安装用户态信号处理函数
+#define SYS_SIGPROCMASK 33 // 里程碑 26: 修改信号屏蔽字
+#define SYS_SIGRETURN 34 // 里程碑 26: 从 handler 返回原用户上下文
 
 #define SIGINT   2
 #define SIGKILL  9
 #define SIGTERM 15
 #define SIGCONT 18
 #define SIGSTOP 19
+
+#define SIG_DFL ((uint32_t)0)
+#define SIG_IGN ((uint32_t)1)
+#define SIG_BLOCK   0
+#define SIG_UNBLOCK 1
+#define SIG_SETMASK 2
 
 #define O_RDONLY     0x0001
 #define O_WRONLY     0x0002

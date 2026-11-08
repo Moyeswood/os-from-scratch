@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 
-IMG = "build/os.img"
+IMG = "build/os-kernel.img"
 MON = "/tmp/newos-mario-shot.sock"
 SERIAL = "/tmp/newos-mario-shot.log"
 

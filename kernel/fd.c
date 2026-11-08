@@ -143,8 +143,6 @@ void fd_release(task_file_t* file) {
         task_wake_pipe();
         if (!pipe->readers && !pipe->writers) pipe_destroy(pipe);
     }
-    // Last writer close is the durability boundary for delayed writeback.
-    if (file->kind == FILE_REGULAR && file->writable) fs_flush();
     kfree(file);
 }
 

@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 
-IMG = "build/os.img"
+IMG = "build/os-kernel.img"
 MON = "/tmp/newos-alloc-mon.sock"
 SERIAL = "/tmp/newos-alloc-serial.log"
 try:

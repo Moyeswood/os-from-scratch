@@ -22,6 +22,7 @@
 #include "serial.h"
 #include "shell.h"
 #include "fs.h"
+#include "proc.h"
 #include "string.h"
 #include "gdt.h"
 #include "paging.h"
@@ -169,6 +170,11 @@ void task_init() {
         tasks[i].mmap_brk = 0;
         tasks[i].image_end = 0;
         tasks[i].cwd_inum = 0;
+        tasks[i].signal_pending = 0;
+        tasks[i].signal_mask = 0;
+        tasks[i].signal_restorer = 0;
+        k_memset(tasks[i].signal_handlers, 0,
+                 sizeof(tasks[i].signal_handlers));
         task_fd_reset(&tasks[i]);
     }
     next_pid = 1;
@@ -266,6 +272,11 @@ void task_free_slot(int idx) {
     tasks[idx].mmap_brk = 0;
     tasks[idx].image_end = 0;
     tasks[idx].cwd_inum = 0;
+    tasks[idx].signal_pending = 0;
+    tasks[idx].signal_mask = 0;
+    tasks[idx].signal_restorer = 0;
+    k_memset(tasks[idx].signal_handlers, 0,
+             sizeof(tasks[idx].signal_handlers));
     task_fd_reset(&tasks[idx]);
 }
 
@@ -420,8 +431,10 @@ uint32_t task_timer_tick(uint32_t esp) {
         }
         if (next != &tasks[0]) next->state = TASK_RUNNING;
         cur = next;                 // ★切换前必须更新 cur (见 11a 记录)
+        if (next->is_user) proc_deliver_current_saved();
         return next->esp;
     }
+    if (cur->is_user) proc_deliver_current_saved();
     return esp;   // 没有别的就绪任务: 当前继续 (idle 继续睡, 任务继续跑)
 }
 

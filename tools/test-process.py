@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 
-IMG = "build/os.img"
+IMG = "build/os-kernel.img"
 MON = "/tmp/newos-process-mon.sock"
 SERIAL = "/tmp/newos-process-serial.log"
 
@@ -135,7 +135,7 @@ def wait_since(needle, timeout=12.0, name=""):
 
 
 check("boot: flat programs installed", wait_for(
-    lambda: "[EXEC] installed 0x00000015/0x00000015 programs in /bin" in log(),
+    lambda: "[EXEC] installed 0x00000016/0x00000016 programs in /bin" in log(),
     15, "flat-install"))
 check("boot: ELF demo installed", wait_for(
     lambda: "[EXEC] installed ELF /bin/elfdemo bytes=" in log(),

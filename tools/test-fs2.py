@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 
-OS_IMG = "build/os.img"
+OS_IMG = "build/os-kernel.img"
 DISK_IMG = "build/test-fs2.img"
 
 KEYMAP = {
@@ -162,8 +162,8 @@ def main():
         log = first.log()
         check("fs2: blank disk formatted",
               "[FS] no filesystem on disk, formatting" in log)
-        check("fs2: 21 programs installed",
-              "[EXEC] installed 0x00000015/0x00000015 programs in /bin" in log)
+        check("fs2: 22 programs installed",
+              "[EXEC] installed 0x00000016/0x00000016 programs in /bin" in log)
 
         first.mark()
         first.type_text("run fscheck\n")

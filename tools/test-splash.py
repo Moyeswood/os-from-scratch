@@ -2,7 +2,7 @@
 # 开机画面测试: 启动自动播放 / 任意键跳过 / splash 命令重放 / 回归
 import socket, subprocess, time, sys, os, re, threading
 
-IMG = "build/os.img"
+IMG = "build/os-kernel.img"
 MON = "/tmp/newos-mon.sock"
 SERIAL = "/tmp/newos-serial.log"
 try: os.unlink(MON)

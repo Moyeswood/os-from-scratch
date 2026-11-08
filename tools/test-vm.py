@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 
-IMG = "build/os.img"
+IMG = "build/os-kernel.img"
 MON = "/tmp/newos-vm-mon.sock"
 SERIAL = "/tmp/newos-vm-serial.log"
 

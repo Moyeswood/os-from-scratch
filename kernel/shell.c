@@ -839,6 +839,7 @@ static void execute_command() {
             vga_puts("  fdstdin  - read from fd 0 (type hello, then Enter)\n\r");
             vga_puts("  fdpipe   - fork-shared offset + pipe + dup2 demo\n\r");
             vga_puts("  fscheck  - 100KB indirect file + concurrent writers\n\r");
+            vga_puts("  sigtest  - user signal handlers, mask and sigreturn\n\r");
             vga_puts("  sh       - Ring 3 shell: pipelines/jobs/Ctrl+C/Z\n\r");
             vga_puts("  vmtest   - demand paging + COW + brk/mmap\n\r");
             vga_puts("  vmguard  - write the stack guard page (expected #PF)\n\r");

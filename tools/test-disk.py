@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 
-OS_IMG = "build/os.img"
+OS_IMG = "build/os-kernel.img"
 DISK_IMG = "build/test-disk.img"
 
 KEYMAP = {
@@ -196,7 +196,7 @@ def main():
               "[FS] no filesystem on disk" not in log)
         check("fs: mounted selftest", "[FS] selftest PASS" in log)
         check("bin: startup install is idempotent",
-              "[EXEC] installed 0x00000015/0x00000015 programs in /bin" in log)
+              "[EXEC] installed 0x00000016/0x00000016 programs in /bin" in log)
         check("fs: directory survives reboot",
               second.run("cd /persist", "[SH] cwd: /persist"),
               second.since()[-200:])

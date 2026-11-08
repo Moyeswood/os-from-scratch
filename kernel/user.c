@@ -221,7 +221,7 @@ static int sys_close(task_t* me, int fd) {
     if (!f) return -1;
     me->fds[fd] = 0;
     fd_release(f);
-    return 0;
+    return fs_flush();
 }
 
 static int sys_pipe(task_t* me, int* user_fds) {
@@ -467,6 +467,7 @@ void syscall_dispatch(user_frame_t* f) {
             break;
         }
         f->eax = (uint32_t)exec_replace_current(f, path, args);
+        if (f->eax == 0) proc_reset_signals();
         kfree(args);
         break;
     }
@@ -542,6 +543,16 @@ void syscall_dispatch(user_frame_t* f) {
         f->eax = (uint32_t)sys_truncate(task_current(),
                                         (const char*)f->ebx, f->ecx);
         break;
+    case SYS_SIGACTION:
+        f->eax = (uint32_t)proc_sigaction((int)f->ebx, f->ecx, f->edx);
+        break;
+    case SYS_SIGPROCMASK:
+        f->eax = (uint32_t)proc_sigprocmask((int)f->ebx, f->ecx,
+                                            (uint32_t*)f->edx);
+        break;
+    case SYS_SIGRETURN:
+        if (proc_sigreturn(f) < 0) f->eax = 0xFFFFFFFFu;
+        break;
     case SYS_SETPGID:
         f->eax = (uint32_t)proc_setpgid((int)f->ebx, (int)f->ecx);
         break;
@@ -558,6 +569,7 @@ void syscall_dispatch(user_frame_t* f) {
         f->eax = 0xFFFFFFFF;
         break;
     }
+    proc_deliver_signal(f);
 }
 
 // ---------- 内核初始化 ----------

@@ -5,7 +5,7 @@
 # 屏幕只在最后做少量抽查。
 import socket, subprocess, time, sys, os, re, threading
 
-IMG = "build/os.img"
+IMG = "build/os-kernel.img"
 MON = "/tmp/newos-mon.sock"
 SERIAL = "/tmp/newos-serial.log"
 try: os.unlink(MON)

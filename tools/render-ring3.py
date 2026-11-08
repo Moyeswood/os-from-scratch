@@ -4,7 +4,7 @@ import socket, subprocess, time, os, re, threading, sys
 from PIL import Image
 
 NEWOS = "/home/mfw/Documents/claude001/NewOS"
-IMG = f"{NEWOS}/build/os.img"
+IMG = f"{NEWOS}/build/os-kernel.img"
 MON = "/tmp/newos-repro/mon-ring3.sock"
 OUT = f"{NEWOS}/note"
 os.makedirs("/tmp/newos-repro", exist_ok=True)

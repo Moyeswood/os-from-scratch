@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 
-OS_IMG = "build/os.img"
+OS_IMG = "build/os-kernel.img"
 DISK_IMG = "build/test-journal.img"
 
 KEYMAP = {

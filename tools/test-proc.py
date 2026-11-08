@@ -9,7 +9,7 @@
 #   - run crash &: 后台进程异常被杀, shell 存活, 槽位可复用
 import socket, subprocess, time, sys, os, re, threading
 
-IMG = "build/os.img"
+IMG = "build/os-kernel.img"
 MON = "/tmp/newos-proc-mon.sock"
 SERIAL = "/tmp/newos-proc-serial.log"
 try: os.unlink(MON)

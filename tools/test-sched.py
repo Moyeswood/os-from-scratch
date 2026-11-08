@@ -8,7 +8,7 @@
 #   - 老回归由 test-user.py 等 8 套独立覆盖, 本套只管新行为
 import socket, subprocess, time, sys, os, threading
 
-IMG = "build/os.img"
+IMG = "build/os-kernel.img"
 MON = "/tmp/newos-sched-mon.sock"
 SERIAL = "/tmp/newos-sched-serial.log"
 try: os.unlink(MON)

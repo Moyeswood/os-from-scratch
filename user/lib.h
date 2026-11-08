@@ -54,12 +54,42 @@ static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 #define SYS_STAT     29
 #define SYS_LINK     30
 #define SYS_TRUNCATE 31
+#define SYS_SIGACTION 32
+#define SYS_SIGPROCMASK 33
+#define SYS_SIGRETURN 34
 
 #define SIGINT   2
 #define SIGKILL  9
 #define SIGTERM 15
 #define SIGCONT 18
 #define SIGSTOP 19
+
+#define SIG_DFL ((uint32_t)0)
+#define SIG_IGN ((uint32_t)1)
+#define SIG_BLOCK   0
+#define SIG_UNBLOCK 1
+#define SIG_SETMASK 2
+
+typedef void (*sighandler_t)(int);
+
+static inline int sigprocmask(int how, const uint32_t* set, uint32_t* oldset) {
+    return (int)syscall3(SYS_SIGPROCMASK, (uint32_t)how,
+                         (uint32_t)set, (uint32_t)oldset);
+}
+
+__attribute__((naked)) static void signal_trampoline(void) {
+    __asm__ volatile(
+        "movl $34, %eax\n"
+        "int $0x80\n"
+        "hlt\n"
+    );
+}
+
+static inline sighandler_t signal(int sig, sighandler_t handler) {
+    return (sighandler_t)syscall3(SYS_SIGACTION, (uint32_t)sig,
+                                  (uint32_t)handler,
+                                  (uint32_t)signal_trampoline);
+}
 
 #define WNOHANG   1
 #define WUNTRACED 2

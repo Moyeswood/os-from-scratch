@@ -3,7 +3,7 @@
 # 启动 QEMU (monitor socket + 串口重定向到文件), 全程无头验证。
 import socket, subprocess, time, sys, os, re, threading
 
-IMG = "build/os.img"
+IMG = "build/os-kernel.img"
 MON = "/tmp/newos-mon.sock"
 SERIAL = "/tmp/newos-serial.log"
 try: os.unlink(MON)

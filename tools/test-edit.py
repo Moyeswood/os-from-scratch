@@ -3,7 +3,7 @@
 # 复用 test-fs.py 基建: monitor socket + 管道串口 + 基线机制 + 键名映射。
 import socket, subprocess, time, sys, os, re, threading
 
-IMG = "build/os.img"
+IMG = "build/os-kernel.img"
 MON = "/tmp/newos-mon.sock"
 SERIAL = "/tmp/newos-serial.log"
 try: os.unlink(MON)

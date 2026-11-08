@@ -20,6 +20,7 @@ TRAMP_BIN = $(BUILD_DIR)/rm_trampoline.bin
 KERNEL_ELF = $(BUILD_DIR)/kernel.elf
 KERNEL_BIN = $(BUILD_DIR)/kernel.bin
 OS_IMG = $(BUILD_DIR)/os.img
+OS_KERNEL_IMG = $(BUILD_DIR)/os-kernel.img
 DISK_IMG = $(BUILD_DIR)/disk.img
 
 KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
@@ -66,11 +67,11 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
 # 里程碑 15 + 本地 allocator 演示；elfdemo 作为独立 ELF 镜像嵌入
 USER_PROGS = hello count crash div0 echo badptr forkdemo spinner vmtest vmguard \
              execdemo execbad waittest execargv memdemo allocdemo filedemo fdstdin \
-             sh fdpipe fscheck
+             sh fdpipe fscheck sigtest
 USER_BINS  = $(patsubst %,$(BUILD_DIR)/%.bin,$(USER_PROGS))
 ELF_DEMO   = $(BUILD_DIR)/elfdemo.elf
 
-all: $(OS_IMG)
+all: $(OS_IMG) $(OS_KERNEL_IMG)
 
 $(BOOT_BIN): $(BOOT_DIR)/boot.asm
 	mkdir -p $(BUILD_DIR)
@@ -133,6 +134,12 @@ $(OS_IMG): $(BOOT_BIN) $(KERNEL_BIN)
 	dd if=$(BOOT_BIN) of=$@ conv=notrunc status=none
 	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=1 conv=notrunc status=none
 
+# Test/recovery image: clear the boot-mode byte so the kernel starts its
+# recovery shell directly. The normal os.img launches the Ring 3 shell.
+$(OS_KERNEL_IMG): $(OS_IMG)
+	cp $(OS_IMG) $@
+	printf '\000' | dd of=$@ bs=1 seek=509 conv=notrunc status=none
+
 # Persistent filesystem disk. Keep this target idempotent: rebuilds must not
 # erase files written by either the OS or the persistence tests.
 $(DISK_IMG):
@@ -152,39 +159,45 @@ debug: $(OS_IMG) $(DISK_IMG)
 clean:
 	rm -rf $(BUILD_DIR) $(KERNEL_DIR)/*.o
 
-.PHONY: all run debug clean test-memory test-vm test-exec test-process test-fd test-shell test-disk test-fs2 test-fs-journal test-attached test-suite test-all
+.PHONY: all run debug clean test-memory test-vm test-exec test-process test-fd test-shell test-disk test-fs2 test-fs-journal test-signals test-boot-shell test-attached test-suite test-all
 
-test-memory: $(OS_IMG)
+test-memory: $(OS_KERNEL_IMG)
 	python3 tools/test-memory.py
 
-test-vm: $(OS_IMG)
+test-vm: $(OS_KERNEL_IMG)
 	python3 tools/test-vm.py
 
-test-exec: $(OS_IMG)
+test-exec: $(OS_KERNEL_IMG)
 	python3 tools/test-exec.py
 
-test-process: $(OS_IMG)
+test-process: $(OS_KERNEL_IMG)
 	python3 tools/test-process.py
 
-test-fd: $(OS_IMG)
+test-fd: $(OS_KERNEL_IMG)
 	python3 tools/test-fd.py
 
-test-shell: $(OS_IMG)
+test-shell: $(OS_KERNEL_IMG)
 	python3 tools/test-shell.py
 
-test-disk: $(OS_IMG)
+test-disk: $(OS_KERNEL_IMG)
 	python3 tools/test-disk.py
 
-test-fs2: $(OS_IMG)
+test-fs2: $(OS_KERNEL_IMG)
 	python3 tools/test-fs2.py
 
-test-fs-journal: $(OS_IMG)
+test-fs-journal: $(OS_KERNEL_IMG)
 	python3 tools/test-fs-journal.py
 
-test-attached: $(OS_IMG)
+test-signals: $(OS_KERNEL_IMG)
+	python3 tools/test-signals.py
+
+test-boot-shell: $(OS_IMG) $(OS_KERNEL_IMG)
+	python3 tools/test-boot-shell.py
+
+test-attached: $(OS_KERNEL_IMG)
 	python3 tools/run-attached-tests.py
 
-test-suite: $(OS_IMG)
+test-suite: $(OS_KERNEL_IMG)
 	python3 tools/test-memory.py
 	python3 tools/test-splash.py
 	python3 tools/test-font.py
@@ -192,6 +205,8 @@ test-suite: $(OS_IMG)
 	python3 tools/test-disk.py
 	python3 tools/test-fs2.py
 	python3 tools/test-fs-journal.py
+	python3 tools/test-signals.py
+	python3 tools/test-boot-shell.py
 	python3 tools/test-edit.py
 	python3 tools/test-cc.py
 	python3 tools/test-user.py
