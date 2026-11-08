@@ -52,8 +52,9 @@ int fs_create(const char* path, uint32_t type);
 // 删除文件或空目录 → 0 / -1
 int fs_remove(const char* path);
 
-// 重命名文件或目录。目标必须不存在；跨目录移动目录时会同步更新
-// 其 ".." 目录项。整个命名空间更新在一个全局临界区中完成。
+// 重命名文件或目录。目标存在时按 POSIX 风格原子替换：文件替换文件，
+// 目录只能替换空目录；跨目录移动目录时同步更新其 ".." 目录项。
+// 整个命名空间的元数据更新由一个 redo 日志事务保护。
 int fs_rename(const char* oldpath, const char* newpath);
 
 // 查询文件/目录元数据 → 0 / -1
@@ -65,12 +66,16 @@ int fs_read(uint32_t inum, void* buf, uint32_t off, uint32_t n);
 int fs_write(uint32_t inum, const void* buf, uint32_t n, int append);
 int fs_write_at(uint32_t inum, const void* buf, uint32_t off, uint32_t n);
 int fs_truncate(uint32_t inum);
+int fs_truncate_size(uint32_t inum, uint32_t size);
 int fs_inode_type(uint32_t inum);
 int fs_inode_size(uint32_t inum);
 
 // 目录迭代: 第 idx 个目录项 → 名字/inode/类型/大小 (0=成功, 0 项=结束)
 int fs_readdir(uint32_t inum, uint32_t idx,
                char* name, uint32_t* entry_inum, uint32_t* type, uint32_t* size);
+
+// 为普通文件创建硬链接 (目录不允许硬链接)。
+int fs_link(const char* oldpath, const char* newpath);
 
 // 当前目录
 int fs_chdir(const char* path);
@@ -79,5 +84,17 @@ void fs_pwd(char* out);              // 把 cwd 的绝对路径写入 out
 // 文件系统容量统计: 剩余块/剩余 inode/总块数/总 inode 数
 void fs_stat(uint32_t* free_blocks, uint32_t* free_inodes,
              uint32_t* total_blocks, uint32_t* total_inodes);
+
+// 强制提交脏数据与元数据日志; 普通文件 close/reboot 也会调用。
+int fs_flush(void);
+
+// 当前延迟回写缓存状态 (块数/其中元数据块数)。
+void fs_cache_stats(uint32_t* dirty_blocks, uint32_t* dirty_metadata);
+
+// QEMU 故障注入: 提交元数据日志后停在写 home 之前，重启时应自动重放。
+void fs_crashpoint(void);
+
+// 空闲任务周期调用: 非阻塞获取锁，到时间后提交脏缓存。
+void fs_periodic_flush(void);
 
 #endif

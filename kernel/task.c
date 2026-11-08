@@ -21,6 +21,7 @@
 #include "vga.h"
 #include "serial.h"
 #include "shell.h"
+#include "fs.h"
 #include "string.h"
 #include "gdt.h"
 #include "paging.h"
@@ -208,6 +209,7 @@ void sched_start() {
     // (task_timer_tick 返回下一个任务的帧); 这里只负责没人可跑时
     // 开门等中断, 省 CPU。
     while (1) {
+        fs_periodic_flush();
         __asm__ volatile("sti; hlt");
     }
 }
@@ -289,6 +291,16 @@ void task_wake_pipe(void) {
         }
     }
     if (flags & 0x200) __asm__ volatile("sti" : : : "memory");
+}
+
+void task_wake_fs(void) {
+    for (int i = 1; i < MAX_TASKS; i++) {
+        if (tasks[i].state == TASK_SLEEPING &&
+            (tasks[i].wait_flags & TASK_WAIT_FS)) {
+            tasks[i].state = TASK_READY;
+            tasks[i].wait_flags &= ~TASK_WAIT_FS;
+        }
+    }
 }
 
 // ---------- 协作切换 ----------

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# Milestone 24: indirect blocks, filesystem lock, rename/stat and persistence.
+# Milestones 24-25: indirect blocks, concurrent FS, rename replacement,
+# hard links, truncate-at-offset and reboot persistence.
 import os
 import socket
 import subprocess
@@ -194,6 +195,48 @@ def main():
               first.run("stat /fscheck/renamed.bin",
                         "[SH] stat: type=0x00000001 size=0x00019000"))
 
+        check("rename: create replacement source",
+              first.run("echo replacement-source > /fscheck/replace.src",
+                        "[SH] echo ok"))
+        check("rename: create replacement target",
+              first.run("echo replacement-target > /fscheck/replace.dst",
+                        "[SH] echo ok"))
+        check("rename: overwrite existing file",
+              first.run("mv /fscheck/replace.src /fscheck/replace.dst",
+                        "[SH] mv ok"))
+        check("rename: overwritten content wins",
+              first.run("cat /fscheck/replace.dst",
+                        "[SH] cat: replacement-source"))
+        check("rename: overwritten source removed",
+              first.run("stat /fscheck/replace.src", "[SH] stat fail"))
+
+        first.run("echo hard-link-data > /fscheck/link.src", "[SH] echo ok")
+        check("link: create hard link",
+              first.run("ln /fscheck/link.src /fscheck/link.dst", "[SH] ln ok"))
+        check("link: nlink becomes two",
+              first.run("stat /fscheck/link.dst", " nlink=0x00000002"))
+        check("link: content visible under both names",
+              first.run("cat /fscheck/link.dst", "[SH] cat: hard-link-data"))
+        first.run("rm /fscheck/link.src", "[SH] rm ok")
+        check("link: data survives unlink",
+              first.run("stat /fscheck/link.dst", " nlink=0x00000001"))
+        first.run("rm /fscheck/link.dst", "[SH] rm ok")
+        first.run("echo user-link-data > /fscheck/user-link.src", "[SH] echo ok")
+        first.run("echo abcdefghijklmnop > /fscheck/truncate.src", "[SH] echo ok")
+        check("truncate: shrink file",
+              first.run("truncate /fscheck/truncate.src 5", "[SH] truncate ok"))
+        check("truncate: shrink size",
+              first.run("stat /fscheck/truncate.src",
+                        "[SH] stat: type=0x00000001 size=0x00000005"))
+        check("truncate: shrink content",
+              first.run("cat /fscheck/truncate.src", "[SH] cat: abcde"))
+        check("truncate: grow file",
+              first.run("truncate /fscheck/truncate.src 10", "[SH] truncate ok"))
+        check("truncate: grow size",
+              first.run("stat /fscheck/truncate.src",
+                        "[SH] stat: type=0x00000001 size=0x0000000A"))
+        first.run("truncate /fscheck/truncate.src 3", "[SH] truncate ok")
+
         check("directory: create source",
               first.run("mkdir /fscheck/sub", "[SH] mkdir ok"))
         check("directory: cross-parent rename",
@@ -204,6 +247,24 @@ def main():
               first.run("cd ..", "[SH] cwd: /"))
         check("directory: cleanup",
               first.run("rm /moved-dir", "[SH] rm ok"))
+        first.run("mkdir /empty-src", "[SH] mkdir ok")
+        first.run("mkdir /empty-dst", "[SH] mkdir ok")
+        check("rename: replace empty directory",
+              first.run("mv /empty-src /empty-dst", "[SH] mv ok"))
+        check("rename: replaced directory removed",
+              first.run("stat /empty-src", "[SH] stat fail"))
+        check("rename: target directory type",
+              first.run("stat /empty-dst",
+                        "[SH] stat: type=0x00000002"))
+        first.run("mkdir /nonempty-src", "[SH] mkdir ok")
+        first.run("mkdir /nonempty-dst", "[SH] mkdir ok")
+        first.run("touch /nonempty-dst/child", "[SH] touch ok")
+        check("rename: reject nonempty directory target",
+              first.run("mv /nonempty-src /nonempty-dst", "[SH] mv fail"))
+        first.run("rm /nonempty-dst/child", "[SH] rm ok")
+        first.run("rm /nonempty-dst", "[SH] rm ok")
+        first.run("rm /nonempty-src", "[SH] rm ok")
+        first.run("rm /empty-dst", "[SH] rm ok")
         first.run("mkdir /tree", "[SH] mkdir ok")
         first.run("mkdir /tree/child", "[SH] mkdir ok")
         check("directory: reject move into subtree",
@@ -226,6 +287,17 @@ def main():
         check("user shell: mv utility",
               first.run("stat /fscheck/user-moved.bin",
                         "type=file size=16384 nlink=1 inode="))
+        first.run("ln /fscheck/user-link.src /fscheck/user-link.dst",
+                  "sh:/> ")
+        check("user shell: hard link utility",
+              first.run("stat /fscheck/user-link.dst",
+                        "type=file size=15 nlink=2 inode="))
+        first.run("rm /fscheck/user-link.src", "sh:/> ")
+        first.run("rm /fscheck/user-link.dst", "sh:/> ")
+        first.run("truncate /fscheck/truncate.src 4", "sh:/> ")
+        check("user shell: truncate utility",
+              first.run("stat /fscheck/truncate.src",
+                        "type=file size=4 nlink=1 inode="))
         check("user shell: exits", first.run("exit",
                                              "[USER] exit code=0x00000000"))
     finally:

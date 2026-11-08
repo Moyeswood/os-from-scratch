@@ -71,6 +71,8 @@ typedef struct {
 #define SYS_KILL     27  // 里程碑 21: 向进程或进程组发送终止信号
 #define SYS_RENAME   28  // 里程碑 24: 原子重命名/移动
 #define SYS_STAT     29  // 里程碑 24: 查询文件或目录元数据
+#define SYS_LINK     30  // 里程碑 25: 创建普通文件硬链接
+#define SYS_TRUNCATE 31  // 里程碑 25: 按字节收缩或扩展文件
 
 #define SIGINT   2
 #define SIGKILL  9

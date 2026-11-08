@@ -44,6 +44,7 @@ typedef enum {
 #define TASK_WAIT_TIME 2   // 等 g_ticks >= sleep_until (IRQ0 唤醒)
 #define TASK_WAIT_PROC 4   // 等子进程退出 (proc_exit 唤醒)
 #define TASK_WAIT_PIPE 8   // 等管道数据/空间 (pipe 读写方唤醒)
+#define TASK_WAIT_FS  16   // 等文件系统互斥锁
 
 typedef struct {
     uint32_t esp;          // 上下文帧指针 (44/52 字节帧, 见 switch.asm)
@@ -105,6 +106,7 @@ int  task_alloc_pid();        // 领一个不重复的 pid (单调递增)
 void task_free_slot(int idx); // 重置任务槽 (收尸后)
 void task_wake_pid(int pid);  // 唤醒等 WAIT_PROC 的睡眠者 (子进程退出时)
 void task_wake_pipe(void);    // 管道状态变化时唤醒等待者
+void task_wake_fs(void);      // 文件系统锁释放时唤醒等待者
 void task_zombie_switch_away(int exit_code);  // 当前任务变 ZOMBIE 并切走, 永不返回
 int  task_slot_of(task_t* t); // 任务在表里的下标
 void task_fd_reset(task_t* t);

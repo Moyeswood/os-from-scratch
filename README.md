@@ -35,7 +35,7 @@ NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编�
 
 ### 🛡️ Ring 3 用户态
 - **特权级隔离**：TSS 内核栈切换、用户代码/数据段（DPL3）、页表 U/S 位保护——用户程序碰内核内存直接 #PF
-- **系统调用**：`int 0x80`（门 DPL3）——putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/setpgid/tcsetpgrp/kill，内核逐页校验用户传入的指针
+- **系统调用**：`int 0x80`（门 DPL3）——putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/link/truncate/setpgid/tcsetpgrp/kill，内核逐页校验用户传入的指针
 - **独立用户态 Shell**：`run sh` 启动；支持 `/bin` PATH 查找、四段管道、`<`/`>`/`>>`、进程组、Ctrl+C/Ctrl+Z、后台 `&` 与 `jobs/fg/bg/kill/wait`，以及 `mv`、`stat`、`ls -l`
 - **异常处理**：32 个异常处理器打印完整现场（EIP/CS/EFLAGS/ESP/CR2 + 页错误码 P/W/U 位解读），用户态异常杀进程回 shell，内核态异常 panic
 - **21 个 flat 程序 + 1 个 ELF32 演示程序**：覆盖用户 Shell、共享打开文件、管道、waitpid、execve、ELF32、fork 堆隔离、空闲链表 allocator、每进程工作目录和文件系统并发压力测试
@@ -51,9 +51,11 @@ NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编�
 xv6 风格教学实现（ATA PIO 持久化磁盘，1MB/256 块，64 inode）：
 - 超级块 + inode/块位图 + 64 字节 inode（12 直接块 + 一级间接块，解除 48KB 结构限制）
 - 目录项链式存储、`.`/`..` 真实目录项、绝对/相对路径统一解析
-- Shell 命令：`pwd` `ls` `cd` `mkdir` `touch` `cat` `rm` `mv` `stat` `echo >` `df`，提示符实时显示当前目录
-- 超级块魔数/位图/块引用挂载检查、分配计数自动修复、写穿式 4KB 块缓存
-- 单 CPU 全局文件系统临界区、跨目录原子重命名、目录 `..` 更新和元数据查询
+- Shell 命令：`pwd` `ls` `cd` `mkdir` `touch` `cat` `rm` `mv` `ln` `truncate` `stat` `echo >` `df` `sync`
+- 4KB 脏块缓存：24 块阈值或约 1 秒周期回写，文件 close/reboot 自动提交
+- 可睡眠单写者 mutex；等待者进入 `TASK_WAIT_FS`，不再在大文件 I/O 期间长期关闭 IRQ
+- 元数据 redo journal：日志提交后才更新 home blocks，启动时自动重放已提交事务
+- POSIX 风格 `rename` 覆盖、硬链接、按字节增长/截断、跨目录 `..` 更新与元数据查询
 - 删除保护（不能删 cwd/祖先）、重启持久化回归、开机自测（创建→写→读回→删除全流程验证）
 
 ### ✏️ 内置编辑器
@@ -108,9 +110,12 @@ nano 风格的 `edit` 命令：
 | `touch file` | 创建空文件 |
 | `cat file` | 查看文件内容 |
 | `rm path` | 删除文件或空目录 |
-| `mv old new` | 重命名或移动文件/目录（目标必须不存在） |
+| `mv old new` | 重命名/移动；文件可覆盖文件，目录可覆盖空目录 |
+| `ln old new` | 为普通文件创建硬链接 |
+| `truncate file N` | 把文件收缩或扩展到 N 字节 |
 | `stat path` | 显示类型、大小、链接数和 inode 号 |
 | `df` | 文件系统用量 |
+| `sync` | 强制提交延迟回写与元数据日志 |
 | `edit file` | 打开编辑器（^S 保存，^X 退出时询问保存） |
 | `cc file.c [args...]` | 编译并运行 C 程序（参数传给 main） |
 | `run prog [args] [&]` | 运行内嵌或 `/bin` 程序；参数进入初始用户栈，& = detached 后台任务 |
@@ -178,7 +183,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 自动化测试
 
-20 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**文档统计 588 项**：
+21 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言）：
 
 ```bash
 python3 tools/test-memory.py  # E820 + 页分配 + 内核堆 (15 项)
@@ -186,7 +191,8 @@ python3 tools/test-splash.py   # 开机画面 (14 项)
 python3 tools/test-font.py     # 字体/字号 (30 项)
 python3 tools/test-fs.py       # 文件系统 (43 项)
 python3 tools/test-disk.py     # ATA/挂载/重启持久化 (19 项)
-python3 tools/test-fs2.py      # 间接块/并发锁/rename/stat/重启 (34 项)
+python3 tools/test-fs2.py      # 间接块/rename/硬链接/truncate/重启
+python3 tools/test-fs-journal.py # 日志提交后断电与启动重放
 python3 tools/test-edit.py     # 编辑器/撤销/搜索/光标 (67 项)
 python3 tools/test-cc.py       # C 编译器 (41 项)
 python3 tools/test-preempt.py  # 抢占调度 (7 项)
@@ -231,7 +237,7 @@ python3 tools/test-shell.py    # Shell/管道/进程组/暂停恢复/作业 (59 
 │   ├── graphics.c/h    # 模式 13h 图形库
 │   ├── font.c/h        # VGA 字符发生器字体管理
 │   ├── font12/14/16.h  # Terminus 字体数据
-│   ├── fs.c/h          # 间接块、全局临界区、挂载检查与写穿缓存
+│   ├── fs.c/h          # 间接块、可睡眠锁、脏块回写、redo journal
 │   ├── fd.c/h          # 共享打开文件对象、pipe 环形缓冲区、引用计数
 │   ├── editor.c/h      # 内置编辑器
 │   ├── cc.c/h          # c4 编译器移植
@@ -282,6 +288,7 @@ python3 tools/test-shell.py    # Shell/管道/进程组/暂停恢复/作业 (59 
 | 22 | TASK_STOPPED + SIGSTOP/SIGCONT + Ctrl+Z + `WUNTRACED` + `bg` + 暂停作业恢复 |
 | 23 | ATA PIO + 磁盘超级块/inode/块位图 + 挂载检查 + 写穿缓存 + 重启持久化 |
 | 24 | 一级间接块 + 文件系统全局临界区 + `rename/stat` + 用户态 `mv`/`ls -l` + 并发写测试 |
+| 25 | 可睡眠 FS mutex + 有界延迟回写 + 元数据 redo journal + 断电重放 + rename 覆盖/硬链接/truncate |
 
 每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
 

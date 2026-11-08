@@ -35,7 +35,7 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 
 ### 🛡️ Ring 3 User Mode
 - **Privilege isolation**: TSS kernel-stack switch, user code/data segments (DPL3), page-table U/S protection — a user program touching kernel memory gets a #PF
-- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/setpgid/tcsetpgrp/kill; user pointers are validated page by page
+- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/link/truncate/setpgid/tcsetpgrp/kill; user pointers are validated page by page
 - **Standalone user shell**: launch with `run sh`; supports `/bin` lookup, four-stage pipelines, `<`/`>`/`>>`, process groups, Ctrl+C/Ctrl+Z, background `&`, `jobs/fg/bg/kill/wait`, plus `mv`, `stat`, and `ls -l`
 - **Exception handling**: 32 exception handlers print the full fault context (EIP/CS/EFLAGS/ESP/CR2 + page-fault error code P/W/U decoding); a user-mode fault kills the process and returns to the shell, a kernel-mode fault panics
 - **21 flat programs + 1 ELF32 demo**: coverage includes the user shell, shared opens, pipes, waitpid, execve, ELF32, fork heap isolation, the free-list allocator, per-process working directories, and filesystem concurrency stress
@@ -51,9 +51,11 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 xv6-style teaching implementation (ATA PIO persistent disk, 1 MB / 256 blocks, 64 inodes):
 - Superblock + inode/block bitmaps + 64-byte inodes (12 direct blocks plus a single-indirect block, removing the 48 KB structural limit)
 - Chained directory entries, real `.`/`..` entries, unified absolute/relative path resolution
-- Shell commands: `pwd` `ls` `cd` `mkdir` `touch` `cat` `rm` `mv` `stat` `echo >` `df`, with the prompt showing the current directory
-- Superblock/bitmap/block-reference mount validation, allocation-counter repair, and a write-through 4 KB block cache
-- Single-CPU filesystem critical section, cross-directory atomic rename, moved-directory `..` updates, and metadata queries
+- Shell commands: `pwd` `ls` `cd` `mkdir` `touch` `cat` `rm` `mv` `ln` `truncate` `stat` `echo >` `df` `sync`
+- Bounded 4 KB dirty-block cache with threshold/periodic writeback, close/reboot flushing, and explicit `sync`
+- Sleeping single-writer mutex; waiters sleep on `TASK_WAIT_FS` instead of blocking IRQs during large ATA I/O
+- Metadata redo journal: home blocks are updated only after a committed journal header; committed transactions replay at boot
+- POSIX-style rename replacement, hard links, byte-range growth/truncation, moved-directory `..` updates, and metadata queries
 - Removal protection (cannot delete cwd or its ancestors), reboot persistence tests, and a boot self-test (create → write → read back → delete)
 
 ### ✏️ Built-in Editor
@@ -108,9 +110,12 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `touch file` | Create an empty file |
 | `cat file` | Show file contents |
 | `rm path` | Remove a file or empty directory |
-| `mv old new` | Rename/move a file or directory (target must not exist) |
+| `mv old new` | Rename/move; files replace files and directories replace empty directories |
+| `ln old new` | Create a hard link to a regular file |
+| `truncate file N` | Grow or shrink a file to N bytes |
 | `stat path` | Show type, size, link count and inode number |
 | `df` | Filesystem usage |
+| `sync` | Force delayed writes and the metadata journal to disk |
 | `edit file` | Open the editor (^S save, ^X asks to save on exit) |
 | `cc file.c [args...]` | Compile and run a C program (args go to main) |
 | `run prog [args] [&]` | Run an embedded or `/bin` executable (`args` enter the initial stack; `&` = detached background) |
@@ -174,7 +179,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 Automated Tests
 
-20 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **588 documented checks**:
+21 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions):
 
 ```bash
 python3 tools/test-memory.py  # E820 + page allocator + kernel heap (15 checks)
@@ -182,7 +187,8 @@ python3 tools/test-splash.py   # boot screen  (14 checks)
 python3 tools/test-font.py     # fonts        (30 checks)
 python3 tools/test-fs.py       # filesystem   (43 checks)
 python3 tools/test-disk.py     # ATA/mount/reboot persistence (19 checks)
-python3 tools/test-fs2.py      # indirect blocks/lock/rename/stat/reboot (34 checks)
+python3 tools/test-fs2.py      # indirect blocks/rename/hard links/truncate/reboot
+python3 tools/test-fs-journal.py # committed-journal power-loss replay
 python3 tools/test-edit.py     # editor/undo/find/caret (67 checks)
 python3 tools/test-cc.py       # C compiler   (41 checks)
 python3 tools/test-preempt.py  # preemption   (7 checks)
@@ -227,7 +233,7 @@ python3 tools/test-shell.py    # shell/pipelines/groups/stop-resume/jobs (59 che
 │   ├── graphics.c/h    # mode 13h graphics library
 │   ├── font.c/h        # VGA character-generator font management
 │   ├── font12/14/16.h  # Terminus font data
-│   ├── fs.c/h          # indirect blocks, global critical section, mount checks, write-through cache
+│   ├── fs.c/h          # indirect blocks, sleeping lock, dirty writeback, redo journal
 │   ├── fd.c/h          # shared opens, pipe ring buffers, reference counts
 │   ├── editor.c/h      # built-in editor
 │   ├── cc.c/h          # c4 compiler port
@@ -278,6 +284,7 @@ python3 tools/test-shell.py    # shell/pipelines/groups/stop-resume/jobs (59 che
 | 22 | TASK_STOPPED + SIGSTOP/SIGCONT + Ctrl+Z + `WUNTRACED` + `bg` + stopped-job resume |
 | 23 | ATA PIO + on-disk superblock/inodes/bitmaps + mount validation + write-through cache + reboot persistence |
 | 24 | Single-indirect blocks + filesystem global critical section + `rename/stat` + user `mv`/`ls -l` + concurrent-write tests |
+| 25 | Sleeping FS mutex + bounded delayed writeback + metadata redo journal + crash replay + rename replacement/hard links/truncate |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 

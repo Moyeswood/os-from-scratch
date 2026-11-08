@@ -159,8 +159,11 @@ static void cmd_help() {
     vga_puts("  cat f    - Print file contents\n\r");
     vga_puts("  rm p     - Remove file or empty directory\n\r");
     vga_puts("  mv a b   - Rename/move a file or directory\n\r");
+    vga_puts("  ln a b   - Create a hard link to a file\n\r");
+    vga_puts("  truncate f N - Resize a file to N bytes\n\r");
     vga_puts("  stat p   - Show type, size, nlink and inode\n\r");
     vga_puts("  df       - Show filesystem usage\n\r");
+    vga_puts("  sync     - Flush delayed filesystem writes\n\r");
     vga_puts("  edit f   - Nano-style editor (^S save, ^X exit)\n\r");
     vga_puts("  edit keys- ^Z undo ^Y redo ^F find ^G goto line\n\r");
     vga_puts("  cc f.c   - Compile and run C program (c4 subset)\n\r");
@@ -186,6 +189,7 @@ static void cmd_date() {
 // 4. reboot 命令
 static void cmd_reboot() {
     vga_puts("\n\rRebooting system...\n\r");
+    fs_flush();
     outb(0x64, 0xFE);
     while(1) { __asm__ volatile("hlt"); }
 }
@@ -512,6 +516,52 @@ static void cmd_mv(int argc, char** argv) {
     }
 }
 
+static void cmd_ln(int argc, char** argv) {
+    if (argc != 3) {
+        vga_puts("\n\rUsage: ln <existing-file> <new-path>\n\r");
+        serial_puts("[SH] ln usage\n\r");
+        return;
+    }
+    if (fs_link(argv[1], argv[2]) < 0) {
+        serial_puts("[SH] ln fail\n\r");
+        vga_puts("\n\rln: cannot create hard link\n\r");
+    } else {
+        serial_puts("[SH] ln ok\n\r");
+        vga_puts("\n\rhard link created\n\r");
+    }
+}
+
+static int shell_parse_u32(const char* s, uint32_t* out) {
+    if (!s || *s < '0' || *s > '9') return 0;
+    uint32_t n = 0;
+    while (*s >= '0' && *s <= '9') {
+        uint32_t digit = (uint32_t)(*s++ - '0');
+        if (n > (0xFFFFFFFFu - digit) / 10) return 0;
+        n = n * 10 + digit;
+    }
+    if (*s) return 0;
+    *out = n;
+    return 1;
+}
+
+static void cmd_truncate(int argc, char** argv) {
+    uint32_t size;
+    if (argc != 3 || !shell_parse_u32(argv[2], &size)) {
+        vga_puts("\n\rUsage: truncate <file> <bytes>\n\r");
+        serial_puts("[SH] truncate usage\n\r");
+        return;
+    }
+    int inum = fs_lookup(argv[1]);
+    if (inum < 0 || fs_truncate_size((uint32_t)inum, size) < 0 ||
+        fs_flush() < 0) {
+        serial_puts("[SH] truncate fail\n\r");
+        vga_puts("\n\rtruncate: failed\n\r");
+    } else {
+        serial_puts("[SH] truncate ok\n\r");
+        vga_puts("\n\rfile resized\n\r");
+    }
+}
+
 static void cmd_stat(int argc, char** argv) {
     if (argc < 2) {
         vga_puts("\n\rUsage: stat <path>\n\r");
@@ -572,7 +622,9 @@ static void cmd_echo(int argc, char** argv) {
 
 static void cmd_df() {
     uint32_t fb, fi, tb, ti;
+    uint32_t dirty, meta;
     fs_stat(&fb, &fi, &tb, &ti);
+    fs_cache_stats(&dirty, &meta);
     vga_puts("\n\rFilesystem: ");
     vga_put_dec(tb * 4);
     vga_puts(" KB, ");
@@ -587,8 +639,23 @@ static void cmd_df() {
     vga_puts(" KB), ");
     vga_put_dec(fi);
     vga_puts(" inodes\n\r");
+    vga_puts("Dirty: ");
+    vga_put_dec(dirty);
+    vga_puts(" blocks (");
+    vga_put_dec(meta);
+    vga_puts(" metadata), flush threshold 24\n\r");
     serial_puts("[SH] df: free "); serial_put_hex(fb);
     serial_puts(" blocks, "); serial_put_hex(fi); serial_puts(" inodes\n\r");
+}
+
+static void cmd_sync() {
+    if (fs_flush() < 0) {
+        serial_puts("[SH] sync fail\n\r");
+        vga_puts("\n\rsync: writeback failed\n\r");
+    } else {
+        serial_puts("[SH] sync ok\n\r");
+        vga_puts("\n\rFilesystem synchronized\n\r");
+    }
 }
 
 // 命令分发器
@@ -735,12 +802,20 @@ static void execute_command() {
         cmd_rm(argc, argv);
     } else if (k_strcmp(argv[0], "mv") == 0) {
         cmd_mv(argc, argv);
+    } else if (k_strcmp(argv[0], "ln") == 0) {
+        cmd_ln(argc, argv);
+    } else if (k_strcmp(argv[0], "truncate") == 0) {
+        cmd_truncate(argc, argv);
     } else if (k_strcmp(argv[0], "stat") == 0) {
         cmd_stat(argc, argv);
     } else if (k_strcmp(argv[0], "echo") == 0) {
         cmd_echo(argc, argv);
     } else if (k_strcmp(argv[0], "df") == 0) {
         cmd_df();
+    } else if (k_strcmp(argv[0], "sync") == 0) {
+        cmd_sync();
+    } else if (k_strcmp(argv[0], "fscrash") == 0) {
+        fs_crashpoint();       // QEMU 故障注入; 正常用户不会调用
     } else if (k_strcmp(argv[0], "cc") == 0) {
         if (argc < 2) {
             vga_puts("\n\rUsage: cc <source.c> [args...]\n\r");

@@ -152,7 +152,7 @@ debug: $(OS_IMG) $(DISK_IMG)
 clean:
 	rm -rf $(BUILD_DIR) $(KERNEL_DIR)/*.o
 
-.PHONY: all run debug clean test-memory test-vm test-exec test-process test-fd test-shell test-disk test-fs2 test-attached test-suite test-all
+.PHONY: all run debug clean test-memory test-vm test-exec test-process test-fd test-shell test-disk test-fs2 test-fs-journal test-attached test-suite test-all
 
 test-memory: $(OS_IMG)
 	python3 tools/test-memory.py
@@ -178,6 +178,9 @@ test-disk: $(OS_IMG)
 test-fs2: $(OS_IMG)
 	python3 tools/test-fs2.py
 
+test-fs-journal: $(OS_IMG)
+	python3 tools/test-fs-journal.py
+
 test-attached: $(OS_IMG)
 	python3 tools/run-attached-tests.py
 
@@ -188,6 +191,7 @@ test-suite: $(OS_IMG)
 	python3 tools/test-fs.py
 	python3 tools/test-disk.py
 	python3 tools/test-fs2.py
+	python3 tools/test-fs-journal.py
 	python3 tools/test-edit.py
 	python3 tools/test-cc.py
 	python3 tools/test-user.py

@@ -371,6 +371,31 @@ static int utility_mv(const command_t* cmd) {
     return 0;
 }
 
+static int utility_ln(const command_t* cmd) {
+    if (cmd->argc != 3) {
+        swrite(2, "ln: usage: ln <existing-file> <new-path>\n");
+        return 1;
+    }
+    if (link(cmd->argv[1], cmd->argv[2]) < 0) {
+        swrite(2, "ln: cannot create hard link\n");
+        return 1;
+    }
+    return 0;
+}
+
+static int utility_truncate(const command_t* cmd) {
+    int size;
+    if (cmd->argc != 3 || parse_number(cmd->argv[2], &size) < 0) {
+        swrite(2, "truncate: usage: truncate <file> <size>\n");
+        return 1;
+    }
+    if (truncate(cmd->argv[1], (uint32_t)size) < 0) {
+        swrite(2, "truncate: failed\n");
+        return 1;
+    }
+    return 0;
+}
+
 static int utility_stat(const command_t* cmd) {
     if (cmd->argc != 2) {
         swrite(2, "stat: missing operand\n");
@@ -401,6 +426,8 @@ static int execute_builtin(const command_t* cmd) {
     if (scmp(name, "mkdir") == 0) return utility_mkdir(cmd);
     if (scmp(name, "rm") == 0) return utility_rm(cmd);
     if (scmp(name, "mv") == 0) return utility_mv(cmd);
+    if (scmp(name, "ln") == 0) return utility_ln(cmd);
+    if (scmp(name, "truncate") == 0) return utility_truncate(cmd);
     if (scmp(name, "stat") == 0) return utility_stat(cmd);
     if (scmp(name, "cd") == 0) {
         const char* path = cmd->argc > 1 ? cmd->argv[1] : "/";
@@ -412,7 +439,7 @@ static int execute_builtin(const command_t* cmd) {
     }
     if (scmp(name, "help") == 0) {
         swrite(1, "builtins: cd exit jobs fg bg kill wait help\n");
-        swrite(1, "tools: echo cat ls pwd mkdir rm mv stat\n");
+        swrite(1, "tools: echo cat ls pwd mkdir rm mv ln truncate stat\n");
         swrite(1, "syntax: cmd [args] [< in] [> out] [>> out] [| cmd...] [&]\n");
         return 0;
     }
