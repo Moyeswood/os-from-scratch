@@ -17,7 +17,9 @@
 #define FS_NBLOCKS 256
 #define FS_NINODES 64
 #define FS_BSIZE   4096
-#define FS_NDIRECT 12                    // 直接块数 → 文件最大 48KB
+#define FS_NDIRECT 12                    // inode 内的直接块数
+#define FS_PTRS_PER_BLOCK (FS_BSIZE / sizeof(uint32_t))
+#define FS_MAXFILE_BLOCKS (FS_NDIRECT + FS_PTRS_PER_BLOCK)
 #define FS_MAXNAME 27                    // 目录项名字上限 (28 字节含 \0)
 #define FS_PATH_MAX 256
 #define FS_MAGIC   0x534F454E            // 内存字节序 = "NEOS"
@@ -41,7 +43,7 @@ struct fs_inode {                          // 64 字节 (64 个 inode 正好一�
     uint32_t size;                         // 字节数
     uint32_t nlink;                        // 链接数 (目录 = 1 + 子目录数)
     uint32_t direct[FS_NDIRECT];
-    uint32_t reserved;                     // 对齐 + 将来扩展 (时间戳等)
+    uint32_t indirect;                     // 一级间接块; 旧格式中为 0
 };
 
 struct fs_dirent {                         // 32 字节, 每块 128 项
@@ -77,6 +79,17 @@ static uint32_t fs_irq_save_disable(void) {
 
 static void fs_irq_restore(uint32_t flags) {
     if (flags & 0x200) __asm__ volatile("sti" ::: "memory");
+}
+
+// Single-CPU filesystem lock. Interrupts stay disabled for the complete
+// public operation, so neither a timer-driven task switch nor a nested
+// filesystem call can observe a half-updated bitmap, inode or directory.
+static uint32_t fs_lock(void) {
+    return fs_irq_save_disable();
+}
+
+static void fs_unlock(uint32_t flags) {
+    fs_irq_restore(flags);
 }
 
 // Write-through cache: every mutating public operation leaves the cache
@@ -151,6 +164,39 @@ static void bfree(uint32_t b) {
     fs_mark_dirty(0);
 }
 
+// Resolve logical data block idx. With create=0 this is a read-only lookup;
+// with create=1 missing indirect/data blocks are allocated and zeroed.
+static uint32_t inode_block(struct fs_inode* ip, uint32_t idx, int create) {
+    if (idx < FS_NDIRECT) {
+        if (!ip->direct[idx] && create) {
+            int b = balloc();
+            if (b < 0) return 0;
+            ip->direct[idx] = (uint32_t)b;
+            fs_mark_dirty(1);
+        }
+        return ip->direct[idx];
+    }
+    if (idx >= FS_MAXFILE_BLOCKS) return 0;
+
+    if (!ip->indirect) {
+        if (!create) return 0;
+        int table = balloc();
+        if (table < 0) return 0;
+        ip->indirect = (uint32_t)table;
+        fs_mark_dirty(1);
+    }
+
+    uint32_t slot = idx - FS_NDIRECT;
+    uint32_t* pointers = (uint32_t*)fs_block[ip->indirect];
+    if (!pointers[slot] && create) {
+        int b = balloc();
+        if (b < 0) return 0;
+        pointers[slot] = (uint32_t)b;
+        fs_mark_dirty(ip->indirect);
+    }
+    return pointers[slot];
+}
+
 // ---------- inode 分配 ----------
 static int ialloc(uint32_t type) {
     int i = bit_find_zero(sb->inode_bmap, FS_NINODES);
@@ -161,6 +207,7 @@ static int ialloc(uint32_t type) {
     ip->size = 0;
     ip->nlink = 1;
     for (int j = 0; j < FS_NDIRECT; j++) ip->direct[j] = 0;
+    ip->indirect = 0;
     sb->free_inodes--;
     fs_mark_dirty(0);
     fs_mark_dirty(1);
@@ -184,6 +231,14 @@ static void inode_truncate(uint32_t inum) {
             ip->direct[j] = 0;
         }
     }
+    if (ip->indirect) {
+        uint32_t* pointers = (uint32_t*)fs_block[ip->indirect];
+        for (uint32_t i = 0; i < FS_PTRS_PER_BLOCK; i++) {
+            if (pointers[i]) bfree(pointers[i]);
+        }
+        bfree(ip->indirect);
+        ip->indirect = 0;
+    }
     ip->size = 0;
     fs_mark_dirty(1);
 }
@@ -195,8 +250,9 @@ static int dir_lookup(uint32_t dinum, const char* name) {
     if (dp->type != FS_DIR) return -1;
     uint32_t nent = dp->size / sizeof(struct fs_dirent);
     for (uint32_t i = 0; i < nent; i++) {
-        struct fs_dirent* de = (struct fs_dirent*)fs_block[dp->direct[i / 128]]
-                             + (i % 128);
+        uint32_t block = inode_block(dp, i / 128, 0);
+        if (!block) return -1;
+        struct fs_dirent* de = (struct fs_dirent*)fs_block[block] + (i % 128);
         if (de->inum && k_strcmp(de->name, name) == 0)
             return (int)de->inum;
     }
@@ -208,19 +264,15 @@ static int dir_add(uint32_t dinum, const char* name, uint32_t inum) {
     struct fs_inode* dp = &itab[dinum];
     if (k_strlen(name) > FS_MAXNAME) return -1;
     uint32_t idx = dp->size / sizeof(struct fs_dirent);
-    if (idx >= FS_NDIRECT * 128) return -1;      // 目录满了
+    if (idx >= FS_MAXFILE_BLOCKS * 128) return -1;
     uint32_t blkno = idx / 128;
-    if (dp->direct[blkno] == 0) {
-        int b = balloc();
-        if (b < 0) return -1;
-        dp->direct[blkno] = (uint32_t)b;
-    }
-    struct fs_dirent* de = (struct fs_dirent*)fs_block[dp->direct[blkno]]
-                         + (idx % 128);
+    uint32_t block = inode_block(dp, blkno, 1);
+    if (!block) return -1;
+    struct fs_dirent* de = (struct fs_dirent*)fs_block[block] + (idx % 128);
     de->inum = inum;
     k_strcpy(de->name, name);
     dp->size += sizeof(struct fs_dirent);
-    fs_mark_dirty(dp->direct[blkno]);
+    fs_mark_dirty(block);
     fs_mark_dirty(1);
     return 0;
 }
@@ -230,12 +282,33 @@ static int dir_remove(uint32_t dinum, const char* name) {
     struct fs_inode* dp = &itab[dinum];
     uint32_t nent = dp->size / sizeof(struct fs_dirent);
     for (uint32_t i = 0; i < nent; i++) {
-        struct fs_dirent* de = (struct fs_dirent*)fs_block[dp->direct[i / 128]]
-                             + (i % 128);
+        uint32_t block = inode_block(dp, i / 128, 0);
+        if (!block) return -1;
+        struct fs_dirent* de = (struct fs_dirent*)fs_block[block] + (i % 128);
         if (de->inum && k_strcmp(de->name, name) == 0) {
             de->inum = 0;                        // 空槽
             de->name[0] = '\0';
-            fs_mark_dirty(dp->direct[i / 128]);
+            fs_mark_dirty(block);
+            return 0;
+        }
+    }
+    return -1;
+}
+
+// Replace an existing entry's inode and/or name. Used by same-directory
+// rename and when a moved directory needs a new ".." target.
+static int dir_replace(uint32_t dinum, const char* name,
+                       const char* newname, uint32_t newinum) {
+    struct fs_inode* dp = &itab[dinum];
+    uint32_t nent = dp->size / sizeof(struct fs_dirent);
+    for (uint32_t i = 0; i < nent; i++) {
+        uint32_t block = inode_block(dp, i / 128, 0);
+        if (!block) return -1;
+        struct fs_dirent* de = (struct fs_dirent*)fs_block[block] + (i % 128);
+        if (de->inum && k_strcmp(de->name, name) == 0) {
+            de->inum = newinum;
+            if (newname) k_strcpy(de->name, newname);
+            fs_mark_dirty(block);
             return 0;
         }
     }
@@ -274,31 +347,47 @@ static int namex(const char* path, char* last) {
 
 // ---------- 公开 API ----------
 int fs_lookup(const char* path) {
+    uint32_t flags = fs_lock();
     char last[FS_MAXNAME + 1];
     int parent = namex(path, last);
-    if (parent < 0) return -1;
-    if (k_strcmp(last, ".") == 0) return parent;   // "path/." 或尾部 '/'
-    return dir_lookup((uint32_t)parent, last);
+    int result = -1;
+    if (parent >= 0) {
+        result = k_strcmp(last, ".") == 0 ? parent
+                 : dir_lookup((uint32_t)parent, last);
+    }
+    fs_unlock(flags);
+    return result;
 }
 
 int fs_size(const char* path) {
+    uint32_t flags = fs_lock();
     int inum = fs_lookup(path);
-    if (inum < 0 || itab[inum].type != FS_FILE) return -1;
-    return (int)itab[inum].size;
+    int result = inum < 0 || itab[inum].type != FS_FILE
+                 ? -1 : (int)itab[inum].size;
+    fs_unlock(flags);
+    return result;
 }
 
 int fs_create(const char* path, uint32_t type) {
+    uint32_t flags = fs_lock();
     char last[FS_MAXNAME + 1];
     int parent = namex(path, last);
-    if (parent < 0) return -1;
-    if (k_strcmp(last, ".") == 0 || k_strcmp(last, "..") == 0) return -1;
-    if (dir_lookup((uint32_t)parent, last) >= 0) return -1;   // 已存在
-    if (itab[parent].type != FS_DIR) return -1;
+    if (parent < 0 || (type != FS_FILE && type != FS_DIR) ||
+        k_strcmp(last, ".") == 0 || k_strcmp(last, "..") == 0 ||
+        dir_lookup((uint32_t)parent, last) >= 0 ||
+        itab[parent].type != FS_DIR) {
+        fs_unlock(flags);
+        return -1;
+    }
 
     int inum = ialloc(type);
-    if (inum < 0) return -1;
+    if (inum < 0) {
+        fs_unlock(flags);
+        return -1;
+    }
     if (dir_add((uint32_t)parent, last, (uint32_t)inum) < 0) {
         ifree((uint32_t)inum);
+        fs_unlock(flags);
         return -1;
     }
     if (type == FS_DIR) {
@@ -309,6 +398,7 @@ int fs_create(const char* path, uint32_t type) {
     }
     fs_mark_dirty(1);
     fs_sync();
+    fs_unlock(flags);
     return inum;
 }
 
@@ -317,8 +407,9 @@ static int dir_is_empty(uint32_t inum) {
     struct fs_inode* dp = &itab[inum];
     uint32_t nent = dp->size / sizeof(struct fs_dirent);
     for (uint32_t i = 0; i < nent; i++) {
-        struct fs_dirent* de = (struct fs_dirent*)fs_block[dp->direct[i / 128]]
-                             + (i % 128);
+        uint32_t block = inode_block(dp, i / 128, 0);
+        if (!block) return 0;
+        struct fs_dirent* de = (struct fs_dirent*)fs_block[block] + (i % 128);
         if (de->inum && k_strcmp(de->name, ".") != 0 && k_strcmp(de->name, "..") != 0)
             return 0;
     }
@@ -343,17 +434,27 @@ static int is_task_cwd_ancestor(uint32_t inum) {
 }
 
 int fs_remove(const char* path) {
+    uint32_t flags = fs_lock();
     char last[FS_MAXNAME + 1];
     int parent = namex(path, last);
-    if (parent < 0) return -1;
+    if (parent < 0) {
+        fs_unlock(flags);
+        return -1;
+    }
     int inum = dir_lookup((uint32_t)parent, last);
-    if (inum < 0) return -1;
+    if (inum < 0 || k_strcmp(last, ".") == 0 || k_strcmp(last, "..") == 0) {
+        fs_unlock(flags);
+        return -1;
+    }
     struct fs_inode* ip = &itab[inum];
 
     if (ip->type == FS_DIR) {
-        if (inum == (int)sb->root_inum) return -1;              // 不能删根
-        if (is_task_cwd_ancestor((uint32_t)inum)) return -1;    // 不能删任何任务 cwd
-        if (!dir_is_empty((uint32_t)inum)) return -1;           // 只删空目录
+        if (inum == (int)sb->root_inum ||
+            is_task_cwd_ancestor((uint32_t)inum) ||
+            !dir_is_empty((uint32_t)inum)) {
+            fs_unlock(flags);
+            return -1;
+        }
         itab[parent].nlink--;
     }
     dir_remove((uint32_t)parent, last);
@@ -364,13 +465,117 @@ int fs_remove(const char* path) {
     }
     fs_mark_dirty(1);
     fs_sync();
+    fs_unlock(flags);
+    return 0;
+}
+
+// True when dinum is src or lies below it. Used to reject moving a directory
+// into its own subtree, which would create an unreachable cycle.
+static int dir_contains(uint32_t src, uint32_t dinum) {
+    uint32_t cur = dinum;
+    for (uint32_t depth = 0; depth < FS_NINODES; depth++) {
+        if (cur == src) return 1;
+        if (cur == sb->root_inum) return 0;
+        int parent = dir_lookup(cur, "..");
+        if (parent < 0 || (uint32_t)parent == cur) return 0;
+        cur = (uint32_t)parent;
+    }
+    return 1;
+}
+
+int fs_rename(const char* oldpath, const char* newpath) {
+    uint32_t flags = fs_lock();
+    char oldname[FS_MAXNAME + 1];
+    char newname[FS_MAXNAME + 1];
+    int oldparent = namex(oldpath, oldname);
+    int newparent = namex(newpath, newname);
+    if (oldparent < 0 || newparent < 0 ||
+        k_strcmp(oldname, ".") == 0 || k_strcmp(oldname, "..") == 0 ||
+        k_strcmp(newname, ".") == 0 || k_strcmp(newname, "..") == 0) {
+        fs_unlock(flags);
+        return -1;
+    }
+
+    int inum = dir_lookup((uint32_t)oldparent, oldname);
+    if (inum < 0 || itab[newparent].type != FS_DIR ||
+        dir_lookup((uint32_t)newparent, newname) >= 0) {
+        fs_unlock(flags);
+        return -1;
+    }
+    if (oldparent == newparent && k_strcmp(oldname, newname) == 0) {
+        fs_unlock(flags);
+        return 0;
+    }
+
+    struct fs_inode* ip = &itab[inum];
+    if (ip->type == FS_DIR) {
+        if (inum == (int)sb->root_inum ||
+            dir_contains((uint32_t)inum, (uint32_t)newparent)) {
+            fs_unlock(flags);
+            return -1;
+        }
+    }
+
+    if (oldparent == newparent) {
+        if (dir_replace((uint32_t)oldparent, oldname, newname,
+                        (uint32_t)inum) < 0) {
+            fs_unlock(flags);
+            return -1;
+        }
+    } else {
+        if (dir_add((uint32_t)newparent, newname, (uint32_t)inum) < 0) {
+            fs_unlock(flags);
+            return -1;
+        }
+        if (dir_remove((uint32_t)oldparent, oldname) < 0) {
+            dir_remove((uint32_t)newparent, newname);
+            fs_unlock(flags);
+            return -1;
+        }
+        if (ip->type == FS_DIR) {
+            if (dir_replace((uint32_t)inum, "..", 0,
+                            (uint32_t)newparent) < 0) {
+                fs_unlock(flags);
+                return -1;
+            }
+            itab[oldparent].nlink--;
+            itab[newparent].nlink++;
+        }
+    }
+
+    fs_mark_dirty(1);
+    fs_sync();
+    fs_unlock(flags);
+    return 0;
+}
+
+int fs_getattr(const char* path, fs_attr_t* attr) {
+    if (!attr) return -1;
+    uint32_t flags = fs_lock();
+    int inum = fs_lookup(path);
+    if (inum < 0) {
+        fs_unlock(flags);
+        return -1;
+    }
+    attr->inum = (uint32_t)inum;
+    attr->type = itab[inum].type;
+    attr->size = itab[inum].size;
+    attr->nlink = itab[inum].nlink;
+    fs_unlock(flags);
     return 0;
 }
 
 int fs_read(uint32_t inum, void* buf, uint32_t off, uint32_t n) {
+    uint32_t flags = fs_lock();
+    if (inum >= FS_NINODES || itab[inum].type == FS_DIR) {
+        fs_unlock(flags);
+        return -1;
+    }
     struct fs_inode* ip = &itab[inum];
-    if (ip->type == FS_DIR) return -1;   // cat 目录由 shell 检查报错
-    if (off >= ip->size) return 0;
+    if (off >= ip->size) {
+        fs_unlock(flags);
+        return 0;
+    }
     if (n > ip->size - off) n = ip->size - off;
     uint8_t* dst = (uint8_t*)buf;
     uint32_t done = 0;
@@ -379,31 +584,48 @@ int fs_read(uint32_t inum, void* buf, uint32_t off, uint32_t n) {
         uint32_t inoff = off % FS_BSIZE;
         uint32_t chunk = FS_BSIZE - inoff;
         if (chunk > n - done) chunk = n - done;
-        k_memcpy(dst, fs_block[ip->direct[idx]] + inoff, chunk);
+        uint32_t block = inode_block(ip, idx, 0);
+        if (!block) {
+            fs_unlock(flags);
+            return -1;
+        }
+        k_memcpy(dst, fs_block[block] + inoff, chunk);
         dst += chunk; off += chunk; done += chunk;
     }
+    fs_unlock(flags);
     return (int)done;
 }
 
 int fs_write_at(uint32_t inum, const void* buf, uint32_t off, uint32_t n) {
+    uint32_t flags = fs_lock();
+    if (inum >= FS_NINODES || itab[inum].type != FS_FILE) {
+        fs_unlock(flags);
+        return -1;
+    }
     struct fs_inode* ip = &itab[inum];
-    if (ip->type != FS_FILE || off > ip->size) return -1;
+    if (off > ip->size) {
+        fs_unlock(flags);
+        return -1;
+    }
     const uint8_t* src = (const uint8_t*)buf;
     uint32_t done = 0;
     while (done < n) {
         uint32_t absolute = off + done;
         uint32_t idx = absolute / FS_BSIZE;
-        if (idx >= FS_NDIRECT) return -1;        // 超过 48KB
-        if (ip->direct[idx] == 0) {
-            int b = balloc();
-            if (b < 0) return -1;
-            ip->direct[idx] = (uint32_t)b;
+        if (idx >= FS_MAXFILE_BLOCKS) {
+            fs_unlock(flags);
+            return -1;
+        }
+        uint32_t block = inode_block(ip, idx, 1);
+        if (!block) {
+            fs_unlock(flags);
+            return -1;
         }
         uint32_t inoff = absolute % FS_BSIZE;
         uint32_t chunk = FS_BSIZE - inoff;
         if (chunk > n - done) chunk = n - done;
-        k_memcpy(fs_block[ip->direct[idx]] + inoff, src, chunk);
-        fs_mark_dirty(ip->direct[idx]);
+        k_memcpy(fs_block[block] + inoff, src, chunk);
+        fs_mark_dirty(block);
         src += chunk;
         done += chunk;
         if (absolute + chunk > ip->size) {
@@ -413,63 +635,104 @@ int fs_write_at(uint32_t inum, const void* buf, uint32_t off, uint32_t n) {
     }
     fs_mark_dirty(1);
     fs_sync();
+    fs_unlock(flags);
     return (int)done;
 }
 
 int fs_write(uint32_t inum, const void* buf, uint32_t n, int append) {
+    uint32_t flags = fs_lock();
+    if (inum >= FS_NINODES || itab[inum].type != FS_FILE) {
+        fs_unlock(flags);
+        return -1;
+    }
     struct fs_inode* ip = &itab[inum];
-    if (ip->type != FS_FILE) return -1;
     if (!append) inode_truncate(inum);
-    return fs_write_at(inum, buf, append ? ip->size : 0, n);
+    int result = fs_write_at(inum, buf, append ? ip->size : 0, n);
+    fs_unlock(flags);
+    return result;
 }
 
 int fs_truncate(uint32_t inum) {
-    if (inum >= FS_NINODES || itab[inum].type != FS_FILE) return -1;
+    uint32_t flags = fs_lock();
+    if (inum >= FS_NINODES || itab[inum].type != FS_FILE) {
+        fs_unlock(flags);
+        return -1;
+    }
     inode_truncate(inum);
     fs_mark_dirty(1);
     fs_sync();
+    fs_unlock(flags);
     return 0;
 }
 
 int fs_inode_type(uint32_t inum) {
-    if (inum >= FS_NINODES) return -1;
-    return (int)itab[inum].type;
+    uint32_t flags = fs_lock();
+    int result = inum >= FS_NINODES ? -1 : (int)itab[inum].type;
+    fs_unlock(flags);
+    return result;
 }
 
 int fs_inode_size(uint32_t inum) {
-    if (inum >= FS_NINODES || itab[inum].type != FS_FILE) return -1;
-    return (int)itab[inum].size;
+    uint32_t flags = fs_lock();
+    int result = inum >= FS_NINODES || itab[inum].type != FS_FILE
+                 ? -1 : (int)itab[inum].size;
+    fs_unlock(flags);
+    return result;
 }
 
 int fs_readdir(uint32_t inum, uint32_t idx,
                char* name, uint32_t* entry_inum, uint32_t* type, uint32_t* size) {
+    uint32_t flags = fs_lock();
+    if (inum >= FS_NINODES) {
+        fs_unlock(flags);
+        return -1;
+    }
     struct fs_inode* dp = &itab[inum];
-    if (dp->type != FS_DIR) return -1;
+    if (dp->type != FS_DIR) {
+        fs_unlock(flags);
+        return -1;
+    }
     uint32_t nent = dp->size / sizeof(struct fs_dirent);
-    if (idx >= nent) return 0;                   // 迭代结束
+    if (idx >= nent) {
+        fs_unlock(flags);
+        return 0;                                // 迭代结束
+    }
     // ★原始槽读取: 删除留下的空槽 (inum=0) 原样返回, 由调用方跳过 —
     // 内部跳过会导致调用方 idx+1 后把同一个条目再读一遍 (实测 ls 重复打印)。
-    struct fs_dirent* de = (struct fs_dirent*)fs_block[dp->direct[idx / 128]]
-                         + (idx % 128);
+    uint32_t block = inode_block(dp, idx / 128, 0);
+    if (!block) {
+        fs_unlock(flags);
+        return -1;
+    }
+    struct fs_dirent* de = (struct fs_dirent*)fs_block[block] + (idx % 128);
     k_strcpy(name, de->name);
     *entry_inum = de->inum;
     *type = de->inum ? itab[de->inum].type : 0;
     *size = de->inum ? itab[de->inum].size : 0;
+    fs_unlock(flags);
     return 1;
 }
 
 int fs_chdir(const char* path) {
+    uint32_t flags = fs_lock();
     int inum = fs_lookup(path);
-    if (inum < 0) return -1;
-    if (itab[inum].type != FS_DIR) return -1;
+    if (inum < 0 || itab[inum].type != FS_DIR) {
+        fs_unlock(flags);
+        return -1;
+    }
     task_t* t = task_current();
-    if (!t) return -1;
+    if (!t) {
+        fs_unlock(flags);
+        return -1;
+    }
     t->cwd_inum = (uint32_t)inum;
+    fs_unlock(flags);
     return 0;
 }
 
 // 从 cwd 一路 ".." 走到根, 收集每段名字, 再反转拼出绝对路径
 void fs_pwd(char* out) {
+    uint32_t flags = fs_lock();
     char segs[32][FS_MAXNAME + 1];
     uint32_t cur = current_cwd();
     int depth = 0;
@@ -479,7 +742,9 @@ void fs_pwd(char* out) {
         // 在 parent 的目录项里找指向 cur 的名字
         uint32_t nent = itab[parent].size / sizeof(struct fs_dirent);
         for (uint32_t i = 0; i < nent; i++) {
-            struct fs_dirent* de = (struct fs_dirent*)fs_block[itab[parent].direct[i / 128]]
+            uint32_t block = inode_block(&itab[parent], i / 128, 0);
+            if (!block) break;
+            struct fs_dirent* de = (struct fs_dirent*)fs_block[block]
                                  + (i % 128);
             if (de->inum == cur && k_strcmp(de->name, ".") != 0
                 && k_strcmp(de->name, "..") != 0) {
@@ -499,14 +764,17 @@ void fs_pwd(char* out) {
         if (i > 0) out[pos++] = '/';
     }
     out[pos] = '\0';
+    fs_unlock(flags);
 }
 
 void fs_stat(uint32_t* free_blocks, uint32_t* free_inodes,
              uint32_t* total_blocks, uint32_t* total_inodes) {
+    uint32_t flags = fs_lock();
     *free_blocks = sb->free_blocks;
     *free_inodes = sb->free_inodes;
     *total_blocks = sb->nblocks;
     *total_inodes = sb->ninodes;
+    fs_unlock(flags);
 }
 
 // ---------- 挂载检查 ----------
@@ -547,7 +815,7 @@ static int fs_validate(void) {
         }
         if (ip->type != FS_FILE && ip->type != FS_DIR) return 0;
         if (!ip->nlink) return 0;
-        if (ip->size > FS_NDIRECT * FS_BSIZE) return 0;
+        if (ip->size > FS_MAXFILE_BLOCKS * FS_BSIZE) return 0;
         if (ip->type == FS_DIR && (ip->size % sizeof(struct fs_dirent)))
             return 0;
 
@@ -564,14 +832,38 @@ static int fs_validate(void) {
             referenced[block] = 1;
         }
 
+        if (used_blocks <= FS_NDIRECT) {
+            if (ip->indirect) return 0;
+        } else {
+            uint32_t table = ip->indirect;
+            if (table < 2 || table >= FS_NBLOCKS ||
+                !bit_get(sb->block_bmap, table) || referenced[table])
+                return 0;
+            referenced[table] = 1;
+            uint32_t* pointers = (uint32_t*)fs_block[table];
+            uint32_t indirect_used = used_blocks - FS_NDIRECT;
+            for (uint32_t p = 0; p < FS_PTRS_PER_BLOCK; p++) {
+                uint32_t block = pointers[p];
+                if (p >= indirect_used) {
+                    if (block) return 0;
+                    continue;
+                }
+                if (block < 2 || block >= FS_NBLOCKS ||
+                    !bit_get(sb->block_bmap, block) || referenced[block])
+                    return 0;
+                referenced[block] = 1;
+            }
+        }
+
         if (ip->type == FS_DIR) {
             uint32_t nent = ip->size / sizeof(struct fs_dirent);
             int has_dot = 0;
             int has_dotdot = 0;
             for (uint32_t e = 0; e < nent; e++) {
-                struct fs_dirent* de =
-                    (struct fs_dirent*)fs_block[ip->direct[e / 128]]
-                    + (e % 128);
+                uint32_t block = inode_block(ip, e / 128, 0);
+                if (!block) return 0;
+                struct fs_dirent* de = (struct fs_dirent*)fs_block[block]
+                                     + (e % 128);
                 if (!de->inum) continue;
                 if (de->inum >= FS_NINODES ||
                     !bit_get(sb->inode_bmap, de->inum) ||

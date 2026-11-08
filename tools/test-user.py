@@ -172,8 +172,8 @@ check("badptr: exit code 0", wait_since("[USER] exit code=0x00000000", name="bad
 # ================= 8. 参数与错误处理 =================
 mark_serial_base()
 type_text("run\n")
-time.sleep(0.6)
-check("run no-arg: usage shown", "Usage: run" in read_screen())
+check("run no-arg: usage shown",
+      wait_since("[SH] run usage", name="run-usage"))
 mark_serial_base()
 type_text("run nosuch\n")
 check("run nosuch: unknown program", wait_since("[USER] unknown program: nosuch", name="badname"))

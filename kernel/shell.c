@@ -158,6 +158,8 @@ static void cmd_help() {
     vga_puts("  touch f  - Create empty file\n\r");
     vga_puts("  cat f    - Print file contents\n\r");
     vga_puts("  rm p     - Remove file or empty directory\n\r");
+    vga_puts("  mv a b   - Rename/move a file or directory\n\r");
+    vga_puts("  stat p   - Show type, size, nlink and inode\n\r");
     vga_puts("  df       - Show filesystem usage\n\r");
     vga_puts("  edit f   - Nano-style editor (^S save, ^X exit)\n\r");
     vga_puts("  edit keys- ^Z undo ^Y redo ^F find ^G goto line\n\r");
@@ -453,6 +455,44 @@ static void cmd_rm(int argc, char** argv) {
     }
 }
 
+static void cmd_mv(int argc, char** argv) {
+    if (argc < 3) {
+        vga_puts("\n\rUsage: mv <oldpath> <newpath>\n\r");
+        return;
+    }
+    if (fs_rename(argv[1], argv[2]) < 0) {
+        serial_puts("[SH] mv fail\n\r");
+        vga_puts("\n\rmv: failed (missing source or existing target?)\n\r");
+    } else {
+        serial_puts("[SH] mv ok\n\r");
+    }
+}
+
+static void cmd_stat(int argc, char** argv) {
+    if (argc < 2) {
+        vga_puts("\n\rUsage: stat <path>\n\r");
+        return;
+    }
+    fs_attr_t attr;
+    if (fs_getattr(argv[1], &attr) < 0) {
+        serial_puts("[SH] stat fail\n\r");
+        vga_puts("\n\rstat: No such file or directory\n\r");
+        return;
+    }
+    vga_puts("\n\rtype=");
+    vga_puts(attr.type == FS_DIR ? "directory" : "file");
+    vga_puts(" size="); vga_put_dec(attr.size);
+    vga_puts(" nlink="); vga_put_dec(attr.nlink);
+    vga_puts(" inode="); vga_put_dec(attr.inum);
+    vga_puts("\n\r");
+    serial_puts("[SH] stat: type=");
+    serial_put_hex(attr.type);
+    serial_puts(" size="); serial_put_hex(attr.size);
+    serial_puts(" nlink="); serial_put_hex(attr.nlink);
+    serial_puts(" inode="); serial_put_hex(attr.inum);
+    serial_puts("\n\r");
+}
+
 // echo text... [> file] — 有 > 时把文字写进文件 (不存在则创建, 覆盖写)
 static void cmd_echo(int argc, char** argv) {
     int gt = -1;
@@ -649,6 +689,10 @@ static void execute_command() {
         cmd_cat(argc, argv);
     } else if (k_strcmp(argv[0], "rm") == 0) {
         cmd_rm(argc, argv);
+    } else if (k_strcmp(argv[0], "mv") == 0) {
+        cmd_mv(argc, argv);
+    } else if (k_strcmp(argv[0], "stat") == 0) {
+        cmd_stat(argc, argv);
     } else if (k_strcmp(argv[0], "echo") == 0) {
         cmd_echo(argc, argv);
     } else if (k_strcmp(argv[0], "df") == 0) {
@@ -663,6 +707,7 @@ static void execute_command() {
         }
     } else if (k_strcmp(argv[0], "run") == 0) {
         if (argc < 2) {
+            serial_puts("[SH] run usage\n\r");
             vga_puts("\n\rUsage: run <program> [&]\n\r");
             vga_puts("  hello    - first user process    count  - timer ticks in ring 3\n\r");
             vga_puts("  crash    - page fault demo       div0   - divide error demo\n\r");
@@ -674,6 +719,7 @@ static void execute_command() {
             vga_puts("  filedemo - open/read/write/lseek + per-process cwd\n\r");
             vga_puts("  fdstdin  - read from fd 0 (type hello, then Enter)\n\r");
             vga_puts("  fdpipe   - fork-shared offset + pipe + dup2 demo\n\r");
+            vga_puts("  fscheck  - 100KB indirect file + concurrent writers\n\r");
             vga_puts("  sh       - Ring 3 shell: pipelines/jobs/Ctrl+C/Z\n\r");
             vga_puts("  vmtest   - demand paging + COW + brk/mmap\n\r");
             vga_puts("  vmguard  - write the stack guard page (expected #PF)\n\r");

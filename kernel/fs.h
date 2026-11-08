@@ -18,14 +18,23 @@
 //  ★inode 0 永久保留不分配 (目录项用 inum=0 表示空槽, 经典 xv6
 //  做法), 根目录 = inode 1, 根的 "." 和 ".." 都指向自己。
 //
-//  每个文件/目录 = 一个 inode, 数据在 direct[12] 个块里
-//  (文件最大 12×4KB = 48KB)。目录数据 = 一串 32 字节目录项
-//  (inode 号 + 名字), 每块 128 项; "." 和 ".." 是真实目录项。
+//  每个文件/目录 = 一个 inode, 数据在 direct[12] 个块里；更大的
+//  文件通过一级间接块继续扩展 (单文件上限受 1MB 文件系统容量限制)。
+//  目录数据 = 一串 32 字节目录项 (inode 号 + 名字), 每块 128 项;
+//  "." 和 ".." 是真实目录项。inode 末尾的原保留字段存放间接块号，
+//  因此旧磁盘 (该字段为 0) 可以直接挂载。
 // ============================================================
 
 #define FS_DIR   2
 #define FS_FILE  1
 #define FS_PATH_MAX 256   // 路径字符串上限
+
+typedef struct {
+    uint32_t inum;
+    uint32_t type;
+    uint32_t size;
+    uint32_t nlink;
+} fs_attr_t;
 
 // 初始化并挂载 ATA 磁盘 FS。无磁盘或磁盘损坏时提供易失回退；
 // 开机时调用一次，含结构检查和自测，串口报结果。
@@ -42,6 +51,13 @@ int fs_create(const char* path, uint32_t type);
 
 // 删除文件或空目录 → 0 / -1
 int fs_remove(const char* path);
+
+// 重命名文件或目录。目标必须不存在；跨目录移动目录时会同步更新
+// 其 ".." 目录项。整个命名空间更新在一个全局临界区中完成。
+int fs_rename(const char* oldpath, const char* newpath);
+
+// 查询文件/目录元数据 → 0 / -1
+int fs_getattr(const char* path, fs_attr_t* attr);
 
 // 按 inode 读写: 读从 off 开始最多 n 字节 (返回实际字节数)
 // 写: append=0 先截断再写, append=1 追加; 返回写入字节数或 -1
@@ -60,7 +76,7 @@ int fs_readdir(uint32_t inum, uint32_t idx,
 int fs_chdir(const char* path);
 void fs_pwd(char* out);              // 把 cwd 的绝对路径写入 out
 
-// 统计: 剩余块/剩余 inode/总块数/总 inode 数
+// 文件系统容量统计: 剩余块/剩余 inode/总块数/总 inode 数
 void fs_stat(uint32_t* free_blocks, uint32_t* free_inodes,
              uint32_t* total_blocks, uint32_t* total_inodes);
 

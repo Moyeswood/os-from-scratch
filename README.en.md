@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-23%2F23%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-554%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-24%2F24%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-588%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -35,10 +35,10 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 
 ### 🛡️ Ring 3 User Mode
 - **Privilege isolation**: TSS kernel-stack switch, user code/data segments (DPL3), page-table U/S protection — a user program touching kernel memory gets a #PF
-- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/setpgid/tcsetpgrp/kill; user pointers are validated page by page
-- **Standalone user shell**: launch with `run sh`; supports `/bin` lookup, four-stage pipelines, `<`/`>`/`>>`, process groups, Ctrl+C/Ctrl+Z, background `&`, and `jobs/fg/bg/kill/wait`
+- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/setpgid/tcsetpgrp/kill; user pointers are validated page by page
+- **Standalone user shell**: launch with `run sh`; supports `/bin` lookup, four-stage pipelines, `<`/`>`/`>>`, process groups, Ctrl+C/Ctrl+Z, background `&`, `jobs/fg/bg/kill/wait`, plus `mv`, `stat`, and `ls -l`
 - **Exception handling**: 32 exception handlers print the full fault context (EIP/CS/EFLAGS/ESP/CR2 + page-fault error code P/W/U decoding); a user-mode fault kills the process and returns to the shell, a kernel-mode fault panics
-- **20 flat programs + 1 ELF32 demo**: coverage includes the user shell, shared opens, pipes, waitpid, execve, ELF32, fork heap isolation, the free-list allocator, and per-process working directories
+- **21 flat programs + 1 ELF32 demo**: coverage includes the user shell, shared opens, pipes, waitpid, execve, ELF32, fork heap isolation, the free-list allocator, per-process working directories, and filesystem concurrency stress
 
 ### ⏱️ Multitasking & Devices
 - **Preemptive multitasking**: PIT IRQ0 (18.2 Hz) round-robin scheduling; cooperative and preemptive context frames are mutually restorable; includes a "bully task" demo
@@ -49,10 +49,11 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 
 ### 📁 Filesystem
 xv6-style teaching implementation (ATA PIO persistent disk, 1 MB / 256 blocks, 64 inodes):
-- Superblock + inode/block bitmaps + 64-byte inodes (12 direct blocks, max file 48 KB)
+- Superblock + inode/block bitmaps + 64-byte inodes (12 direct blocks plus a single-indirect block, removing the 48 KB structural limit)
 - Chained directory entries, real `.`/`..` entries, unified absolute/relative path resolution
-- Shell commands: `pwd` `ls` `cd` `mkdir` `touch` `cat` `rm` `echo >` `df`, with the prompt showing the current directory
+- Shell commands: `pwd` `ls` `cd` `mkdir` `touch` `cat` `rm` `mv` `stat` `echo >` `df`, with the prompt showing the current directory
 - Superblock/bitmap/block-reference mount validation, allocation-counter repair, and a write-through 4 KB block cache
+- Single-CPU filesystem critical section, cross-directory atomic rename, moved-directory `..` updates, and metadata queries
 - Removal protection (cannot delete cwd or its ancestors), reboot persistence tests, and a boot self-test (create → write → read back → delete)
 
 ### ✏️ Built-in Editor
@@ -107,6 +108,8 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `touch file` | Create an empty file |
 | `cat file` | Show file contents |
 | `rm path` | Remove a file or empty directory |
+| `mv old new` | Rename/move a file or directory (target must not exist) |
+| `stat path` | Show type, size, link count and inode number |
 | `df` | Filesystem usage |
 | `edit file` | Open the editor (^S save, ^X asks to save on exit) |
 | `cc file.c [args...]` | Compile and run a C program (args go to main) |
@@ -171,7 +174,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 Automated Tests
 
-19 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **554 documented checks**:
+20 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions), **588 documented checks**:
 
 ```bash
 python3 tools/test-memory.py  # E820 + page allocator + kernel heap (15 checks)
@@ -179,6 +182,7 @@ python3 tools/test-splash.py   # boot screen  (14 checks)
 python3 tools/test-font.py     # fonts        (30 checks)
 python3 tools/test-fs.py       # filesystem   (43 checks)
 python3 tools/test-disk.py     # ATA/mount/reboot persistence (19 checks)
+python3 tools/test-fs2.py      # indirect blocks/lock/rename/stat/reboot (34 checks)
 python3 tools/test-edit.py     # editor/undo/find/caret (67 checks)
 python3 tools/test-cc.py       # C compiler   (41 checks)
 python3 tools/test-preempt.py  # preemption   (7 checks)
@@ -223,7 +227,7 @@ python3 tools/test-shell.py    # shell/pipelines/groups/stop-resume/jobs (59 che
 │   ├── graphics.c/h    # mode 13h graphics library
 │   ├── font.c/h        # VGA character-generator font management
 │   ├── font12/14/16.h  # Terminus font data
-│   ├── fs.c/h          # persistent filesystem, mount checks, write-through cache
+│   ├── fs.c/h          # indirect blocks, global critical section, mount checks, write-through cache
 │   ├── fd.c/h          # shared opens, pipe ring buffers, reference counts
 │   ├── editor.c/h      # built-in editor
 │   ├── cc.c/h          # c4 compiler port
@@ -239,9 +243,9 @@ python3 tools/test-shell.py    # shell/pipelines/groups/stop-resume/jobs (59 che
 │   └── hello.c count.c crash.c div0.c echo.c badptr.c forkdemo.c
 │       spinner.c vmtest.c vmguard.c execdemo.c execbad.c
 │       waittest.c execargv.c elfdemo.c memdemo.c allocdemo.c
-│       filedemo.c fdstdin.c sh.c fdpipe.c
+│       filedemo.c fdstdin.c sh.c fdpipe.c fscheck.c
 ├── tetris/             # original real-mode assembly version (port reference)
-├── tools/              # font converter + 19 test suites
+├── tools/              # font converter + 20 test suites
 ├── note/               # development notes + screenshots
 └── Makefile
 ```
@@ -273,6 +277,7 @@ python3 tools/test-shell.py    # shell/pipelines/groups/stop-resume/jobs (59 che
 | 21 | Four-stage pipelines + process groups + foreground Ctrl+C + `jobs/fg/kill/wait` + background reaping |
 | 22 | TASK_STOPPED + SIGSTOP/SIGCONT + Ctrl+Z + `WUNTRACED` + `bg` + stopped-job resume |
 | 23 | ATA PIO + on-disk superblock/inodes/bitmaps + mount validation + write-through cache + reboot persistence |
+| 24 | Single-indirect blocks + filesystem global critical section + `rename/stat` + user `mv`/`ls -l` + concurrent-write tests |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 
@@ -281,7 +286,8 @@ The step-by-step Chinese guides for the latest phases are
 [`docs/MILESTONE_13_VM.md`](docs/MILESTONE_13_VM.md),
 [`docs/MILESTONE_14_EXEC.md`](docs/MILESTONE_14_EXEC.md),
 [`docs/MILESTONE_15_PROCESS_ELF.md`](docs/MILESTONE_15_PROCESS_ELF.md),
-[`docs/MILESTONE_23_DISK_FS.md`](docs/MILESTONE_23_DISK_FS.md).
+[`docs/MILESTONE_23_DISK_FS.md`](docs/MILESTONE_23_DISK_FS.md),
+[`docs/MILESTONE_24_FS_V2.md`](docs/MILESTONE_24_FS_V2.md).
 
 ## 📄 Credits
 

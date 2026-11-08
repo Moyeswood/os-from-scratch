@@ -66,7 +66,7 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
 # 里程碑 15 + 本地 allocator 演示；elfdemo 作为独立 ELF 镜像嵌入
 USER_PROGS = hello count crash div0 echo badptr forkdemo spinner vmtest vmguard \
              execdemo execbad waittest execargv memdemo allocdemo filedemo fdstdin \
-             sh fdpipe
+             sh fdpipe fscheck
 USER_BINS  = $(patsubst %,$(BUILD_DIR)/%.bin,$(USER_PROGS))
 ELF_DEMO   = $(BUILD_DIR)/elfdemo.elf
 
@@ -152,7 +152,7 @@ debug: $(OS_IMG) $(DISK_IMG)
 clean:
 	rm -rf $(BUILD_DIR) $(KERNEL_DIR)/*.o
 
-.PHONY: all run debug clean test-memory test-vm test-exec test-process test-fd test-shell test-disk test-attached test-suite test-all
+.PHONY: all run debug clean test-memory test-vm test-exec test-process test-fd test-shell test-disk test-fs2 test-attached test-suite test-all
 
 test-memory: $(OS_IMG)
 	python3 tools/test-memory.py
@@ -175,6 +175,9 @@ test-shell: $(OS_IMG)
 test-disk: $(OS_IMG)
 	python3 tools/test-disk.py
 
+test-fs2: $(OS_IMG)
+	python3 tools/test-fs2.py
+
 test-attached: $(OS_IMG)
 	python3 tools/run-attached-tests.py
 
@@ -184,6 +187,7 @@ test-suite: $(OS_IMG)
 	python3 tools/test-font.py
 	python3 tools/test-fs.py
 	python3 tools/test-disk.py
+	python3 tools/test-fs2.py
 	python3 tools/test-edit.py
 	python3 tools/test-cc.py
 	python3 tools/test-user.py

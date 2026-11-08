@@ -69,6 +69,8 @@ typedef struct {
 #define SYS_SETPGID  25  // 里程碑 21: 设置进程组
 #define SYS_TCSETPGRP 26 // 里程碑 21: 控制台前台进程组
 #define SYS_KILL     27  // 里程碑 21: 向进程或进程组发送终止信号
+#define SYS_RENAME   28  // 里程碑 24: 原子重命名/移动
+#define SYS_STAT     29  // 里程碑 24: 查询文件或目录元数据
 
 #define SIGINT   2
 #define SIGKILL  9
@@ -94,5 +96,13 @@ typedef struct {
     uint32_t size;
     char name[28];
 } user_dirent_t;
+
+// Must match user/lib.h user_stat_t and kernel/fs.h fs_attr_t.
+typedef struct {
+    uint32_t inum;
+    uint32_t type;
+    uint32_t size;
+    uint32_t nlink;
+} user_stat_t;
 
 #endif

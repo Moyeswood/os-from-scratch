@@ -83,6 +83,30 @@ static const char* basename(const char* path) {
     return base;
 }
 
+static int join_path(char* out, int cap, const char* dir, const char* name) {
+    int pos = 0;
+    int overflow = 0;
+    for (int i = 0; dir && dir[i]; ++i) {
+        if (pos + 1 >= cap) {
+            overflow = 1;
+            break;
+        }
+        out[pos++] = dir[i];
+    }
+    if (pos && out[pos - 1] != '/' && pos + 1 < cap) out[pos++] = '/';
+    else if (pos && out[pos - 1] != '/') overflow = 1;
+    for (int i = 0; name && name[i]; ++i) {
+        if (pos + 1 >= cap) {
+            overflow = 1;
+            break;
+        }
+        out[pos++] = name[i];
+    }
+    if (overflow) return -1;
+    out[pos] = '\0';
+    return 0;
+}
+
 static int read_byte(int fd, char* c) {
     int n;
     do {
@@ -214,9 +238,40 @@ static int utility_pwd(void) {
     return 0;
 }
 
+static void print_stat_entry(const char* name, const user_stat_t* info) {
+    swrite(1, info->type == 2 ? "d " : "- ");
+    putdec(info->nlink);
+    swrite(1, " ");
+    putdec(info->size);
+    swrite(1, " ");
+    swrite(1, name);
+    if (info->type == 2) swrite(1, "/");
+    swrite(1, "\n");
+}
+
 static int utility_ls(const command_t* cmd) {
-    const char* path = cmd->argc > 1 ? cmd->argv[1] : ".";
+    int arg = 1;
+    int long_format = 0;
+    if (arg < cmd->argc && scmp(cmd->argv[arg], "-l") == 0) {
+        long_format = 1;
+        ++arg;
+    }
+    const char* path = arg < cmd->argc ? cmd->argv[arg] : ".";
     user_dirent_t entry;
+    user_stat_t info;
+    if (stat(path, &info) < 0) {
+        swrite(2, "ls: no such file or directory\n");
+        return 1;
+    }
+    if (info.type != 2) {
+        if (long_format) print_stat_entry(basename(path), &info);
+        else {
+            swrite(1, basename(path));
+            swrite(1, "\n");
+        }
+        return 0;
+    }
+
     int entries = 0;
     for (uint32_t idx = 0; ; ++idx) {
         int got = readdir(path, idx, &entry);
@@ -230,9 +285,24 @@ static int utility_ls(const command_t* cmd) {
         if (!entry.inum || scmp(entry.name, ".") == 0 ||
             scmp(entry.name, "..") == 0) continue;
         entries++;
-        swrite(1, entry.name);
-        if (entry.type == 2) swrite(1, "/");
-        swrite(1, "\n");
+        if (long_format) {
+            char child[256];
+            user_stat_t child_info;
+            if (join_path(child, sizeof(child), path, entry.name) == 0 &&
+                stat(child, &child_info) == 0) {
+                print_stat_entry(entry.name, &child_info);
+            } else {
+                child_info.inum = entry.inum;
+                child_info.type = entry.type;
+                child_info.size = entry.size;
+                child_info.nlink = 1;
+                print_stat_entry(entry.name, &child_info);
+            }
+        } else {
+            swrite(1, entry.name);
+            if (entry.type == 2) swrite(1, "/");
+            swrite(1, "\n");
+        }
     }
     return 0;
 }
@@ -289,6 +359,39 @@ static int utility_rm(const command_t* cmd) {
     return status;
 }
 
+static int utility_mv(const command_t* cmd) {
+    if (cmd->argc != 3) {
+        swrite(2, "mv: usage: mv <old> <new>\n");
+        return 1;
+    }
+    if (rename(cmd->argv[1], cmd->argv[2]) < 0) {
+        swrite(2, "mv: rename failed (missing source or existing target)\n");
+        return 1;
+    }
+    return 0;
+}
+
+static int utility_stat(const command_t* cmd) {
+    if (cmd->argc != 2) {
+        swrite(2, "stat: missing operand\n");
+        return 1;
+    }
+    user_stat_t info;
+    if (stat(cmd->argv[1], &info) < 0) {
+        swrite(2, "stat: no such file or directory\n");
+        return 1;
+    }
+    swrite(1, info.type == 2 ? "type=directory" : "type=file");
+    swrite(1, " size=");
+    putdec(info.size);
+    swrite(1, " nlink=");
+    putdec(info.nlink);
+    swrite(1, " inode=");
+    putdec(info.inum);
+    swrite(1, "\n");
+    return 0;
+}
+
 static int execute_builtin(const command_t* cmd) {
     const char* name = basename(cmd->argv[0]);
     if (scmp(name, "echo") == 0) return utility_echo(cmd);
@@ -297,6 +400,8 @@ static int execute_builtin(const command_t* cmd) {
     if (scmp(name, "cat") == 0) return utility_cat(cmd);
     if (scmp(name, "mkdir") == 0) return utility_mkdir(cmd);
     if (scmp(name, "rm") == 0) return utility_rm(cmd);
+    if (scmp(name, "mv") == 0) return utility_mv(cmd);
+    if (scmp(name, "stat") == 0) return utility_stat(cmd);
     if (scmp(name, "cd") == 0) {
         const char* path = cmd->argc > 1 ? cmd->argv[1] : "/";
         if (chdir(path) < 0) {
@@ -307,7 +412,7 @@ static int execute_builtin(const command_t* cmd) {
     }
     if (scmp(name, "help") == 0) {
         swrite(1, "builtins: cd exit jobs fg bg kill wait help\n");
-        swrite(1, "tools: echo cat ls pwd mkdir rm\n");
+        swrite(1, "tools: echo cat ls pwd mkdir rm mv stat\n");
         swrite(1, "syntax: cmd [args] [< in] [> out] [>> out] [| cmd...] [&]\n");
         return 0;
     }

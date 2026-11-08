@@ -8,12 +8,12 @@
 #include "vm.h"
 
 #define EXEC_PATH_BUF 64
-#define SHELL_UTILITY_COUNT 6
+#define SHELL_UTILITY_COUNT 8
 
 extern const char user_elfdemo_elf_start[], user_elfdemo_elf_end[];
 
 static const char* shell_utilities[SHELL_UTILITY_COUNT] = {
-    "echo", "cat", "ls", "pwd", "mkdir", "rm"
+    "echo", "cat", "ls", "pwd", "mkdir", "rm", "mv", "stat"
 };
 
 void exec_basename(char* out, uint32_t cap, const char* path) {

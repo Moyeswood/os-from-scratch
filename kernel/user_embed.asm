@@ -79,6 +79,11 @@ user_fdpipe_start: incbin "build/fdpipe.bin"
 global user_fdpipe_end
 user_fdpipe_end:
 
+global user_fscheck_start
+user_fscheck_start: incbin "build/fscheck.bin"
+global user_fscheck_end
+user_fscheck_end:
+
 global user_vmtest_start
 user_vmtest_start: incbin "build/vmtest.bin"
 global user_vmtest_end

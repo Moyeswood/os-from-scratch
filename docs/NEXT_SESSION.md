@@ -6,9 +6,9 @@
 
 - 项目目录：`/home/mfw/Documents/claude001/NewOS`
 - 分支：`main`
-- 当前进度：里程碑 23
-- 完整回归：19 套测试、文档统计 554 项通过
-- 最终内核镜像 185404 字节，低于 448KB（458752 字节）加载上限
+- 当前进度：里程碑 24
+- 完整回归：20 套测试、文档统计 588 项通过
+- 最终内核镜像 194500 字节，低于 448KB（458752 字节）加载上限
 
 ## 今日完成
 
@@ -27,6 +27,8 @@
    `waitpid(WUNTRACED)`、`bg` 和暂停作业恢复。
 9. 里程碑 23：ATA PIO、独立 2MB 磁盘、LBA 2048 文件系统布局、
    挂载检查、写穿式 dirty 块缓存和跨重启持久化。
+10. 里程碑 24：一级间接块、文件系统全局临界区、`rename/stat`、
+    用户态 `mv`、`stat` 和 `ls -l`，以及双进程并发写压力测试。
 
 关键文档：
 
@@ -38,28 +40,28 @@
 - `docs/MILESTONE_21_JOBS.md`
 - `docs/MILESTONE_22_STOP_RESUME.md`
 - `docs/MILESTONE_23_DISK_FS.md`
+- `docs/MILESTONE_24_FS_V2.md`
 - `note/进程模型与ELF开发记录.md`
 
-## 下次继续：里程碑 24
+## 下次继续：里程碑 25
 
-建议主题：**块缓存一致性与文件系统扩展**
+建议主题：**延迟回写与崩溃一致性**
 
 按以下顺序完成：
 
-1. 为文件系统公开操作增加全局锁，验证并发 open/write/create。
-2. 把写穿模式改为可配置的延迟回写，并增加脏块数量上限。
-3. 增加一级/二级间接块，突破单文件 48KB。
-4. 实现 `rename`、`link`、`unlink`、`stat`。
-5. 设计日志或写时复制，避免断电时留下半更新的目录/inode。
-6. 增加磁盘损坏注入测试，验证最小 fsck 的诊断路径。
+1. 把整段关中断的 FS 临界区改成可睡眠 mutex。
+2. 从写穿改为可配置的延迟回写，并增加脏块数量上限和周期 flush。
+3. 设计日志或写时复制，避免断电时留下半更新的目录/inode。
+4. 增加磁盘断电/损坏注入测试，验证恢复与最小 fsck 诊断。
+5. 增加 `rename` 覆盖目标、硬链接和更完整的截断语义。
 
 建议先只支持：
 
 ```text
-single writer lock
+single-writer sleeping mutex
 delayed dirty writeback
-one indirect block
-rename atomically
+bounded dirty-block cache
+crash-safe metadata update
 ```
 
 ## 当前已知限制
@@ -67,9 +69,12 @@ rename atomically
 - 不支持动态链接、PT_INTERP、ET_DYN/PIE。
 - 信号支持默认终止、暂停和恢复，尚无用户态处理函数与待处理队列。
 - argv 上限 16，envp 上限 8，参数文本上限 3KB。
-- 文件系统为 1MB 持久化 FS，单文件最大 48KB。
+- 文件系统为 1MB 持久化 FS；结构上已支持一级间接块，实际单文件上限
+  受磁盘容量约束。
 - ATA 只支持 primary master、polling PIO 和 28-bit LBA。
-- FS 修改仍是写穿，没有日志事务，也没有全局并发锁。
+- FS 已有单 CPU 全局临界区；修改仍是写穿，没有日志事务。
+- `rename` 要求目标不存在，尚未实现 POSIX 覆盖语义。
+- 大文件写穿期间会暂时关闭中断；尚未改成可睡眠 mutex。
 - 默认 Shell 仍在内核态；fd/CWD 已支持每进程。
 - 最多四段管道；已有进程组、前台 Ctrl+C 和基础作业表。
 - 信号只有默认终止/暂停/恢复；尚无用户态处理函数和待处理信号队列。
@@ -85,4 +90,5 @@ make -j4
 python3 tools/test-fd.py
 python3 tools/test-shell.py
 python3 tools/test-disk.py
+python3 tools/test-fs2.py
 ```

@@ -50,6 +50,8 @@ static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 #define SYS_SETPGID  25
 #define SYS_TCSETPGRP 26
 #define SYS_KILL     27
+#define SYS_RENAME   28
+#define SYS_STAT     29
 
 #define SIGINT   2
 #define SIGKILL  9
@@ -71,6 +73,13 @@ typedef struct {
     uint32_t size;
     char name[28];
 } user_dirent_t;
+
+typedef struct {
+    uint32_t inum;
+    uint32_t type;
+    uint32_t size;
+    uint32_t nlink;
+} user_stat_t;
 
 #define O_RDONLY 0x0001
 #define O_WRONLY 0x0002
@@ -169,6 +178,13 @@ static inline int readdir(const char* path, uint32_t index,
                           user_dirent_t* entry) {
     return (int)syscall3(SYS_READDIR, (uint32_t)path, index,
                          (uint32_t)entry);
+}
+static inline int rename(const char* oldpath, const char* newpath) {
+    return (int)syscall3(SYS_RENAME, (uint32_t)oldpath,
+                         (uint32_t)newpath, 0);
+}
+static inline int stat(const char* path, user_stat_t* info) {
+    return (int)syscall3(SYS_STAT, (uint32_t)path, (uint32_t)info, 0);
 }
 static inline int setpgid(int pid, int pgid) {
     return (int)syscall3(SYS_SETPGID, (uint32_t)pid, (uint32_t)pgid, 0);

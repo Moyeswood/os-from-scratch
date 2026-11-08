@@ -330,6 +330,32 @@ static int sys_mkdir(task_t* me, const char* user_path) {
     return fs_create(path, FS_DIR) < 0 ? -1 : 0;
 }
 
+static int sys_rename(task_t* me, const char* user_old, const char* user_new) {
+    (void)me;
+    char oldpath[FS_PATH_MAX];
+    char newpath[FS_PATH_MAX];
+    if (copy_user_path(oldpath, sizeof(oldpath), user_old) < 0 ||
+        copy_user_path(newpath, sizeof(newpath), user_new) < 0)
+        return -1;
+    return fs_rename(oldpath, newpath);
+}
+
+static int sys_stat(task_t* me, const char* user_path, user_stat_t* user_stat) {
+    char path[FS_PATH_MAX];
+    if (!user_stat ||
+        !vm_user_range_ok(me, (uint32_t)user_stat, sizeof(*user_stat)) ||
+        copy_user_path(path, sizeof(path), user_path) < 0)
+        return -1;
+    fs_attr_t attr;
+    if (fs_getattr(path, &attr) < 0) return -1;
+    user_stat_t result;
+    result.inum = attr.inum;
+    result.type = attr.type;
+    result.size = attr.size;
+    result.nlink = attr.nlink;
+    return vm_write_user(me, (uint32_t)user_stat, &result, sizeof(result));
+}
+
 static int copy_user_vector(const char* const* source, const char* out[],
                             int max_count, char* storage, uint32_t storage_size,
                             uint32_t* used, int* count) {
@@ -480,6 +506,14 @@ void syscall_dispatch(user_frame_t* f) {
         f->eax = (uint32_t)sys_readdir(task_current(),
                                        (const char*)f->ebx, f->ecx,
                                        (user_dirent_t*)f->edx);
+        break;
+    case SYS_RENAME:
+        f->eax = (uint32_t)sys_rename(task_current(), (const char*)f->ebx,
+                                      (const char*)f->ecx);
+        break;
+    case SYS_STAT:
+        f->eax = (uint32_t)sys_stat(task_current(), (const char*)f->ebx,
+                                    (user_stat_t*)f->ecx);
         break;
     case SYS_SETPGID:
         f->eax = (uint32_t)proc_setpgid((int)f->ebx, (int)f->ecx);

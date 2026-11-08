@@ -135,7 +135,7 @@ def wait_since(needle, timeout=10.0, name=""):
 
 
 check("boot: built-ins installed in /bin", wait_for(
-    lambda: "[EXEC] installed 0x00000014/0x00000014 programs in /bin" in log(),
+    lambda: "[EXEC] installed 0x00000015/0x00000015 programs in /bin" in log(),
     15, "bin-install"))
 check("boot: splash completed", wait_for(
     lambda: "[SP] done" in log() or "[SP] skipped" in log(), 20, "splash"))
