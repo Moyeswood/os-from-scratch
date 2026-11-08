@@ -45,7 +45,7 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 - **Full process lifecycle**: per-process address spaces and CWDs, fork, process groups, RUNNING/STOPPED jobs, process reaping, and a 16-entry per-process fd table; stopping preserves all VM/fd state for resume
 - **Device drivers**: ATA PIO disk, VGA text/graphics, COM1 serial, PS/2 keyboard, PIT timer, PC speaker beep
 - **Graphics library**: mode 13h (320×200×256) palette/pixel/rect/sprite/font
-- **🎨 Adjustable fonts**: pure VGA hardware programming to load **Terminus** bitmap fonts (writing character-generator plane 2 + CRTC row reprogramming); `font` command with 5 sizes (12/14/16/18/20 → 33/28/25/22/20 lines, default 18; 18/20 vertically scaled from 8x16), hardware-level self-test on every load
+- **🎨 Adjustable fonts**: pure VGA hardware programming with 5 eight-pixel-wide bitmap fonts (Terminus, Goha, Goha Classic, VGA Console, DOS); the `font` command supports **any 8–32px height** combined with a font style, scaling non-native sizes at load time and running a hardware self-test each time
 
 ### 📁 Filesystem
 xv6-style teaching implementation (ATA PIO persistent disk, 1 MB / 256 blocks, 64 inodes):
@@ -81,7 +81,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 ### 🎮 Fun & Applications
 - **Tetris**: 7-bag randomizer, wall kicks, lock delay, hold piece, line-clear animation, 5 color themes, beep SFX
 - **Super Mario**: two themed stages, super/star abilities, checkpoints, stomp combos, variable jumps, jump buffering/coyote time, particles, screen shake, mid-stage retry, and a polished HUD
-- **🚀 Boot screen**: deep-blue gradient starfield (DAC palette programming) + 32px colorful "HELLO WORLD" letter-by-letter reveal animation + "NEWOS!" subtitle; press any key to skip; replayable via the `splash` command
+- **🚀 Boot screen**: deep-blue gradient starfield (DAC palette programming) + 32px high-contrast "NEWOS" letter-by-letter reveal animation + "MYQWEN-OS" subtitle; press any key to skip; replayable via the `splash` command
 
 ## 💻 Command Reference
 
@@ -100,7 +100,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `ps` / `start` / `stop` | Task status / start-stop the multitasking demo |
 | `testmode` | Graphics-mode real-mode round-trip test |
 | `tetris` / `mario` | Games (ESC to exit) |
-| `font 12\|14\|16\|18\|20` | Font size (33/28/25/22/20 lines, default 18) |
+| `font N` / `font <style> [N]` | Any 8–32px size / font style + size; use `font list` for styles |
 | `pwd` | Print working directory |
 | `ls [dir]` | List directory (`<DIR>` marks directories) |
 | `cd [dir]` | Change directory (no arg = root) |

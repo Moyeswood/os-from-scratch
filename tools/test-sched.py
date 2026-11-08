@@ -128,7 +128,7 @@ type_text("ps\n")
 time.sleep(1.0)
 t = wait_screen(lambda text: all(
     name in text for name in ("shell", "task_a", "task_b", "task_c")))
-# (idle 行在 ps 输出最顶上, 22 行屏幕里被横幅+提示符挤上去滚掉了,
+# (idle 行在 ps 输出最顶上, 20 行屏幕里被横幅+提示符挤上去滚掉了,
 #  这里查屏幕能看见的 shell + A/B/C; idle 的存在由调度器本身保证)
 check("ps: shell + A/B/C listed",
       all(n in t for n in ("shell", "task_a", "task_b", "task_c")))

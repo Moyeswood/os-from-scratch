@@ -198,10 +198,10 @@ type_text("font 16\n")
 check("regress: font16 applied", wait_for(
     lambda: re.search(r"\[FONT\] height=0x00000010 mismatch=0x00000000", serial_since()),
     8.0, "font16"))
-type_text("font 18\n")
-check("regress: font18 back to default", wait_for(
-    lambda: re.search(r"\[FONT\] height=0x00000012 mismatch=0x00000000", serial_since()),
-    8.0, "font18"))
+type_text("font 20\n")
+check("regress: font20 back to default", wait_for(
+    lambda: re.search(r"\[FONT\] height=0x00000014 mismatch=0x00000000", serial_since()),
+    8.0, "font20"))
 
 try:
     qemu.terminate()

@@ -57,6 +57,7 @@ def load_psf(path):
 def main():
     src, out_h = sys.argv[1], sys.argv[2]
     name = sys.argv[sys.argv.index('--name') + 1] if '--name' in sys.argv else 'font_data'
+    family = sys.argv[sys.argv.index('--family') + 1] if '--family' in sys.argv else os.path.basename(src)
     vscale = int(sys.argv[sys.argv.index('--vscale') + 1]) if '--vscale' in sys.argv else 0
     width, height, length, charsize, glyphs, utable = load_psf(src)
 
@@ -77,9 +78,9 @@ def main():
     out_height = vscale if vscale else height
     src_note = "" if not vscale else f" ({width}x{height} 垂直放大, 行复制)"
     lines = [
-        f"// 由 {os.path.basename(src)} 生成: {width}x{out_height} 点阵字体 (Terminus){src_note}",
+        f"// 由 {os.path.basename(src)} 生成: {width}x{out_height} 点阵字体 ({family}){src_note}",
         f"// 256 个字形 (码位 0..255), 每字形 {out_height} 字节, 每字节一行, MSB=最左像素",
-        f"// 生成命令: python3 tools/gen-font.py <源psf> {os.path.basename(out_h)} --name {name}" + (f" --vscale {vscale}" if vscale else ""),
+        f"// 生成命令: python3 tools/gen-font.py <源psf> {os.path.basename(out_h)} --name {name} --family {family}" + (f" --vscale {vscale}" if vscale else ""),
         f"#ifndef {name.upper()}_H",
         f"#define {name.upper()}_H",
         "",

@@ -50,7 +50,7 @@ def check(name, ok, detail=""):
 
 drain(2.5)
 
-# 0. 启动 sanity (默认 font 18/22 行屏, help 开头几行会滚掉, 查末行)
+# 0. 启动 sanity (默认 font 20/20 行屏, help 开头几行会滚掉, 查末行)
 type_text("help\n")
 time.sleep(0.5)
 t = vga_text()

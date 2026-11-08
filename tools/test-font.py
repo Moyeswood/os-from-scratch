@@ -100,6 +100,16 @@ def wait_font_marker(h, scanline, timeout=5.0):
         time.sleep(0.2)
     return False
 
+def face_marker(name):
+    return re.search(rf"\[FONT\] face={re.escape(name)} source=", serial_since()) is not None
+
+def wait_face_marker(name, timeout=5.0):
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if face_marker(name): return True
+        time.sleep(0.2)
+    return False
+
 def wait_for(cond, timeout=5.0, name=""):
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -108,11 +118,11 @@ def wait_for(cond, timeout=5.0, name=""):
     print(f"  [wait_for:{name}] timeout: buf={len(serial_buf)}B since={len(serial_since())}B tail={serial_log()[-100:]!r}", flush=True)
     return False
 
-# ---------- 1. 启动: 自动加载 8x18 Terminus (8x16 垂直放大) ----------
+# ---------- 1. 启动: 自动加载 8x20 Terminus (8x16 垂直放大) ----------
 time.sleep(3.0)
 dbg = serial_log()
-check("boot: font18 loaded (plane2 readback + CRTC)",
-      wait_font_marker(0x12, 0x11, timeout=1.0))
+check("boot: font20 loaded (plane2 readback + CRTC)",
+      wait_font_marker(0x14, 0x13, timeout=1.0))
 # 等开机画面结束再检查 banner (banner 在 splash 之后才打印)
 check("boot: splash done", wait_for(
     lambda: "[SP] done" in serial_log() or "[SP] skipped" in serial_log(),
@@ -143,7 +153,7 @@ check("font 12: shell rows=33", "(33 lines)" in read_screen())
 # ---------- 4. 非法参数 ----------
 type_text("font 99\n")
 time.sleep(0.5)
-check("font 99: usage shown", "Usage: font 12 | 14 | 16 | 18 | 20" in read_screen())
+check("font 99: usage shown", "Usage: font N | font <style> [N]" in read_screen())
 
 # ---------- 5. 回到 16 + help 回归 ----------
 mark_serial_base()
@@ -151,7 +161,7 @@ type_text("font 16\n")
 check("font 16: hardware applied", wait_font_marker(0x10, 0x0F))
 type_text("help\n")
 time.sleep(0.6)
-check("help: lists font command", "font N" in read_screen())
+check("help: lists font command", "font [style] [N]" in read_screen())
 
 # ---------- 6. tetris 往返: 退出后字体自动恢复 ----------
 # ★不用 BDA 轮询: monitor xp 风暴会冻结 VCPU (项目已知坑),
@@ -224,6 +234,64 @@ check("font 20: hardware applied", wait_font_marker(0x14, 0x13))
 type_text("font\n")
 time.sleep(0.5)
 check("font 20: shell rows=20", "(20 lines)" in read_screen())
+
+# ---------- 11. 任意字号 8..32 ----------
+mark_serial_base()
+type_text("font 21\n")
+check("font 21: arbitrary height applied", wait_font_marker(0x15, 0x14))
+check("font 21: scaled source", wait_face_marker("terminus"))
+type_text("font\n")
+time.sleep(0.5)
+check("font 21: shell rows=19", "(19 lines)" in read_screen())
+
+for h in (8, 32):
+    mark_serial_base()
+    type_text(f"font {h}\n")
+    check(f"font {h}: boundary applied", wait_font_marker(h, h - 1, timeout=6.0))
+    if h == 8:
+        type_text("font\n")
+        time.sleep(0.5)
+        check("font 8: current size shown without padding",
+              "Current font: terminus 8px (50 lines)" in read_screen())
+
+for bad in ("7", "33"):
+    type_text(f"font {bad}\n")
+    time.sleep(0.4)
+    check(f"font {bad}: rejected", "Usage: font N | font <style> [N]" in read_screen())
+
+# ---------- 12. 字体风格 + 任意字号组合 ----------
+type_text("font list\n")
+time.sleep(0.5)
+screen = read_screen()
+check("font list: styles shown",
+      all(name in screen for name in ("terminus", "goha", "classic", "console", "dos")))
+
+style_cases = (("goha", 17), ("classic", 23), ("console", 13), ("dos", 26))
+for name, h in style_cases:
+    mark_serial_base()
+    type_text(f"font {name} {h}\n")
+    check(f"font {name}: height {h} applied",
+          wait_font_marker(h, h - 1, timeout=6.0))
+    check(f"font {name}: face selected", wait_face_marker(name))
+
+mark_serial_base()
+type_text("font goha 18\n")
+check("font goha: graphics-restore setup", wait_font_marker(0x12, 0x11))
+mark_serial_base()
+type_text("tetris\n")
+time.sleep(1.5)
+send("sendkey spc", wait=0.3)
+time.sleep(0.8)
+send("sendkey esc", wait=0.3)
+check("font goha: tetris exits",
+      wait_for(lambda: "[GAME] Tetris exited" in serial_since(), timeout=10.0))
+check("font goha: size restored after graphics", wait_font_marker(0x12, 0x11, timeout=8.0))
+check("font goha: face restored after graphics", wait_face_marker("goha", timeout=3.0))
+
+mark_serial_base()
+type_text("font terminus 20\n")
+check("font restore: terminus 20", wait_font_marker(0x14, 0x13))
+check("font restore: face", wait_face_marker("terminus"))
 
 try:
     qemu.terminate()

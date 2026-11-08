@@ -350,7 +350,7 @@ time.sleep(1.5)
 ok_bar = False
 for _ in range(4):
     time.sleep(1.5)
-    r = send("xp /80bx 0xb8c80", wait=0.05)   # 第 21 行 (状态栏, 22 行屏幕/默认 font 18)
+    r = send("xp /80bx 0xb8b40", wait=0.05)   # 第 19 行 (状态栏, 20 行屏幕/默认 font 20)
     chars = ""
     for line in r.splitlines():
         if ':' not in line or '\x1b' in line: continue

@@ -150,7 +150,7 @@ static void cmd_help() {
     vga_puts("  testmode - Test graphics mode round trip (BIOS INT 10h)\n\r");
     vga_puts("  tetris   - Play Tetris (ESC to exit)\n\r");
     vga_puts("  mario    - Play Super Mario (1/2 world, ESC exit)\n\r");
-    vga_puts("  font N   - Change font size (rows): 12(33) 14(28) 16(25) 18(22) 20(20)\n\r");
+    vga_puts("  font [style] [N] - Font style/size 8..32; 'font list' for styles\n\r");
     vga_puts("  pwd      - Print working directory\n\r");
     vga_puts("  ls [d]   - List directory\n\r");
     vga_puts("  cd [d]   - Change directory (no arg = root)\n\r");
@@ -195,34 +195,78 @@ static void cmd_version() {
     vga_puts("\n\rMyQwen-OS v1.0.0 - Built with Qwen\n\r");
 }
 
-// font 命令: 切换字号 (12/14/16 → 33/28/25 行)
-static void cmd_font(int argc, char** argv) {
-    uint8_t h = 0;
-    if (argc > 1) {
-        const char* p = argv[1];
-        while (*p >= '0' && *p <= '9') {
-            h = (uint8_t)(h * 10 + (*p - '0'));
-            p++;
-        }
+static int font_parse_size(const char* s, uint8_t* out) {
+    if (*s < '0' || *s > '9') return 0;
+    int n = 0;
+    while (*s >= '0' && *s <= '9') {
+        n = n * 10 + (*s - '0');
+        if (n > FONT_HEIGHT_MAX) return 0;
+        s++;
     }
-    if (h == 0) {
-        // 无参数: 显示当前字号
+    if (*s || n < FONT_HEIGHT_MIN || n > FONT_HEIGHT_MAX) return 0;
+    *out = (uint8_t)n;
+    return 1;
+}
+
+static void font_usage(void) {
+    vga_puts("Usage: font N | font <style> [N] | font list  (N=");
+    vga_putc('0' + FONT_HEIGHT_MIN);
+    vga_puts("..");
+    vga_putc('0' + FONT_HEIGHT_MAX / 10);
+    vga_putc('0' + FONT_HEIGHT_MAX % 10);
+    vga_puts(")\n\r");
+    vga_puts("Styles: terminus goha classic console dos\n\r");
+}
+
+// font 命令: 可选择字体风格，并以 8..32 间任意像素高度重载。
+static void cmd_font(int argc, char** argv) {
+    if (argc == 1) {
         uint8_t cur = font_current();
-        vga_puts("\n\rCurrent font size: ");
-        vga_putc('0' + cur / 10);
+        vga_puts("\n\rCurrent font: ");
+        vga_puts(font_current_name());
+        vga_puts(" ");
+        if (cur >= 10) vga_putc('0' + cur / 10);
         vga_putc('0' + cur % 10);
-        vga_puts(" (");
+        vga_puts("px (");
         int rows = vga_get_rows();
-        vga_putc('0' + rows / 10);
+        if (rows >= 10) vga_putc('0' + rows / 10);
         vga_putc('0' + rows % 10);
         vga_puts(" lines)\n\r");
-        vga_puts("Usage: font 12 | 14 | 16 | 18 | 20\n\r");
-    } else if (h == 12 || h == 14 || h == 16 || h == 18 || h == 20) {
-        font_apply(h);              // 加载字体 + 自测 (串口报 [FONT] OK/FAIL)
-        vga_puts("MyQwen-OS v1.0.0\n\r");
-    } else {
-        vga_puts("\n\rUsage: font 12 | 14 | 16 | 18 | 20\n\r");
+        font_usage();
+        return;
     }
+
+    if (k_strcmp(argv[1], "list") == 0 && argc == 2) {
+        vga_puts("\n\rFonts: terminus (default), goha, classic, console, dos\n\r");
+        vga_puts("Size: 8..32px; examples: font 21, font goha 18\n\r");
+        return;
+    }
+
+    uint8_t size;
+    if (font_parse_size(argv[1], &size)) {
+        if (argc != 2) {
+            font_usage();
+            return;
+        }
+        font_apply(size);
+        vga_puts("MyQwen-OS v1.0.0\n\r");
+        return;
+    }
+
+    if (argc > 3) {
+        font_usage();
+        return;
+    }
+    if (argc == 3 && !font_parse_size(argv[2], &size)) {
+        font_usage();
+        return;
+    }
+    if (!font_select(argv[1])) {
+        font_usage();
+        return;
+    }
+    if (argc == 3) font_apply(size);
+    vga_puts("MyQwen-OS v1.0.0\n\r");
 }
 
 // ============================================================

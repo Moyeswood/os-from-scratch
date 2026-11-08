@@ -102,6 +102,15 @@ def run_cmd(cmdline, marker, timeout=8.0, name=""):
     time.sleep(0.6)
     return ok
 
+# 动画字符必须有字模；缺失时 splash_glyph 会静默跳过该字母。
+splash_src = open("kernel/splash.c", encoding="utf-8").read()
+font_src = open("kernel/splash.asm", encoding="utf-8").read()
+animated = "".join(re.findall(r'static const char\*\s+(?:title|sub)\s*=\s*"([^"]+)"', splash_src))
+glyphs = set(re.findall(r"^\s*db '(.)',", font_src, re.MULTILINE))
+missing = sorted(set(animated) - glyphs)
+check("splash: all animated glyphs defined", not missing,
+      f"missing={''.join(missing)}")
+
 # ---------- 1. 启动: 开机画面自动播放 ----------
 time.sleep(3.0)
 dbg = serial_log()

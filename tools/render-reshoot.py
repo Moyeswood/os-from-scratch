@@ -83,9 +83,9 @@ if not wait_pat(r"\[SP\] (done|skipped)"): print("TIMEOUT [SP]"); sys.exit(1)
 time.sleep(1.0)
 shot("splash-shell")
 
-# 3. font 18 help (默认字号)
+# 3. font 20 help (默认字号)
 type_text("help\n", wait=0.1)
-shot("font18")
+shot("font20")
 
 # 4. font 16 help
 type_text("font 16\n", wait=0.1)
@@ -105,8 +105,8 @@ type_text("font 14\n", wait=0.1)
 type_text("help\n", wait=0.1)
 shot("font14-help")
 
-# 8. 文件系统操作 (font 18 默认)
-type_text("font 18\n", wait=0.1)
+# 8. 文件系统操作 (font 20 默认)
+type_text("font 20\n", wait=0.1)
 type_text("mkdir demo\n", wait=0.1)
 type_text("echo hello from NewOS > demo/a.txt\n", wait=0.1)
 type_text("ls demo\n", wait=0.1)

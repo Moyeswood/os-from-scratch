@@ -1,10 +1,13 @@
 // ============================================================
 //  VGA 字符发生器字体管理 (纯硬件编程, 不依赖 BIOS)
 //
-//  字体数据: font12.h / font14.h / font16.h / font18.h / font20.h
-//  (由 Terminus PSF 生成, 见 tools/gen-font.py)。每套 256 个字形
+//  字体数据: 5 套 8 宽控制台字体 (Terminus/Goha/Goha Classic/VGA Console/DOS)
+//  (由 PSF 生成, 见 tools/gen-font.py)。每套 256 个字形
 //  (码位 0..255), 每字形 height 字节, 每字节一行, MSB = 最左像素 —
 //  与 VGA 字符发生器 RAM (平面 2) 的存储格式完全一致。
+//  字号 8..32 可任意选择: 有原生尺寸时直接使用, 其余尺寸从 16px 母版
+//  在同一次 font_apply 中生成; 缩小取区间 OR 防止横线丢失，放大用
+//  最近邻行复制。
 //
 //  为什么不用 BIOS INT 10h AX=1100h: SeaVGABIOS 没实现它
 //  (实测平面 2 内容不变、CRTC 不重配), 而且直接写寄存器
@@ -36,22 +39,82 @@
 #include "font16.h"
 #include "font18.h"
 #include "font20.h"
+#include "font_goha16.h"
+#include "font_gohaclassic16.h"
+#include "font_console16.h"
+#include "font_dos16.h"
 #include "vga.h"
 #include "serial.h"
 #include "io.h"
+#include "string.h"
 
-static uint8_t current_height = 18;
+static uint8_t current_height = FONT_HEIGHT_DEFAULT;
+
+// 索引 0 的 Terminus 在 12/14/16/18/20 使用专用原生点阵；其余字体和
+// 非原生字号都从这里的 16px 母版缩放，避免把所有字号都静态编进内核。
+typedef struct {
+    const char* name;
+    const uint8_t* data;
+    uint8_t source_height;
+} font_face;
+
+static const font_face font_faces[] = {
+    { "terminus", &font16[0][0],              16 },
+    { "goha",     &fontgoha16[0][0],          16 },
+    { "classic",  &fontgohaclassic16[0][0],   16 },
+    { "console",  &fontconsole16[0][0],       16 },
+    { "dos",      &fontdos16[0][0],           16 },
+};
+
+static uint8_t current_face = 0;
+static uint8_t scaled_font[256 * FONT_HEIGHT_MAX];
 
 uint8_t font_current(void) {
     return current_height;
 }
 
-static const uint8_t* font_table(uint8_t h) {
+const char* font_current_name(void) {
+    return font_faces[current_face].name;
+}
+
+static const uint8_t* font_native_table(uint8_t h) {
+    if (current_face != 0) return 0;
     if (h == 12) return &font12[0][0];
     if (h == 14) return &font14[0][0];
     if (h == 16) return &font16[0][0];
     if (h == 18) return &font18[0][0];
-    return &font20[0][0];
+    if (h == 20) return &font20[0][0];
+    return 0;
+}
+
+// 把任意 8xN 母版生成 8xh 字模。缩小时将一个目标扫描行覆盖的
+// 多个源扫描行做 OR，避免细横线被最近邻采样整行丢掉。
+static const uint8_t* font_scaled_table(uint8_t h) {
+    const font_face* face = &font_faces[current_face];
+    uint8_t sh = face->source_height;
+
+    for (int ch = 0; ch < 256; ch++) {
+        const uint8_t* src = face->data + ch * sh;
+        uint8_t* dst = scaled_font + ch * h;
+        for (int row = 0; row < h; row++) {
+            int start = row * sh / h;
+            if (h >= sh) {
+                dst[row] = src[start];
+            } else {
+                int end = (row + 1) * sh / h;
+                if (end <= start) end = start + 1;
+                uint8_t bits = 0;
+                for (int sy = start; sy < end; sy++) bits |= src[sy];
+                dst[row] = bits;
+            }
+        }
+    }
+    return scaled_font;
+}
+
+static const uint8_t* font_table(uint8_t h) {
+    const uint8_t* native = font_native_table(h);
+    return native ? native : font_scaled_table(h);
 }
 
 static void crtc_write(uint8_t reg, uint8_t val) {
@@ -179,8 +242,19 @@ static int font_selftest(const uint8_t* tbl, uint8_t h) {
     return bad;
 }
 
+int font_select(const char* name) {
+    for (int i = 0; i < (int)(sizeof(font_faces) / sizeof(font_faces[0])); i++) {
+        if (k_strcmp(name, font_faces[i].name) == 0) {
+            current_face = (uint8_t)i;
+            font_apply(current_height);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void font_apply(uint8_t h) {
-    if (h != 12 && h != 14 && h != 16 && h != 18 && h != 20) return;
+    if (h < FONT_HEIGHT_MIN || h > FONT_HEIGHT_MAX) return;
     const uint8_t* tbl = font_table(h);
 
     // 1. 写字符发生器平面 2
@@ -204,5 +278,12 @@ void font_apply(uint8_t h) {
         serial_puts(" OK\n\r");
     } else {
         serial_puts(" FAIL\n\r");
+    }
+    serial_puts("[FONT] face="); serial_puts(font_current_name());
+    serial_puts(" source=");
+    if (font_native_table(h)) {
+        serial_puts("native\n\r");
+    } else {
+        serial_puts("scaled\n\r");
     }
 }

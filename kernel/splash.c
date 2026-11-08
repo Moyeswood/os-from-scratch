@@ -2,13 +2,11 @@
 //  开机画面 (模式 13h)
 //
 //  编排层: DAC 调色板编程 (深蓝渐变 16 色) → 渐变星空背景 →
-//  大标题逐字揭示动画 (字模绘制在 splash.asm, 用户的 hello.asm
-//  32 位移植版) → 任意键跳过或播完自动进 shell。
+//  NEWOS 大标题逐字揭示动画 → 任意键跳过或播完自动进 shell。
 //
 //  布局 (320x200):
-//    "HELLO"  y=28   主标题 (32px 大字, 颜色洗牌, 用户原版创意)
-//    "WORLD"  y=76   主标题第二行 ("HELLO WORLD" 一行放不下, 拆两行居中)
-//    "NEWOS!" y=132  副标题 (16px, 白色 — 浅灰与蓝底对比不足)
+//    "NEWOS"      y=68   主标题 (32px 大字, 逐字出现)
+//    "MYQWEN-OS"  y=124  副标题 (16px, 白色)
 //    60 颗星 + 深蓝渐变背景 (顶部亮 → 底部黑)
 // ============================================================
 
@@ -54,25 +52,6 @@ static void splash_bg(void) {
     }
 }
 
-// ---------- 颜色洗牌 (用户原版创意: 表首与随机位交换) ----------
-static uint8_t splash_colors[16];
-
-static void splash_shuffle(void) {
-    static const uint8_t base[16] = {
-        0x04, 0x0C, 0x0E, 0x0A, 0x02, 0x0B, 0x03, 0x09,
-        0x0D, 0x05, 0x06, 0x01, 0x0F, 0x07, 0x08, 0x04
-    };
-    for (int i = 0; i < 16; i++) splash_colors[i] = base[i];
-    uint32_t seed = g_ticks | 1;
-    for (int n = 0; n < 16; n++) {
-        seed = seed * 1103515245 + 12345;
-        int j = (int)(seed % 16);
-        uint8_t t = splash_colors[0];
-        splash_colors[0] = splash_colors[j];
-        splash_colors[j] = t;
-    }
-}
-
 // ---------- 按键/计时 ----------
 // 里程碑 11a/11b: 任意键 = 环形缓冲里有"按下"事件。
 // ★只认按下码 (<0x80): 触发 splash 命令的回车, 它的释放码还在
@@ -96,35 +75,30 @@ static int splash_wait(uint32_t target) {
     return 0;
 }
 
-// ---------- 动画: 逐字揭示 + 停留 ----------
+// ---------- 动画: NEWOS 逐字揭示 + 副标题 + 停留 ----------
 static int splash_animate(void) {
-    static const char* line1 = "HELLO";
-    static const char* line2 = "WORLD";
-    static const char* sub   = "NEWOS!";
-
-    splash_shuffle();
+    static const char* title = "NEWOS";
+    static const char* sub   = "MYQWEN-OS";
+    // 固定高对比色: 白、青、黄、绿、洋红。不随机，避免字母落进深色背景。
+    static const uint8_t title_colors[5] = {
+        0x0F, 0x0B, 0x0E, 0x0A, 0x0D
+    };
     uint32_t t = g_ticks + 2;
 
-    // 主标题 "HELLO WORLD": 32px 大字 11 个字符一行放不下 (320 宽),
-    // 拆两行居中: 5 字 x (32+6 间距) - 6 = 184px → x = (320-184)/2 = 68
+    // 主标题 "NEWOS": 5 字 x (32+6 间距) - 6 = 184px → x = 68
     for (int i = 0; i < 5; i++) {
-        splash_glyph(68 + i * 38, 28, line1[i], splash_colors[i], 4);
+        splash_glyph(68 + i * 38, 68, title[i], title_colors[i], 4);
         if (splash_wait(t)) return 1;
-        t += 2;
+        t += 3;
     }
-    for (int i = 0; i < 5; i++) {
-        splash_glyph(68 + i * 38, 76, line2[i], splash_colors[5 + i], 4);
-        if (splash_wait(t)) return 1;
-        t += 2;
-    }
-    // 副标题 "NEWOS!": 16px, 6 字 x 17 - 1 = 101px → x = (320-101)/2 = 109
+    // 副标题 "MYQWEN-OS": 16px, 9 字 x 18 - 2 = 160px → x = 80
     for (int i = 0; sub[i]; i++) {
-        splash_glyph(109 + i * 17, 132, sub[i], 0x0F, 2);   // 白色 (浅灰在蓝底上看不清)
+        splash_glyph(80 + i * 18, 124, sub[i], 0x0F, 2);
         if (splash_wait(t)) return 1;
-        t += 2;
+        t++;
     }
-    // 全部画完停留 ~1.5 秒 (28 滴答), 期间任意键也跳过
-    return splash_wait(g_ticks + 28);
+    // 全部画完停留约 2.2 秒，期间任意键也跳过
+    return splash_wait(g_ticks + 40);
 }
 
 // ---------- 主入口 ----------
