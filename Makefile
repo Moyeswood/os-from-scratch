@@ -20,10 +20,12 @@ TRAMP_BIN = $(BUILD_DIR)/rm_trampoline.bin
 KERNEL_ELF = $(BUILD_DIR)/kernel.elf
 KERNEL_BIN = $(BUILD_DIR)/kernel.bin
 OS_IMG = $(BUILD_DIR)/os.img
+DISK_IMG = $(BUILD_DIR)/disk.img
 
 KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
               $(KERNEL_DIR)/kernel.o \
               $(KERNEL_DIR)/serial.o \
+              $(KERNEL_DIR)/ata.o \
               $(KERNEL_DIR)/vga.o \
               $(KERNEL_DIR)/idt.o \
               $(KERNEL_DIR)/pic.o \
@@ -131,16 +133,26 @@ $(OS_IMG): $(BOOT_BIN) $(KERNEL_BIN)
 	dd if=$(BOOT_BIN) of=$@ conv=notrunc status=none
 	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=1 conv=notrunc status=none
 
-run: $(OS_IMG)
-	$(QEMU) -fda $< -serial stdio
+# Persistent filesystem disk. Keep this target idempotent: rebuilds must not
+# erase files written by either the OS or the persistence tests.
+$(DISK_IMG):
+	mkdir -p $(BUILD_DIR)
+	dd if=/dev/zero of=$@ bs=1M count=2 status=none
 
-debug: $(OS_IMG)
-	$(QEMU) -fda $< -serial stdio -s -S
+run: $(OS_IMG) $(DISK_IMG)
+	$(QEMU) -fda $(OS_IMG) \
+		-drive file=$(DISK_IMG),format=raw,if=ide,index=0 \
+		-serial stdio
+
+debug: $(OS_IMG) $(DISK_IMG)
+	$(QEMU) -fda $(OS_IMG) \
+		-drive file=$(DISK_IMG),format=raw,if=ide,index=0 \
+		-serial stdio -s -S
 
 clean:
 	rm -rf $(BUILD_DIR) $(KERNEL_DIR)/*.o
 
-.PHONY: all run debug clean test-memory test-vm test-exec test-process test-fd test-shell test-attached test-suite test-all
+.PHONY: all run debug clean test-memory test-vm test-exec test-process test-fd test-shell test-disk test-attached test-suite test-all
 
 test-memory: $(OS_IMG)
 	python3 tools/test-memory.py
@@ -160,6 +172,9 @@ test-fd: $(OS_IMG)
 test-shell: $(OS_IMG)
 	python3 tools/test-shell.py
 
+test-disk: $(OS_IMG)
+	python3 tools/test-disk.py
+
 test-attached: $(OS_IMG)
 	python3 tools/run-attached-tests.py
 
@@ -168,10 +183,13 @@ test-suite: $(OS_IMG)
 	python3 tools/test-splash.py
 	python3 tools/test-font.py
 	python3 tools/test-fs.py
+	python3 tools/test-disk.py
 	python3 tools/test-edit.py
 	python3 tools/test-cc.py
 	python3 tools/test-user.py
 	python3 tools/test-proc.py
+	python3 tools/test-memproc.py
+	python3 tools/test-alloc.py
 	python3 tools/test-sched.py
 	python3 tools/test-vm.py
 	python3 tools/test-exec.py

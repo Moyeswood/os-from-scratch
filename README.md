@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-22%2F22%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-535%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-23%2F23%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-554%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -20,12 +20,12 @@
   <img src="note/splash-mid.png" width="480" alt="开机画面"/>
 </p>
 
-NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编从零编写，在 QEMU 中运行。它走完了操作系统学习的完整链路：**引导 → 保护模式 → 中断 → 内存管理 → 多任务 → 图形 → 文件系统 → 编辑器 → C 编译器 → Ring 3 用户态 → 用户态 Shell**——最终你可以在它里面写、编译、运行 C 程序，从 `/bin` 加载 flat 或 ELF32 程序，通过 `fork/waitpid/execve` 管理进程，并使用管道、重定向和后台任务。
+NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编从零编写，在 QEMU 中运行。它走完了操作系统学习的完整链路：**引导 → 保护模式 → 中断 → 内存管理 → 多任务 → 图形 → 持久化文件系统 → 编辑器 → C 编译器 → Ring 3 用户态 → 用户态 Shell**——最终你可以在它里面写、编译、运行 C 程序，从 `/bin` 加载 flat 或 ELF32 程序，通过 `fork/waitpid/execve` 管理进程，并使用管道、重定向和后台任务。文件、目录和 `/bin` 会跨重启保留。
 
 ## ✨ 核心特性
 
 ### 🖥️ 底层基础
-- **引导加载器**：512 字节手写引导扇区，从软盘加载内核（180KB 上限，含 64KB 段回绕处理）
+- **引导加载器**：512 字节手写引导扇区，从软盘加载内核（448KB 加载窗口，含 64KB 段回绕处理）
 - **保护模式**：GDT 段机制、A20 门、32 位保护模式切换
 - **内存管理**：BIOS E820 内存地图解析 + 保留区保护位图 + 物理页分配器与引用计数 + 内核 `kmalloc/kfree/krealloc` 堆 + 32MB 恒等映射分页
 - **按进程虚拟内存**：独立页目录/页表、首次访问补零页、fork COW、栈 guard page、`brk` 堆收缩与匿名 `mmap` 窗口
@@ -43,16 +43,17 @@ NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编�
 ### ⏱️ 多任务与设备
 - **抢占式多任务**：PIT IRQ0（18.2Hz）时间片轮转，协作式/抢占式统一上下文帧可互恢复，带"恶霸任务"演示
 - **完整进程生命周期**：独立页目录与地址空间、fork、进程组、RUNNING/STOPPED 作业、`ps`/`kill`、孤儿僵尸回收；每进程拥有 16 项 fd 表和独立 CWD，暂停时保留全部 VM/fd 状态
-- **设备驱动**：VGA 文本/图形、串口 COM1、PS/2 键盘、PIT 定时器、PC 扬声器蜂鸣
+- **设备驱动**：ATA PIO 磁盘、VGA 文本/图形、串口 COM1、PS/2 键盘、PIT 定时器、PC 扬声器蜂鸣
 - **图形库**：模式 13h（320×200×256）调色板/画点/矩形/精灵/字体
 - **🎨 可调字体**：纯 VGA 硬件编程加载 **Terminus** 位图字体（写字符发生器平面 2 + CRTC 行高重配），`font` 命令五档字号（12/14/16/18/20 → 33/28/25/22/20 行，默认 18；18/20 由 8x16 垂直放大生成），每次加载硬件级自测
 
 ### 📁 文件系统
-xv6 风格教学实现（内存文件系统，1MB/256 块，64 inode）：
+xv6 风格教学实现（ATA PIO 持久化磁盘，1MB/256 块，64 inode）：
 - 超级块 + inode/块位图 + 64 字节 inode（12 直接块，文件最大 48KB）
 - 目录项链式存储、`.`/`..` 真实目录项、绝对/相对路径统一解析
 - Shell 命令：`pwd` `ls` `cd` `mkdir` `touch` `cat` `rm` `echo >` `df`，提示符实时显示当前目录
-- 删除保护（不能删 cwd/祖先）、开机自测（创建→写→读回→删除全流程验证）
+- 超级块魔数/位图/块引用挂载检查、分配计数自动修复、写穿式 4KB 块缓存
+- 删除保护（不能删 cwd/祖先）、重启持久化回归、开机自测（创建→写→读回→删除全流程验证）
 
 ### ✏️ 内置编辑器
 nano 风格的 `edit` 命令：
@@ -119,7 +120,7 @@ nano 风格的 `edit` 命令：
 
 ```bash
 make          # 构建 build/os.img
-make run      # QEMU 运行 (串口输出到终端)
+make run      # QEMU 运行；build/disk.img 保存持久化文件系统
 make debug    # QEMU + GDB 源码级调试 (端口 1234)
 make clean    # 清理
 ```
@@ -174,13 +175,14 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 自动化测试
 
-18 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**文档统计 535 项**：
+19 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言），**文档统计 554 项**：
 
 ```bash
 python3 tools/test-memory.py  # E820 + 页分配 + 内核堆 (15 项)
 python3 tools/test-splash.py   # 开机画面 (14 项)
 python3 tools/test-font.py     # 字体/字号 (30 项)
 python3 tools/test-fs.py       # 文件系统 (43 项)
+python3 tools/test-disk.py     # ATA/挂载/重启持久化 (19 项)
 python3 tools/test-edit.py     # 编辑器/撤销/搜索/光标 (67 项)
 python3 tools/test-cc.py       # C 编译器 (41 项)
 python3 tools/test-preempt.py  # 抢占调度 (7 项)
@@ -210,6 +212,7 @@ python3 tools/test-shell.py    # Shell/管道/进程组/暂停恢复/作业 (59 
 │   ├── memory.c/h      # E820 解析 + 保留保护 + 物理页分配
 │   ├── heap.c/h        # 内核堆：分裂、合并、重分配、完整性检查
 │   ├── paging.c/h      # 页目录/页表、恒等映射与用户映射原语
+│   ├── ata.c/h         # ATA PIO 28-bit LBA 扇区读写
 │   ├── vm.c/h          # 独立进程地址空间、按需分页、COW、brk/mmap
 │   ├── exec.c/h        # /bin 发布、flat 加载器、事务式 exec
 │   │                    # (vm.c/h 同时包含 ELF32 loader 与初始栈)
@@ -224,7 +227,7 @@ python3 tools/test-shell.py    # Shell/管道/进程组/暂停恢复/作业 (59 
 │   ├── graphics.c/h    # 模式 13h 图形库
 │   ├── font.c/h        # VGA 字符发生器字体管理
 │   ├── font12/14/16.h  # Terminus 字体数据
-│   ├── fs.c/h          # 内存文件系统
+│   ├── fs.c/h          # 持久化文件系统、挂载检查与写穿块缓存
 │   ├── fd.c/h          # 共享打开文件对象、pipe 环形缓冲区、引用计数
 │   ├── editor.c/h      # 内置编辑器
 │   ├── cc.c/h          # c4 编译器移植
@@ -242,7 +245,7 @@ python3 tools/test-shell.py    # Shell/管道/进程组/暂停恢复/作业 (59 
 │       waittest.c execargv.c elfdemo.c memdemo.c allocdemo.c
 │       filedemo.c fdstdin.c sh.c fdpipe.c
 ├── tetris/             # 原始实模式汇编版 (移植蓝本)
-├── tools/              # 字体转换 + 18 套测试脚本
+├── tools/              # 字体转换 + 19 套测试脚本
 ├── note/               # 开发记录 + 截图
 └── Makefile
 ```
@@ -273,6 +276,7 @@ python3 tools/test-shell.py    # Shell/管道/进程组/暂停恢复/作业 (59 
 | 20 | 用户态 Shell + echo/cat/ls/pwd/mkdir/rm + 共享文件对象 + pipe/dup2 + `<`/`>`/`>>`/`\|`/`&` |
 | 21 | 四段管道 + 进程组 + 前台 Ctrl+C + `jobs/fg/kill/wait` + 后台作业回收 |
 | 22 | TASK_STOPPED + SIGSTOP/SIGCONT + Ctrl+Z + `WUNTRACED` + `bg` + 暂停作业恢复 |
+| 23 | ATA PIO + 磁盘超级块/inode/块位图 + 挂载检查 + 写穿缓存 + 重启持久化 |
 
 每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
 
@@ -280,7 +284,8 @@ python3 tools/test-shell.py    # Shell/管道/进程组/暂停恢复/作业 (59 
 [`docs/MILESTONE_12_E820_HEAP.md`](docs/MILESTONE_12_E820_HEAP.md) 与
 [`docs/MILESTONE_13_VM.md`](docs/MILESTONE_13_VM.md)、
 [`docs/MILESTONE_14_EXEC.md`](docs/MILESTONE_14_EXEC.md)、
-[`docs/MILESTONE_15_PROCESS_ELF.md`](docs/MILESTONE_15_PROCESS_ELF.md)。
+[`docs/MILESTONE_15_PROCESS_ELF.md`](docs/MILESTONE_15_PROCESS_ELF.md)、
+[`docs/MILESTONE_23_DISK_FS.md`](docs/MILESTONE_23_DISK_FS.md)。
 
 ## 📄 致谢
 

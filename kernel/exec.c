@@ -40,6 +40,19 @@ static void make_bin_path(char* out, uint32_t cap, const char* name) {
     out[pos] = '\0';
 }
 
+// Persistent /bin means startup installation must be idempotent. Keep an
+// existing file when its size matches; otherwise replace its contents.
+static int install_file(const char* path, const void* data, uint32_t size) {
+    int inum = fs_lookup(path);
+    if (inum < 0) {
+        inum = fs_create(path, FS_FILE);
+        if (inum < 0) return -1;
+    }
+    if (fs_inode_type((uint32_t)inum) != FS_FILE) return -1;
+    if (fs_inode_size(inum) == (int)size) return 0;
+    return fs_write((uint32_t)inum, data, size, 0) == (int)size ? 0 : -1;
+}
+
 void exec_install_builtins(void) {
     int bin = fs_lookup("/bin");
     if (bin < 0) bin = fs_create("/bin", FS_DIR);
@@ -57,10 +70,7 @@ void exec_install_builtins(void) {
             k_strcmp(p->name, "echo") == 0 ? "echodemo" : p->name;
         make_bin_path(path, sizeof(path), install_name);
 
-        int inum = fs_create(path, FS_FILE);
-        if (inum < 0 || fs_write((uint32_t)inum, p->data, p->size, 0)
-                       != (int)p->size) {
-            if (inum >= 0) fs_remove(path);
+        if (install_file(path, p->data, p->size) < 0) {
             serial_puts("[EXEC] install FAIL path=");
             serial_puts(path);
             serial_puts("\n\r");
@@ -77,11 +87,7 @@ void exec_install_builtins(void) {
         for (int i = 0; i < SHELL_UTILITY_COUNT; ++i) {
             char path[EXEC_PATH_BUF];
             make_bin_path(path, sizeof(path), shell_utilities[i]);
-            int inum = fs_create(path, FS_FILE);
-            if (inum < 0 ||
-                fs_write((uint32_t)inum, sh->data, sh->size, 0)
-                    != (int)sh->size) {
-                if (inum >= 0) fs_remove(path);
+            if (install_file(path, sh->data, sh->size) < 0) {
                 serial_puts("[EXEC] install FAIL shell utility ");
                 serial_puts(shell_utilities[i]);
                 serial_puts("\n\r");
@@ -98,14 +104,11 @@ void exec_install_builtins(void) {
     const uint8_t* elf = (const uint8_t*)user_elfdemo_elf_start;
     uint32_t elf_size = (uint32_t)(user_elfdemo_elf_end -
                                    user_elfdemo_elf_start);
-    int elf_inum = fs_create("/bin/elfdemo", FS_FILE);
-    if (elf_inum >= 0 &&
-        fs_write((uint32_t)elf_inum, elf, elf_size, 0) == (int)elf_size) {
+    if (install_file("/bin/elfdemo", elf, elf_size) == 0) {
         serial_puts("[EXEC] installed ELF /bin/elfdemo bytes=");
         serial_put_hex(elf_size);
         serial_puts("\n\r");
     } else {
-        if (elf_inum >= 0) fs_remove("/bin/elfdemo");
         serial_puts("[EXEC] install FAIL: /bin/elfdemo\n\r");
     }
 }

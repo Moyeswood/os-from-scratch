@@ -1,14 +1,14 @@
 # 下次开发交接
 
-更新时间：2026-11-07
+更新时间：2026-11-08
 
 ## 当前稳定状态
 
 - 项目目录：`/home/mfw/Documents/claude001/NewOS`
 - 分支：`main`
-- 当前进度：里程碑 22
-- 完整回归：18 套测试、文档统计 535 项全部通过
-- 最终内核镜像 180892 字节，低于 180KB（184320 字节）引导上限
+- 当前进度：里程碑 23
+- 完整回归：19 套测试、文档统计 554 项通过
+- 最终内核镜像 185404 字节，低于 448KB（458752 字节）加载上限
 
 ## 今日完成
 
@@ -25,6 +25,8 @@
    `jobs/fg/kill/wait` 和后台作业回收。
 8. 里程碑 22：`TASK_STOPPED`、SIGSTOP/SIGCONT、Ctrl+Z、
    `waitpid(WUNTRACED)`、`bg` 和暂停作业恢复。
+9. 里程碑 23：ATA PIO、独立 2MB 磁盘、LBA 2048 文件系统布局、
+   挂载检查、写穿式 dirty 块缓存和跨重启持久化。
 
 关键文档：
 
@@ -35,28 +37,29 @@
 - `docs/MILESTONE_20_USER_SHELL.md`
 - `docs/MILESTONE_21_JOBS.md`
 - `docs/MILESTONE_22_STOP_RESUME.md`
+- `docs/MILESTONE_23_DISK_FS.md`
 - `note/进程模型与ELF开发记录.md`
 
-## 下次继续：里程碑 23
+## 下次继续：里程碑 24
 
-建议主题：**持久化磁盘文件系统**
+建议主题：**块缓存一致性与文件系统扩展**
 
 按以下顺序完成：
 
-1. 先检查引导容量：当前只剩 3428 字节，决定扩大读盘扇区数还是精简嵌入程序。
-2. 实现 ATA PIO 扇区读写驱动，并用临时磁盘镜像验证。
-3. 把现有 1MB 内存 FS 的超级块、inode 和目录格式落盘。
-4. 增加挂载检查与最小一致性修复。
-5. 验证断电重启后文件、目录和 CWD 对象仍可用。
-6. 增加读缓存与脏块回写策略，再补充硬链接、`rename` 和 `stat`。
+1. 为文件系统公开操作增加全局锁，验证并发 open/write/create。
+2. 把写穿模式改为可配置的延迟回写，并增加脏块数量上限。
+3. 增加一级/二级间接块，突破单文件 48KB。
+4. 实现 `rename`、`link`、`unlink`、`stat`。
+5. 设计日志或写时复制，避免断电时留下半更新的目录/inode。
+6. 增加磁盘损坏注入测试，验证最小 fsck 的诊断路径。
 
 建议先只支持：
 
 ```text
-ATA PIO read/write sector
-mkfs / mount
-create / write / close
-reboot → mount → cat file
+single writer lock
+delayed dirty writeback
+one indirect block
+rename atomically
 ```
 
 ## 当前已知限制
@@ -64,7 +67,9 @@ reboot → mount → cat file
 - 不支持动态链接、PT_INTERP、ET_DYN/PIE。
 - 信号支持默认终止、暂停和恢复，尚无用户态处理函数与待处理队列。
 - argv 上限 16，envp 上限 8，参数文本上限 3KB。
-- 文件系统为 1MB 内存 FS，单文件最大 48KB。
+- 文件系统为 1MB 持久化 FS，单文件最大 48KB。
+- ATA 只支持 primary master、polling PIO 和 28-bit LBA。
+- FS 修改仍是写穿，没有日志事务，也没有全局并发锁。
 - 默认 Shell 仍在内核态；fd/CWD 已支持每进程。
 - 最多四段管道；已有进程组、前台 Ctrl+C 和基础作业表。
 - 信号只有默认终止/暂停/恢复；尚无用户态处理函数和待处理信号队列。
@@ -79,4 +84,5 @@ git status --short --branch
 make -j4
 python3 tools/test-fd.py
 python3 tools/test-shell.py
+python3 tools/test-disk.py
 ```

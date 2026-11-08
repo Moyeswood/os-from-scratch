@@ -40,7 +40,7 @@ void kernel_main() {
 
     rm_load_trampoline();   // 把实模式跳板装入低内存 0x6000
     font_apply(18);         // 加载 Terminus 8x18 字体 (22 行) + 硬件自测 (串口报 [FONT])
-    fs_init();              // 格式化并挂载内存文件系统 (串口报 [FS] + 自测)
+    fs_init();              // 挂载 ATA 持久化文件系统 (无盘时内存回退)
     user_init();            // 里程碑 10: 用户区映射 + 程序表 (串口报 [USER])
     splash_run();           // 开机画面 (任意键跳过, 串口报 [SP] done/skipped)
     kbd_drain();            // 开机画面期间按的键清掉 (环形缓冲, 零开销)

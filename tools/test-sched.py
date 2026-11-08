@@ -78,6 +78,18 @@ def read_screen(nwords=1000):
                     if 32 <= c < 127: text += chr(c)
     return text
 
+def wait_screen(predicate, timeout=4.0):
+    # VGA monitor reads occasionally race the guest's PS/2 rendering. Retry
+    # the snapshot instead of treating one stale frame as a scheduler failure.
+    start = time.time()
+    text = ""
+    while time.time() - start < timeout:
+        text = read_screen()
+        if predicate(text):
+            return text
+        time.sleep(0.2)
+    return text
+
 results = []
 def check(name, ok, detail=""):
     results.append((name, ok))
@@ -114,7 +126,8 @@ def re_shell_sleeping(t):
 
 type_text("ps\n")
 time.sleep(1.0)
-t = read_screen()
+t = wait_screen(lambda text: all(
+    name in text for name in ("shell", "task_a", "task_b", "task_c")))
 # (idle 行在 ps 输出最顶上, 22 行屏幕里被横幅+提示符挤上去滚掉了,
 #  这里查屏幕能看见的 shell + A/B/C; idle 的存在由调度器本身保证)
 check("ps: shell + A/B/C listed",
