@@ -95,7 +95,7 @@ static inline sighandler_t signal(int sig, sighandler_t handler) {
 #define WUNTRACED 2
 
 #define WAIT_STOPPED 0x7F
-#define WIFSTOPPED(status) (((status) & 0xFF) == WAIT_STOPPED)
+#define WIFSTOPPED(status) ((status) == ((SIGSTOP << 8) | WAIT_STOPPED))
 #define WSTOPSIG(status) (((status) >> 8) & 0xFF)
 #define WEXITSTATUS(status) ((status) & 0xFF)
 
@@ -123,6 +123,8 @@ typedef struct {
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
+
+#define EINTR 4
 
 // 与 kernel/vm.h 保持一致的用户虚拟布局。
 #define VM_IMAGE_BASE   0x2000000u

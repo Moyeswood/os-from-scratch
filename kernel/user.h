@@ -100,6 +100,8 @@ typedef struct {
 #define SEEK_CUR 1
 #define SEEK_END 2
 
+#define EINTR 4
+
 // 用户态 readdir 结果（与 user/lib.h 的 user_dirent_t 布局一致）。
 typedef struct {
     uint32_t inum;

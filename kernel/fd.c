@@ -1,6 +1,7 @@
 #include "fd.h"
 #include "fs.h"
 #include "heap.h"
+#include "proc.h"
 #include "string.h"
 #include "task.h"
 #include "user.h"
@@ -197,6 +198,10 @@ int fd_pipe_read(task_file_t* file, void* buf, uint32_t count) {
         if (!pipe->writers) {
             irq_restore(flags);
             return 0;
+        }
+        if (proc_signal_pending_current()) {
+            irq_restore(flags);
+            return -1;
         }
         task_sleep_switch_locked(TASK_WAIT_PIPE, 0);
     }

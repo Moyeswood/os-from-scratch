@@ -13,6 +13,9 @@ typedef struct {
     char* input;
     char* output;
     int append;
+    char* error_output;
+    int error_append;
+    int stderr_to_stdout;
 } command_t;
 
 typedef struct {
@@ -26,6 +29,13 @@ typedef struct {
 } job_t;
 
 static job_t jobs[JOB_MAX];
+static char token_storage[LINE_MAX];
+static char* shell_env_names[8];
+static int shell_env_count;
+static int last_status;
+static char default_home[] = "HOME=/";
+static char default_path[] = "PATH=/bin";
+static char default_newos[] = "NEWOS=1";
 
 static int slen(const char* s) {
     int n = 0;
@@ -120,7 +130,7 @@ static int is_space(char c) {
 }
 
 static int is_operator(char c) {
-    return c == '<' || c == '>' || c == '|' || c == '&';
+    return c == '<' || c == '>' || c == '|' || c == '&' || c == ';';
 }
 
 static char pipe_word[] = "|";
@@ -128,10 +138,33 @@ static char in_word[] = "<";
 static char out_word[] = ">";
 static char append_word[] = ">>";
 static char amp_word[] = "&";
+static char err_out_word[] = "2>";
+static char err_append_word[] = "2>>";
+static char err_stdout_word[] = "2>&1";
+
+static const char* env_value(const char* name, int len) {
+    for (int i = 0; i < shell_env_count; ++i) {
+        const char* key = shell_env_names[i];
+        if (!key) continue;
+        int j = 0;
+        while (j < len && key[j] == name[j]) ++j;
+        if (j == len && key[j] == '=') return key + j + 1;
+    }
+    return "";
+}
+
+static int append_text(char* out, int* pos, const char* text, int len) {
+    for (int i = 0; i < len; ++i) {
+        if (*pos + 1 >= LINE_MAX) return -1;
+        out[(*pos)++] = text[i];
+    }
+    return 0;
+}
 
 static int tokenize(char* line, char** words, int max) {
     int count = 0;
     char* p = line;
+    int pos = 0;
     while (*p && count < max) {
         while (is_space(*p)) p++;
         if (!*p) break;
@@ -148,14 +181,106 @@ static int tokenize(char* line, char** words, int max) {
                 words[count++] = in_word;
             } else if (c == '|') {
                 words[count++] = pipe_word;
-            } else {
+            } else if (c == '&') {
                 words[count++] = amp_word;
+            } else {
+                words[count++] = p - 1;
+                (p - 1)[1] = '\0';
+                p++;
             }
             continue;
         }
-        words[count++] = p;
-        while (*p && !is_space(*p) && !is_operator(*p)) p++;
-        if (*p) *p++ = '\0';
+        if (*p == '2' && p[1] == '>' && p[2] == '&' && p[3] == '1') {
+            words[count++] = err_stdout_word;
+            p += 4;
+            continue;
+        }
+        if (*p == '2' && p[1] == '>') {
+            if (p[2] == '>') {
+                words[count++] = err_append_word;
+                p += 3;
+            } else {
+                words[count++] = err_out_word;
+                p += 2;
+            }
+            continue;
+        }
+
+        char* token = &token_storage[pos];
+        int any = 0;
+        char quote = 0;
+        while (*p) {
+            if (!quote && is_space(*p)) break;
+            if (!quote && is_operator(*p)) break;
+            if (*p == '\\' && quote != '\'') {
+                ++p;
+                if (!*p) break;
+                if (append_text(token_storage, &pos, p, 1) < 0) return -1;
+                ++p;
+                any = 1;
+                continue;
+            }
+            if (*p == '\'' || *p == '"') {
+                if (!quote) {
+                    quote = *p++;
+                    any = 1;
+                    continue;
+                }
+                if (quote == *p) {
+                    quote = 0;
+                    ++p;
+                    continue;
+                }
+            }
+            if (*p == '$' && quote != '\'') {
+                ++p;
+                if (*p == '?') {
+                    char num[12];
+                    int n = 0, v = last_status;
+                    if (!v) num[n++] = '0';
+                    while (v) { num[n++] = (char)('0' + v % 10); v /= 10; }
+                    while (n) {
+                        char c = num[--n];
+                        if (append_text(token_storage, &pos, &c, 1) < 0) return -1;
+                    }
+                    ++p;
+                    any = 1;
+                    continue;
+                }
+                if (*p == '$') {
+                    char num[12];
+                    int n = 0, v = getpid();
+                    while (v) { num[n++] = (char)('0' + v % 10); v /= 10; }
+                    while (n) {
+                        char c = num[--n];
+                        if (append_text(token_storage, &pos, &c, 1) < 0) return -1;
+                    }
+                    ++p;
+                    any = 1;
+                    continue;
+                }
+                const char* var = p;
+                while ((*p >= 'a' && *p <= 'z') ||
+                       (*p >= 'A' && *p <= 'Z') ||
+                       (*p >= '0' && *p <= '9') || *p == '_') ++p;
+                int vlen = (int)(p - var);
+                if (vlen) {
+                    const char* value = env_value(var, vlen);
+                    if (append_text(token_storage, &pos, value, slen(value)) < 0)
+                        return -1;
+                } else {
+                    if (append_text(token_storage, &pos, "$", 1) < 0) return -1;
+                }
+                any = 1;
+                continue;
+            }
+            if (append_text(token_storage, &pos, p, 1) < 0) return -1;
+            ++p;
+            any = 1;
+        }
+        if (quote || !any) return -1;
+        token_storage[pos++] = '\0';
+        words[count++] = token;
     }
     return count;
 }
@@ -182,13 +307,23 @@ static int parse_commands(char** words, int count, command_t cmds[PIPE_MAX],
         cmd->input = 0;
         cmd->output = 0;
         cmd->append = 0;
+        cmd->error_output = 0;
+        cmd->error_append = 0;
+        cmd->stderr_to_stdout = 0;
         for (int i = start; i < split; ++i) {
-            if (scmp(words[i], "<") == 0 ||
+            if (scmp(words[i], "2>&1") == 0) {
+                cmd->stderr_to_stdout = 1;
+            } else if (scmp(words[i], "<") == 0 ||
                 scmp(words[i], ">") == 0 ||
-                scmp(words[i], ">>") == 0) {
+                scmp(words[i], ">>") == 0 ||
+                scmp(words[i], "2>") == 0 ||
+                scmp(words[i], "2>>") == 0) {
                 if (i + 1 >= split) return -1;
                 if (words[i][0] == '<') {
                     cmd->input = words[++i];
+                } else if (words[i][0] == '2') {
+                    cmd->error_append = words[i][2] == '>';
+                    cmd->error_output = words[++i];
                 } else {
                     cmd->append = words[i][1] == '>';
                     cmd->output = words[++i];
@@ -217,6 +352,14 @@ static int setup_redirections(const command_t* cmd) {
         int fd = open(cmd->output, flags);
         if (fd < 0 || dup2(fd, 1) < 0) return -1;
         if (fd != 1) close(fd);
+    }
+    if (cmd->stderr_to_stdout && dup2(1, 2) < 0) return -1;
+    if (cmd->error_output) {
+        uint32_t flags = O_CREAT | O_WRONLY |
+                         (cmd->error_append ? O_APPEND : O_TRUNC);
+        int fd = open(cmd->error_output, flags);
+        if (fd < 0 || dup2(fd, 2) < 0) return -1;
+        if (fd != 2) close(fd);
     }
     return 0;
 }
@@ -429,6 +572,15 @@ static int execute_builtin(const command_t* cmd) {
     if (scmp(name, "ln") == 0) return utility_ln(cmd);
     if (scmp(name, "truncate") == 0) return utility_truncate(cmd);
     if (scmp(name, "stat") == 0) return utility_stat(cmd);
+    if (scmp(name, "env") == 0) {
+        for (int i = 0; i < shell_env_count; ++i) {
+            swrite(1, shell_env_names[i]);
+            swrite(1, "\n");
+        }
+        return 0;
+    }
+    if (scmp(name, "true") == 0) return 0;
+    if (scmp(name, "false") == 0) return 1;
     if (scmp(name, "cd") == 0) {
         const char* path = cmd->argc > 1 ? cmd->argv[1] : "/";
         if (chdir(path) < 0) {
@@ -439,15 +591,18 @@ static int execute_builtin(const command_t* cmd) {
     }
     if (scmp(name, "help") == 0) {
         swrite(1, "builtins: cd exit jobs fg bg kill wait help\n");
-        swrite(1, "tools: echo cat ls pwd mkdir rm mv ln truncate stat\n");
-        swrite(1, "syntax: cmd [args] [< in] [> out] [>> out] [| cmd...] [&]\n");
+        swrite(1, "tools: echo cat ls pwd mkdir rm mv ln truncate stat env\n");
+        swrite(1, "syntax: 'quotes' \"$VAR\" a\\ b; cmd [> out] [2> err] [2>&1] [| cmd] [&]\n");
         return 0;
     }
     return -1;
 }
 
 static void exec_external(const command_t* cmd) {
-    static char* envp[] = { "HOME=/", "PATH=/bin", "NEWOS=1", 0 };
+    char* envp[9];
+    for (int i = 0; i < shell_env_count && i < 8; ++i)
+        envp[i] = shell_env_names[i];
+    envp[shell_env_count < 8 ? shell_env_count : 8] = 0;
     char path[128];
     const char* name = cmd->argv[0];
     if (name[0] == '/') {
@@ -547,6 +702,9 @@ static job_t* add_job(int pgid, const int pids[PIPE_MAX], int count,
                       const char* text, int announce) {
     job_t* slot = 0;
     int slot_id = 0;
+    for (int i = 0; i < JOB_MAX; ++i)
+        if (jobs[i].used && !jobs[i].stopped && !job_pid_count(&jobs[i]))
+            jobs[i].used = 0;
     for (int i = 0; i < JOB_MAX; ++i) {
         if (!jobs[i].used) {
             slot = &jobs[i];
@@ -786,9 +944,64 @@ static void shell_prompt(void) {
     swrite(1, "> ");
 }
 
+static int execute_segment(char* segment) {
+    char* words[WORD_MAX];
+    int nwords = tokenize(segment, words, WORD_MAX);
+    if (nwords < 0) {
+        swrite(2, "sh: syntax error\n");
+        return 2;
+    }
+    command_t cmds[PIPE_MAX];
+    int count = 0;
+    int background = 0;
+    int parsed = parse_commands(words, nwords, cmds, &count, &background);
+    if (parsed < 0) {
+        swrite(2, "sh: syntax error\n");
+        return 2;
+    }
+    if (!parsed) return 0;
+    char command_text[JOB_TEXT];
+    scopy(command_text, segment, sizeof(command_text));
+    int status = execute_pipeline(cmds, count, background, command_text);
+    last_status = status < 0 ? 0 : status;
+    return status;
+}
+
+static int execute_line(char* line) {
+    char* start = line;
+    char quote = 0;
+    int escaped = 0;
+    for (char* p = line; ; ++p) {
+        char c = *p;
+        if (escaped) {
+            escaped = 0;
+            continue;
+        }
+        if (c == '\\' && quote != '\'') {
+            escaped = 1;
+            continue;
+        }
+        if (c == '\'' || c == '"') {
+            if (!quote) quote = c;
+            else if (quote == c) quote = 0;
+            continue;
+        }
+        if ((!c || c == ';') && !quote) {
+            char saved = *p;
+            *p = '\0';
+            while (is_space(*start)) start++;
+            if (*start) {
+                int status = execute_segment(start);
+                if (status < 0) return -1;
+            }
+            if (!saved) return 0;
+            start = p + 1;
+        }
+    }
+}
+
 static int shell_loop(void) {
     char line[LINE_MAX];
-    char* words[WORD_MAX];
     int len = 0;
     shell_prompt();
     for (;;) {
@@ -819,27 +1032,22 @@ static int shell_loop(void) {
         line[len] = '\0';
         len = 0;
         reap_background();
-        char command_text[JOB_TEXT];
-        scopy(command_text, line, sizeof(command_text));
-        int nwords = tokenize(line, words, WORD_MAX);
-        command_t cmds[PIPE_MAX];
-        int count = 0;
-        int background = 0;
-        int parsed = parse_commands(words, nwords, cmds, &count, &background);
-        if (parsed < 0) {
-            swrite(2, "sh: syntax error\n");
-        } else if (parsed > 0) {
-            if (execute_pipeline(cmds, count, background,
-                                 command_text) < 0)
-                return 0;
-        }
+        if (execute_line(line) < 0) return 0;
         shell_prompt();
     }
 }
 
 __attribute__((section(".text.start")))
 void _start(int argc, char** argv, char** envp) {
-    (void)envp;
+    shell_env_count = 0;
+    while (envp && envp[shell_env_count] && shell_env_count < 8)
+        shell_env_names[shell_env_count] = envp[shell_env_count++];
+    if (!shell_env_count) {
+        shell_env_names[0] = default_home;
+        shell_env_names[1] = default_path;
+        shell_env_names[2] = default_newos;
+        shell_env_count = 3;
+    }
     const char* name = argc > 0 && argv[0] ? basename(argv[0]) : "sh";
     command_t cmd;
     cmd.argc = argc;

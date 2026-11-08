@@ -99,11 +99,16 @@ int kbd_getchar(int esc_to_27) {
 // 时我们还没睡, 没人会来叫醒我们 → 死等下一个按键)。
 int kbd_getchar_blocking(int esc_to_27) {
     for (;;) {
+        if (proc_signal_pending_current()) return -1;
         int c = kbd_getchar(esc_to_27);
         if (c != -1) return c;
         __asm__ volatile("cli");
         c = kbd_getchar(esc_to_27);              // cli 下重查
         if (c != -1) { __asm__ volatile("sti"); return c; }
+        if (proc_signal_pending_current()) {
+            __asm__ volatile("sti");
+            return -1;
+        }
         task_sleep_switch_locked(TASK_WAIT_KBD, 0);
         __asm__ volatile("sti");
     }

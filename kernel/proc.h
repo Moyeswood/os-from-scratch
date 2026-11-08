@@ -49,6 +49,7 @@ int  proc_sigreturn(user_frame_t* f);
 void proc_deliver_signal(user_frame_t* f);
 void proc_deliver_current_saved(void);
 void proc_reset_signals(void);
+int  proc_signal_pending_current(void);
 void proc_exit(int code);              // SYS_EXIT 内核侧 (永不返回)
 int  proc_fork(user_frame_t* f);       // SYS_FORK 内核侧: 父得子 pid, 子得 0
 void proc_fault_kill(void);            // 异常处理调用 (永不返回)

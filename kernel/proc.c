@@ -612,6 +612,18 @@ void proc_reset_signals(void) {
     k_memset(t->signal_handlers, 0, sizeof(t->signal_handlers));
 }
 
+int proc_signal_pending_current(void) {
+    task_t* t = task_current();
+    if (!t || !t->is_user) return 0;
+    uint32_t ready = t->signal_pending & ~t->signal_mask;
+    if (!ready) return 0;
+    for (int sig = 1; sig <= TASK_SIGNAL_MAX; sig++) {
+        if (!(ready & SIGNAL_BIT(sig))) continue;
+        if (t->signal_handlers[sig - 1] > SIG_IGN) return 1;
+    }
+    return 0;
+}
+
 static int send_signal_to_task(task_t* t, int sig) {
     if (!t || !t->is_user || t->state == TASK_ZOMBIE) return -1;
     if (sig == SIGKILL) return kill_task(t, "SIGKILL");

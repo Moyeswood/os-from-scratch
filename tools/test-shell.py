@@ -73,7 +73,12 @@ KEYS = {
     "-": "minus", "%": "shift-5",
     "<": "shift-comma", ">": "shift-dot",
     "|": "shift-backslash", "&": "shift-7",
+    "'": "apostrophe", '"': "shift-apostrophe",
+    "$": "shift-4", ";": "semicolon", "\\": "backslash",
+    "?": "shift-slash",
 }
+KEYS.update({chr(c): f"shift-{chr(c + 32)}" for c in range(ord("A"), ord("Z") + 1)})
+KEYS["="] = "equal"
 
 
 def type_text(text, wait=0.09):
@@ -160,6 +165,20 @@ try:
     run("echo pipe-ok | cat", "sh:/shdir>", "pipe-ok\n", name="pipe")
     run("echo stages | cat | cat | cat", "sh:/shdir>", "stages\n",
         name="multi-stage pipe")
+    run('echo "double quoted"', "sh:/shdir>", "double quoted\n",
+        name="double quotes")
+    run("echo '$HOME'", "sh:/shdir>", "$HOME\n", name="single quotes")
+    run('echo "$HOME"', "sh:/shdir>", "/\n", name="variable expansion")
+    run("echo escaped\\ space", "sh:/shdir>", "escaped space\n",
+        name="backslash escape")
+    run('echo "quoted;literal"', "sh:/shdir>", "quoted;literal\n",
+        name="quoted semicolon")
+    run("false; echo status=$?", "sh:/shdir>", "status=1\n",
+        name="command sequence and status")
+    run("nosuch-command 2> err.txt; cat err.txt", "sh:/shdir>",
+        "sh: not found: nosuch-command\n", name="stderr redirect")
+    run("nosuch-command 2>&1 | cat", "sh:/shdir>",
+        "sh: not found: nosuch-command\n", name="stderr to stdout")
     run("ls", "sh:/shdir>", "a.txt\n", name="ls utility")
     run("cd /", "sh:/>", name="cd root")
 
@@ -218,7 +237,7 @@ try:
         name="unknown command")
     run("echo broken |", "sh:/>", "sh: syntax error",
         name="syntax error")
-    run("rm /shdir/a.txt /bgout", "sh:/>", name="rm utility")
+    run("rm /shdir/a.txt /shdir/err.txt /bgout", "sh:/>", name="rm utility")
     run("rm /shdir", "sh:/>", name="remove empty directory")
     mark()
     type_text("exit\n")

@@ -164,7 +164,10 @@ static int sys_read(task_t* me, int fd, void* user_buf, uint32_t count) {
         uint32_t got = 0;
         while (got < n) {
             int c = sys_getkey();
-            if (c < 0) break;
+            if (c < 0) {
+                if (!got) return -1;
+                break;
+            }
             tmp[got++] = (uint8_t)c;
             if (c == '\n') break;
         }
