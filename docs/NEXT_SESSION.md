@@ -1,14 +1,14 @@
 # 下次开发交接
 
-更新时间：2026-11-08
+更新时间：2026-11-09
 
 ## 当前稳定状态
 
 - 项目目录：`/home/mfw/Documents/claude001/NewOS`
 - 分支：`main`
-- 当前进度：里程碑 27a 完成
-- 回归：文件系统、用户态和磁盘持久化套件通过；全量回归待下一轮统一执行
-- 最终内核镜像 227588 字节，低于 448KB（458752 字节）加载上限
+- 当前进度：里程碑 27b 完成
+- 回归：Shell、信号/SA_RESTART 及关联用户态套件通过；全量回归入口保留
+- 最终内核镜像 245796 字节，低于 448KB（458752 字节）加载上限
 
 ## 今日完成
 
@@ -37,10 +37,13 @@
     内核恢复 Shell/测试镜像，用户 Shell 退出后自动回退。
 14. 里程碑 27a：Shell 引号/转义/变量/分号、stderr 重定向、`$?`、
     阻塞读取 EINTR，以及 command-not-found 作业状态误判修复。
+15. 里程碑 27b：`*`/`?` 通配符、字段拆分、Tab 补全、
+    持久化历史、上下键导航与 `SA_RESTART` 自动重启。
 
 关键文档：
 
 - `docs/SESSION_2026-11-08_HANDOFF.md`（今日任务与明日起点）
+- `docs/SESSION_2026-11-09_HANDOFF.md`（27b 完成情况）
 - `docs/MILESTONE_13_VM.md`
 - `docs/MILESTONE_14_EXEC.md`
 - `docs/MILESTONE_15_PROCESS_ELF.md`
@@ -101,19 +104,31 @@ make test-fs-journal
 已完成引号、转义、环境变量、`$?`、`;`、`2>`、`2>&1` 和
 键盘/pipe 阻塞读取的 EINTR 返回。
 
-## 下次继续：里程碑 27b（交互式 Shell）
+## 已完成：里程碑 27b（交互式 Shell）
 
-1. `*`/`?` 通配符展开。
-2. Tab 命令与路径补全。
-3. 历史记录跨重启持久化。
-4. `SA_RESTART` 与字段展开。
+- `*`/`?` 通配符按目录展开并排序，引用或转义时保持字面值。
+- 未引用变量值执行字段拆分；无匹配模式保留原文。
+- Tab 补全内置命令、`/bin`、当前路径和带目录前缀的路径。
+- 历史写入 `/.sh_history`，上下键回忆，`history [N]` 查看。
+- `signal_flags(..., SA_RESTART)` 支持键盘/pipe 阻塞读写和
+  `waitpid` 在 handler 返回后自动恢复。
+- 修复 flat 用户镜像 `.bss` 尾部未映射的问题。
+
+## 下次建议：里程碑 28（Shell 3.0）
+
+1. 行内光标编辑、Home/End、历史搜索和未提交草稿保留。
+2. `NAME=value`/`export` 与可变环境，替换当前只读默认 envp。
+3. `$(...)` 命令替换、多行输入和脚本文件执行。
+4. 统一其余阻塞 syscall 的 EINTR 与更完整的 POSIX 错误码。
+5. 为 Shell 补全与历史增加独立压力测试。
 
 ## 当前已知限制
 
 - 不支持动态链接、PT_INTERP、ET_DYN/PIE。
-- 用户态信号已有 pending/mask/handler/sigreturn；键盘/pipe 已返回 EINTR，
-  其他阻塞 syscall 尚未统一。
-- Shell 已有引号/变量/分号/stderr；尚无通配符和 Tab 补全。
+- 用户态信号已有 pending/mask/handler/sigreturn；键盘/pipe/waitpid
+  支持 `SA_RESTART`，文件系统锁等待不返回 EINTR。
+- Shell 已支持通配符、Tab 补全和持久化历史；尚无行内光标编辑、
+  历史搜索、变量赋值/export 和命令替换。
 - argv 上限 16，envp 上限 8，参数文本上限 3KB。
 - 文件系统为 1MB 持久化 FS；结构上已支持一级间接块，实际单文件上限
   受磁盘容量约束。

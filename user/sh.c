@@ -2,10 +2,15 @@
 
 #define LINE_MAX  256
 #define WORD_MAX  64
-#define ARGS_MAX  12
+#define ARGS_MAX  20
 #define PIPE_MAX  4
 #define JOB_MAX   4
 #define JOB_TEXT  128
+#define GLOB_STORAGE 2048
+#define HISTORY_MAX 24
+#define HISTORY_FILE "/.sh_history"
+#define HISTORY_LIMIT 4096
+#define FIELD_SEP '\x1f'
 
 typedef struct {
     char* argv[ARGS_MAX];
@@ -30,12 +35,19 @@ typedef struct {
 
 static job_t jobs[JOB_MAX];
 static char token_storage[LINE_MAX];
+static char glob_storage[GLOB_STORAGE];
 static char* shell_env_names[8];
 static int shell_env_count;
 static int last_status;
+static char history[HISTORY_MAX][LINE_MAX];
+static int history_count;
+static int history_index;
+static int history_loading;
 static char default_home[] = "HOME=/";
 static char default_path[] = "PATH=/bin";
 static char default_newos[] = "NEWOS=1";
+
+static void shell_prompt(void);
 
 static int slen(const char* s) {
     int n = 0;
@@ -161,7 +173,8 @@ static int append_text(char* out, int* pos, const char* text, int len) {
     return 0;
 }
 
-static int tokenize(char* line, char** words, int max) {
+static int tokenize(char* line, char** words, int max,
+                    unsigned char globs[WORD_MAX]) {
     int count = 0;
     char* p = line;
     int pos = 0;
@@ -209,6 +222,7 @@ static int tokenize(char* line, char** words, int max) {
         char* token = &token_storage[pos];
         int any = 0;
         char quote = 0;
+        globs[count] = 0;
         while (*p) {
             if (!quote && is_space(*p)) break;
             if (!quote && is_operator(*p)) break;
@@ -266,14 +280,20 @@ static int tokenize(char* line, char** words, int max) {
                 int vlen = (int)(p - var);
                 if (vlen) {
                     const char* value = env_value(var, vlen);
-                    if (append_text(token_storage, &pos, value, slen(value)) < 0)
-                        return -1;
+                    for (int i = 0; value[i]; ++i) {
+                        char c = value[i];
+                        if (!quote && is_space(c)) c = FIELD_SEP;
+                        if (!quote && (c == '*' || c == '?')) globs[count] = 1;
+                        if (append_text(token_storage, &pos, &c, 1) < 0)
+                            return -1;
+                    }
                 } else {
                     if (append_text(token_storage, &pos, "$", 1) < 0) return -1;
                 }
                 any = 1;
                 continue;
             }
+            if (!quote && (*p == '*' || *p == '?')) globs[count] = 1;
             if (append_text(token_storage, &pos, p, 1) < 0) return -1;
             ++p;
             any = 1;
@@ -283,6 +303,165 @@ static int tokenize(char* line, char** words, int max) {
         words[count++] = token;
     }
     return count;
+}
+
+static int split_fields(char** words, int count, unsigned char globs[WORD_MAX],
+                        char** out, unsigned char out_globs[WORD_MAX]) {
+    int out_count = 0;
+    for (int i = 0; i < count; ++i) {
+        char* token = words[i];
+        char* start = token;
+        int had_separator = 0;
+        char* p = token;
+        for (;;) {
+            if (*p == FIELD_SEP) {
+                had_separator = 1;
+                *p = '\0';
+                if (p > start) {
+                    if (out_count >= WORD_MAX) return -1;
+                    out[out_count] = start;
+                    out_globs[out_count++] = globs[i];
+                }
+                start = ++p;
+                continue;
+            }
+            if (!*p) {
+                if (p > start || (!had_separator && !*token)) {
+                    if (out_count >= WORD_MAX) return -1;
+                    out[out_count] = start;
+                    out_globs[out_count++] = globs[i];
+                }
+                break;
+            }
+            ++p;
+        }
+    }
+    return out_count;
+}
+
+static int glob_match(const char* pattern, const char* name) {
+    if (!*pattern) return !*name;
+    if (*pattern == '*') {
+        while (*pattern == '*') ++pattern;
+        if (!*pattern) return 1;
+        for (const char* p = name; ; ++p) {
+            if (glob_match(pattern, p)) return 1;
+            if (!*p) return 0;
+        }
+    }
+    if (!*name || (*pattern != '?' && *pattern != *name)) return 0;
+    return glob_match(pattern + 1, name + 1);
+}
+
+static int glob_matches(const char* pattern, char* storage, int cap,
+                        char** out, int max) {
+    char dir[LINE_MAX];
+    const char* base = pattern;
+    int split = -1;
+    for (int i = 0; pattern[i]; ++i)
+        if (pattern[i] == '/') split = i;
+    if (split >= 0) {
+        base = pattern + split + 1;
+        if (!*base) return 0;
+        if (split == 0) {
+            dir[0] = '/';
+            dir[1] = '\0';
+        } else {
+            if (split >= (int)sizeof(dir)) return -1;
+            for (int i = 0; i < split; ++i) dir[i] = pattern[i];
+            dir[split] = '\0';
+        }
+    } else {
+        dir[0] = '.';
+        dir[1] = '\0';
+    }
+
+    char* matches[WORD_MAX];
+    int found = 0;
+    int pos = 0;
+    user_dirent_t entry;
+    for (uint32_t idx = 0; ; ++idx) {
+        int got = readdir(dir, idx, &entry);
+        if (got <= 0) break;
+        if (!entry.inum || scmp(entry.name, ".") == 0 ||
+            scmp(entry.name, "..") == 0)
+            continue;
+        if (base[0] != '.' && entry.name[0] == '.') continue;
+        if (!glob_match(base, entry.name)) continue;
+        if (found >= max) return -1;
+
+        int before = pos;
+        if (split >= 0) {
+            if (dir[0] == '/' && dir[1] == '\0') {
+                if (pos + 1 >= cap) return -1;
+                storage[pos++] = '/';
+            } else {
+                for (int i = 0; dir[i]; ++i) {
+                    if (pos + 1 >= cap) return -1;
+                    storage[pos++] = dir[i];
+                }
+                if (pos + 1 >= cap) return -1;
+                storage[pos++] = '/';
+            }
+        }
+        for (int i = 0; entry.name[i]; ++i) {
+            if (pos + 1 >= cap) return -1;
+            storage[pos++] = entry.name[i];
+        }
+        storage[pos++] = '\0';
+        matches[found++] = storage + before;
+    }
+
+    for (int i = 1; i < found; ++i) {
+        char* value = matches[i];
+        int j = i - 1;
+        while (j >= 0 && scmp(matches[j], value) > 0) {
+            matches[j + 1] = matches[j];
+            --j;
+        }
+        matches[j + 1] = value;
+    }
+    for (int i = 0; i < found; ++i) out[i] = matches[i];
+    return found;
+}
+
+static int expand_words(char** words, int count, unsigned char globs[WORD_MAX],
+                        char** out, int* out_count) {
+    char* fields[WORD_MAX];
+    unsigned char field_globs[WORD_MAX];
+    count = split_fields(words, count, globs, fields, field_globs);
+    if (count < 0) return -1;
+
+    int words_out = 0;
+    int storage_pos = 0;
+    for (int i = 0; i < count; ++i) {
+        char* matches[WORD_MAX];
+        int found = 0;
+        if (field_globs[i])
+            found = glob_matches(fields[i], glob_storage + storage_pos,
+                                 GLOB_STORAGE - storage_pos,
+                                 matches, WORD_MAX - words_out);
+        if (found < 0) return -1;
+        if (!found) {
+            if (words_out >= WORD_MAX) return -1;
+            out[words_out++] = fields[i];
+            continue;
+        }
+        for (int j = 0; j < found; ++j) {
+            if (words_out >= WORD_MAX) return -1;
+            out[words_out++] = matches[j];
+        }
+        int used_end = storage_pos;
+        for (int j = 0; j < found; ++j) {
+            char* p = matches[j];
+            while (*p) ++p;
+            int end = (int)(p + 1 - glob_storage);
+            if (end > used_end) used_end = end;
+        }
+        storage_pos = used_end;
+    }
+    *out_count = words_out;
+    return 0;
 }
 
 static int parse_commands(char** words, int count, command_t cmds[PIPE_MAX],
@@ -581,6 +760,23 @@ static int execute_builtin(const command_t* cmd) {
     }
     if (scmp(name, "true") == 0) return 0;
     if (scmp(name, "false") == 0) return 1;
+    if (scmp(name, "history") == 0) {
+        int start = 0;
+        if (cmd->argc > 1) {
+            int recent;
+            if (parse_number(cmd->argv[1], &recent) < 0 || recent <= 0)
+                return 1;
+            start = history_count - recent;
+            if (start < 0) start = 0;
+        }
+        for (int i = start; i < history_count; ++i) {
+            putdec((uint32_t)(i + 1));
+            swrite(1, " ");
+            swrite(1, history[i]);
+            swrite(1, "\n");
+        }
+        return 0;
+    }
     if (scmp(name, "cd") == 0) {
         const char* path = cmd->argc > 1 ? cmd->argv[1] : "/";
         if (chdir(path) < 0) {
@@ -590,7 +786,7 @@ static int execute_builtin(const command_t* cmd) {
         return 0;
     }
     if (scmp(name, "help") == 0) {
-        swrite(1, "builtins: cd exit jobs fg bg kill wait help\n");
+        swrite(1, "builtins: cd exit jobs fg bg kill wait history help\n");
         swrite(1, "tools: echo cat ls pwd mkdir rm mv ln truncate stat env\n");
         swrite(1, "syntax: 'quotes' \"$VAR\" a\\ b; cmd [> out] [2> err] [2>&1] [| cmd] [&]\n");
         return 0;
@@ -944,11 +1140,241 @@ static void shell_prompt(void) {
     swrite(1, "> ");
 }
 
+static int history_add(const char* line) {
+    if (!line || !*line) return 0;
+    if (history_count && scmp(history[history_count - 1], line) == 0) return 0;
+    if (history_count == HISTORY_MAX) {
+        for (int i = 1; i < HISTORY_MAX; ++i)
+            scopy(history[i - 1], history[i], LINE_MAX);
+        --history_count;
+    }
+    scopy(history[history_count++], line, LINE_MAX);
+    history_index = history_count;
+    return 1;
+}
+
+static void history_store(const char* line) {
+    if (history_loading || !line || !*line) return;
+    user_stat_t info;
+    int fd;
+    if (stat(HISTORY_FILE, &info) == 0 && info.size > HISTORY_LIMIT) {
+        fd = open(HISTORY_FILE, O_CREAT | O_WRONLY | O_TRUNC);
+        if (fd < 0) return;
+        for (int i = 0; i < history_count; ++i) {
+            write_all(fd, history[i], (uint32_t)slen(history[i]));
+            write_all(fd, "\n", 1);
+        }
+    } else {
+        fd = open(HISTORY_FILE, O_CREAT | O_WRONLY | O_APPEND);
+        if (fd < 0) return;
+        write_all(fd, line, (uint32_t)slen(line));
+        write_all(fd, "\n", 1);
+    }
+    close(fd);
+}
+
+static void history_record(const char* line) {
+    if (history_add(line)) history_store(line);
+}
+
+static void history_load(void) {
+    int fd = open(HISTORY_FILE, O_RDONLY);
+    if (fd < 0) return;
+    char part[LINE_MAX];
+    int part_len = 0;
+    char buf[128];
+    history_loading = 1;
+    for (;;) {
+        int n = read(fd, buf, sizeof(buf));
+        if (n <= 0) break;
+        for (int i = 0; i < n; ++i) {
+            char c = buf[i];
+            if (c == '\n') {
+                part[part_len] = '\0';
+                if (part_len && part[part_len - 1] == '\r')
+                    part[--part_len] = '\0';
+                history_add(part);
+                part_len = 0;
+            } else if (part_len < LINE_MAX - 1) {
+                part[part_len++] = c;
+            }
+        }
+    }
+    if (part_len) {
+        part[part_len] = '\0';
+        if (part[part_len - 1] == '\r') part[part_len - 1] = '\0';
+        history_add(part);
+    }
+    history_loading = 0;
+    history_index = history_count;
+    close(fd);
+}
+
+static void redraw_edit_line(const char* line, int len, int old_len) {
+    swrite(1, "\r");
+    shell_prompt();
+    write_all(1, line, (uint32_t)len);
+    for (int i = len; i < old_len; ++i) swrite(1, " ");
+    for (int i = len; i < old_len; ++i) swrite(1, "\b");
+}
+
+static int history_navigate(char* line, int* len, int up) {
+    if (!history_count) return 0;
+    int old_len = *len;
+    if (up) {
+        if (history_index > 0) --history_index;
+    } else {
+        if (history_index < history_count) ++history_index;
+    }
+    if (history_index >= history_count) line[0] = '\0';
+    else scopy(line, history[history_index], LINE_MAX);
+    *len = slen(line);
+    redraw_edit_line(line, *len, old_len);
+    return 1;
+}
+
+static const char* completion_commands[] = {
+    "bg", "cat", "cd", "echo", "env", "exit", "false", "fg", "help",
+    "history", "jobs", "kill", "ln", "ls", "mkdir", "mv", "pwd", "rm",
+    "stat", "truncate", "true", "wait", 0
+};
+static char completion_storage[2048];
+static char* completion_names[WORD_MAX];
+static unsigned char completion_dirs[WORD_MAX];
+static int completion_count;
+static int completion_pos;
+
+static int starts_with(const char* text, const char* prefix) {
+    while (*prefix) {
+        if (*text++ != *prefix++) return 0;
+    }
+    return 1;
+}
+
+static void completion_add(const char* name, const char* prefix, int is_dir) {
+    if (!starts_with(name, prefix) || completion_count >= WORD_MAX) return;
+    for (int i = 0; i < completion_count; ++i)
+        if (scmp(completion_names[i], name) == 0) return;
+    int len = slen(name);
+    if (completion_pos + len + 1 > (int)sizeof(completion_storage)) return;
+    char* stored = completion_storage + completion_pos;
+    scopy(stored, name, sizeof(completion_storage) - completion_pos);
+    completion_pos += len + 1;
+    completion_names[completion_count] = stored;
+    completion_dirs[completion_count++] = (unsigned char)is_dir;
+}
+
+static void completion_add_dir(const char* dir, const char* prefix,
+                               int files_only) {
+    if (!dir || !*dir) return;
+    user_dirent_t entry;
+    for (uint32_t idx = 0; ; ++idx) {
+        int got = readdir(dir, idx, &entry);
+        if (got <= 0) break;
+        if (!entry.inum || scmp(entry.name, ".") == 0 ||
+            scmp(entry.name, "..") == 0)
+            continue;
+        if (prefix[0] != '.' && entry.name[0] == '.') continue;
+        if (files_only && entry.type == 2) continue;
+        completion_add(entry.name, prefix, entry.type == 2);
+    }
+}
+
+static void completion_list(const char* line, int len) {
+    swrite(1, "\n");
+    for (int i = 0; i < completion_count; ++i) {
+        swrite(1, completion_names[i]);
+        if (completion_dirs[i]) swrite(1, "/");
+        swrite(1, "  ");
+    }
+    swrite(1, "\n");
+    shell_prompt();
+    write_all(1, line, (uint32_t)len);
+}
+
+static void complete_line(char* line, int* len) {
+    int start = 0;
+    for (int i = 0; i < *len; ++i)
+        if (is_space(line[i])) start = i + 1;
+    char token[LINE_MAX];
+    int token_len = *len - start;
+    for (int i = 0; i < token_len; ++i) token[i] = line[start + i];
+    token[token_len] = '\0';
+
+    const char* base = token;
+    char dir[LINE_MAX];
+    int slash = -1;
+    for (int i = 0; token[i]; ++i)
+        if (token[i] == '/') slash = i;
+    if (slash >= 0) {
+        base = token + slash + 1;
+        if (!slash) {
+            dir[0] = '/';
+            dir[1] = '\0';
+        } else {
+            for (int i = 0; i < slash; ++i) dir[i] = token[i];
+            dir[slash] = '\0';
+        }
+    } else {
+        dir[0] = '.';
+        dir[1] = '\0';
+    }
+
+    completion_count = 0;
+    completion_pos = 0;
+    int command_position = start == 0;
+    if (command_position && slash < 0) {
+        for (int i = 0; completion_commands[i]; ++i)
+            completion_add(completion_commands[i], base, 0);
+        completion_add_dir("/bin", base, 0);
+    } else if (!command_position || slash >= 0) {
+        completion_add_dir(dir, base, 0);
+    }
+    if (!completion_count) {
+        swrite(1, "\a");
+        return;
+    }
+
+    int common = slen(completion_names[0]);
+    for (int i = 1; i < completion_count; ++i) {
+        int j = 0;
+        while (j < common && completion_names[0][j] == completion_names[i][j])
+            ++j;
+        common = j;
+    }
+    int base_len = slen(base);
+    if (common > base_len) {
+        int add = common - base_len;
+        if (*len + add >= LINE_MAX) return;
+        for (int i = 0; i < add; ++i)
+            line[(*len)++] = completion_names[0][base_len + i];
+        line[*len] = '\0';
+        write_all(1, line + *len - add, (uint32_t)add);
+    }
+    if (completion_count == 1) {
+        char suffix = completion_dirs[0] ? '/' : ' ';
+        if (*len < LINE_MAX - 1) {
+            line[(*len)++] = suffix;
+            line[*len] = '\0';
+            char out[1] = { suffix };
+            write_all(1, out, 1);
+        }
+    } else if (common <= base_len) {
+        completion_list(line, *len);
+    }
+}
+
 static int execute_segment(char* segment) {
-    char* words[WORD_MAX];
-    int nwords = tokenize(segment, words, WORD_MAX);
+    char* tokens[WORD_MAX];
+    unsigned char globs[WORD_MAX];
+    int nwords = tokenize(segment, tokens, WORD_MAX, globs);
     if (nwords < 0) {
         swrite(2, "sh: syntax error\n");
+        return 2;
+    }
+    char* words[WORD_MAX];
+    if (expand_words(tokens, nwords, globs, words, &nwords) < 0) {
+        swrite(2, "sh: expansion failed\n");
         return 2;
     }
     command_t cmds[PIPE_MAX];
@@ -1020,8 +1446,18 @@ static int shell_loop(void) {
                 swrite(1, "\b \b");
             }
             continue;
+        } else if (c == '\t') {
+            complete_line(line, &len);
+            continue;
+        } else if (c == '\x11') {
+            history_navigate(line, &len, 1);
+            continue;
+        } else if (c == '\x12') {
+            history_navigate(line, &len, 0);
+            continue;
         } else if ((uint8_t)c >= 32 && len < LINE_MAX - 1) {
             line[len++] = c;
+            history_index = history_count;
             char out[1] = { c };
             write_all(1, out, 1);
             continue;
@@ -1032,6 +1468,7 @@ static int shell_loop(void) {
         line[len] = '\0';
         len = 0;
         reap_background();
+        if (*line) history_record(line);
         if (execute_line(line) < 0) return 0;
         shell_prompt();
     }
@@ -1057,7 +1494,10 @@ void _start(int argc, char** argv, char** envp) {
     cmd.output = 0;
     cmd.append = 0;
 
-    if (scmp(name, "sh") == 0) exit(shell_loop());
+    if (scmp(name, "sh") == 0) {
+        history_load();
+        exit(shell_loop());
+    }
     int status = execute_builtin(&cmd);
     if (status >= 0) exit(status);
     exec_external(&cmd);

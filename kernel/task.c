@@ -172,6 +172,7 @@ void task_init() {
         tasks[i].cwd_inum = 0;
         tasks[i].signal_pending = 0;
         tasks[i].signal_mask = 0;
+        tasks[i].signal_restart_mask = 0;
         tasks[i].signal_restorer = 0;
         k_memset(tasks[i].signal_handlers, 0,
                  sizeof(tasks[i].signal_handlers));
@@ -274,6 +275,7 @@ void task_free_slot(int idx) {
     tasks[idx].cwd_inum = 0;
     tasks[idx].signal_pending = 0;
     tasks[idx].signal_mask = 0;
+    tasks[idx].signal_restart_mask = 0;
     tasks[idx].signal_restorer = 0;
     k_memset(tasks[idx].signal_handlers, 0,
              sizeof(tasks[idx].signal_handlers));

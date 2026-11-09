@@ -133,44 +133,16 @@ static void redraw_input_line() {
 // 1. help 命令
 static void cmd_help() {
     vga_puts("\n\rAvailable commands:\n\r");
-    vga_puts("  help     - Show this help message\n\r");
-    vga_puts("  clear    - Clear the screen\n\r");
-    vga_puts("  meminfo  - Show memory information\n\r");
-    vga_puts("  memmap   - Show BIOS E820 memory map\n\r");
-    vga_puts("  heap     - Show kernel heap statistics\n\r");
-    vga_puts("  heap blocks - Show heap block list\n\r");
-    vga_puts("  heaptest - Run malloc/realloc/free stress test\n\r");
-    vga_puts("  echo [t] - Print text, or: echo text > file\n\r");
-    vga_puts("  date     - Show current time (CMOS)\n\r");
-    vga_puts("  reboot   - Reboot the system\n\r");
-    vga_puts("  version  - Show OS version\n\r");
-    vga_puts("  ps       - Show running tasks\n\r");
-    vga_puts("  start    - Start multitasking demo\n\r");
-    vga_puts("  stop     - Stop multitasking demo\n\r");
-    vga_puts("  testmode - Test graphics mode round trip (BIOS INT 10h)\n\r");
-    vga_puts("  tetris   - Play Tetris (ESC to exit)\n\r");
-    vga_puts("  mario    - Play Super Mario (1/2 world, ESC exit)\n\r");
-    vga_puts("  font [style] [N] - Font style/size 8..32; 'font list' for styles\n\r");
-    vga_puts("  pwd      - Print working directory\n\r");
-    vga_puts("  ls [d]   - List directory\n\r");
-    vga_puts("  cd [d]   - Change directory (no arg = root)\n\r");
-    vga_puts("  mkdir d  - Create directory\n\r");
-    vga_puts("  touch f  - Create empty file\n\r");
-    vga_puts("  cat f    - Print file contents\n\r");
-    vga_puts("  rm p     - Remove file or empty directory\n\r");
-    vga_puts("  mv a b   - Rename/move a file or directory\n\r");
-    vga_puts("  ln a b   - Create a hard link to a file\n\r");
-    vga_puts("  truncate f N - Resize a file to N bytes\n\r");
-    vga_puts("  stat p   - Show type, size, nlink and inode\n\r");
-    vga_puts("  df       - Show filesystem usage\n\r");
-    vga_puts("  sync     - Flush delayed filesystem writes\n\r");
-    vga_puts("  edit f   - Nano-style editor (^S save, ^X exit)\n\r");
-    vga_puts("  edit keys- ^Z undo ^Y redo ^F find ^G goto line\n\r");
-    vga_puts("  cc f.c   - Compile and run C program (c4 subset)\n\r");
-    vga_puts("  splash   - Replay the boot screen animation\n\r");
-    vga_puts("  run p    - Run a Ring 3 user program (see: run)\n\r");
-    vga_puts("  run p &  - Run in background (shell stays usable)\n\r");
-    vga_puts("  kill n   - Kill a user process by pid (see ps)\n\r");
+    vga_puts("  help clear version date reboot\n\r");
+    vga_puts("  meminfo memmap heap [blocks] heaptest\n\r");
+    vga_puts("  ps start stop kill N\n\r");
+    vga_puts("  echo TEXT [> FILE]\n\r");
+    vga_puts("  pwd ls cd mkdir touch cat rm mv ln truncate stat df sync\n\r");
+    vga_puts("  edit FILE (^S save, ^X exit; ^Z/^Y undo/redo)\n\r");
+    vga_puts("  cc f.c [ARGS]\n\r");
+    vga_puts("  font [style] [N]; font list\n\r");
+    vga_puts("  tetris mario testmode splash (ESC exits games)\n\r");
+    vga_puts("  run PROG [ARGS] [&]; run sh\n\r");
 }
 
 // 2. date 命令 (读取 CMOS)

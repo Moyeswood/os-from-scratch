@@ -165,7 +165,9 @@ static int sys_read(task_t* me, int fd, void* user_buf, uint32_t count) {
         while (got < n) {
             int c = sys_getkey();
             if (c < 0) {
-                if (!got) return -1;
+                if (!got)
+                    return proc_signal_restart_current() ?
+                           (int)SYS_RESTART : -1;
                 break;
             }
             tmp[got++] = (uint8_t)c;
@@ -179,6 +181,7 @@ static int sys_read(task_t* me, int fd, void* user_buf, uint32_t count) {
     int total = fd_is_pipe(f) ?
         fd_pipe_read(f, user_buf, count) :
         fd_file_read(f, user_buf, count);
+    if ((uint32_t)total == SYS_RESTART) return total;
     if (total < 0) return -1;
     serial_puts("[FD] read fd=");
     serial_put_hex((uint32_t)fd);
@@ -206,6 +209,7 @@ static int sys_write(task_t* me, int fd, const void* user_buf, uint32_t count) {
     int wrote = fd_is_pipe(f) ?
         fd_pipe_write(f, user_buf, count) :
         fd_file_write(f, user_buf, count);
+    if ((uint32_t)wrote == SYS_RESTART) return wrote;
     if (wrote < 0) return -1;
     serial_puts("[FD] write fd=");
     serial_put_hex((uint32_t)fd);
@@ -548,6 +552,9 @@ void syscall_dispatch(user_frame_t* f) {
         break;
     case SYS_SIGACTION:
         f->eax = (uint32_t)proc_sigaction((int)f->ebx, f->ecx, f->edx);
+        break;
+    case SYS_SIGACTION_FLAGS:
+        f->eax = (uint32_t)proc_sigaction_flags((int)f->ebx, f->ecx);
         break;
     case SYS_SIGPROCMASK:
         f->eax = (uint32_t)proc_sigprocmask((int)f->ebx, f->ecx,

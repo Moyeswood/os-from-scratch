@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-24%2F24%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-588%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-27%2F27%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-621%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -37,7 +37,7 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 - **Privilege isolation**: TSS kernel-stack switch, user code/data segments (DPL3), page-table U/S protection — a user program touching kernel memory gets a #PF
 - **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/link/truncate/sigaction/sigprocmask/sigreturn/setpgid/tcsetpgrp/kill; user pointers are validated page by page
 - **User signals**: install or ignore `SIGINT/SIGTERM/SIGCONT`, with a pending bitmap, signal mask, automatic current-signal blocking, and a SysV-style user-stack return frame
-- **Default user shell 2.0**: normal boot enters a Ring 3 `sh:/>`; supports quoting, escapes, `$VAR/$?`, `;`, `2>/2>&1`, four-stage pipelines, process groups, signals, jobs, and `mv/ln/truncate/stat/ls -l`. `exit` enters the kernel recovery shell
+- **Default user shell 2.0**: normal boot enters a Ring 3 `sh:/>`; supports quoting, escapes, `$VAR/$?`, field splitting, `*`/`?` globbing, Tab completion, arrow-key and persistent history, `;`, `2>/2>&1`, four-stage pipelines, process groups, signals, jobs, and `mv/ln/truncate/stat/ls -l`. `exit` enters the kernel recovery shell
 - **Exception handling**: 32 exception handlers print the full fault context (EIP/CS/EFLAGS/ESP/CR2 + page-fault error code P/W/U decoding); a user-mode fault kills the process and returns to the shell, a kernel-mode fault panics
 - **22 flat programs + 1 ELF32 demo**: coverage includes the user shell, signal handling, shared opens, pipes, waitpid, execve, ELF32, fork heap isolation, the free-list allocator, per-process working directories, and filesystem concurrency stress
 
@@ -91,6 +91,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | Command | Description |
 |---|---|
 | `help` | List all commands |
+| `history [N]` | Show the last N commands; Up/Down recalls them |
 | `clear` | Clear the screen |
 | `meminfo` | Memory statistics (pages) |
 | `memmap` | Show the BIOS E820 memory map |
@@ -297,6 +298,7 @@ python3 tools/test-shell.py    # shell/pipelines/groups/stop-resume/jobs (59 che
 | 26a | User sigaction/sigprocmask/sigreturn + pending/mask + handler stack frame and return trampoline |
 | 26b | Normal Ring 3 boot + boot-mode byte + recovery kernel shell/test image |
 | 27a | Shell quoting/variables/sequences + stderr redirection + EINTR and job-status fixes |
+| 27b | Globs/field splitting + Tab completion + persistent history + `SA_RESTART` |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 

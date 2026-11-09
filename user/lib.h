@@ -57,6 +57,7 @@ static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 #define SYS_SIGACTION 32
 #define SYS_SIGPROCMASK 33
 #define SYS_SIGRETURN 34
+#define SYS_SIGACTION_FLAGS 35
 
 #define SIGINT   2
 #define SIGKILL  9
@@ -69,6 +70,7 @@ static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 #define SIG_BLOCK   0
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2
+#define SA_RESTART  0x10000000u
 
 typedef void (*sighandler_t)(int);
 
@@ -89,6 +91,16 @@ static inline sighandler_t signal(int sig, sighandler_t handler) {
     return (sighandler_t)syscall3(SYS_SIGACTION, (uint32_t)sig,
                                   (uint32_t)handler,
                                   (uint32_t)signal_trampoline);
+}
+
+// signal() deliberately remains the small three-argument ABI. This helper
+// installs the handler through that syscall, then records SA_RESTART for it.
+static inline sighandler_t signal_flags(int sig, sighandler_t handler,
+                                        uint32_t flags) {
+    sighandler_t old = signal(sig, handler);
+    if ((int)old < 0) return old;
+    syscall3(SYS_SIGACTION_FLAGS, (uint32_t)sig, flags, 0);
+    return old;
 }
 
 #define WNOHANG   1
@@ -125,6 +137,7 @@ typedef struct {
 #define SEEK_END 2
 
 #define EINTR 4
+#define SYS_RESTART 0xFFFFFFFDu
 
 // 与 kernel/vm.h 保持一致的用户虚拟布局。
 #define VM_IMAGE_BASE   0x2000000u
@@ -145,7 +158,13 @@ static inline void exit(int code) {
 
 static inline void putc(char c) { syscall1(SYS_PUTC, (uint32_t)(uint8_t)c); }
 static inline int  puts(const char* s) { return (int)syscall1(SYS_PUTS, (uint32_t)s); }
-static inline int  getkey(void) { return (int)syscall1(SYS_GETKEY, 0); }
+static inline int  getkey(void) {
+    int result;
+    do {
+        result = (int)syscall1(SYS_GETKEY, 0);
+    } while ((uint32_t)result == SYS_RESTART);
+    return result;
+}
 static inline uint32_t ticks(void) { return syscall0(SYS_GETTICKS); }
 static inline int  fork(void) { return (int)syscall0(SYS_FORK); }
 static inline int  getpid(void) { return (int)syscall0(SYS_GETPID); }
@@ -165,20 +184,37 @@ static inline int exec(const char* path) {
     return execve(path, 0, 0);
 }
 static inline int waitpid(int pid, int* status) {
-    return (int)syscall3(SYS_WAITPID, (uint32_t)pid, (uint32_t)status, 0);
+    int result;
+    do {
+        result = (int)syscall3(SYS_WAITPID, (uint32_t)pid,
+                               (uint32_t)status, 0);
+    } while ((uint32_t)result == SYS_RESTART);
+    return result;
 }
 static inline int waitpid_flags(int pid, int* status, int flags) {
-    return (int)syscall3(SYS_WAITPID, (uint32_t)pid, (uint32_t)status,
-                         (uint32_t)flags);
+    int result;
+    do {
+        result = (int)syscall3(SYS_WAITPID, (uint32_t)pid, (uint32_t)status,
+                               (uint32_t)flags);
+    } while ((uint32_t)result == SYS_RESTART);
+    return result;
 }
 static inline int open(const char* path, uint32_t flags) {
     return (int)syscall3(SYS_OPEN, (uint32_t)path, flags, 0);
 }
 static inline int read(int fd, void* buf, uint32_t count) {
-    return (int)syscall3(SYS_READ, (uint32_t)fd, (uint32_t)buf, count);
+    int result;
+    do {
+        result = (int)syscall3(SYS_READ, (uint32_t)fd, (uint32_t)buf, count);
+    } while ((uint32_t)result == SYS_RESTART);
+    return result;
 }
 static inline int write(int fd, const void* buf, uint32_t count) {
-    return (int)syscall3(SYS_WRITE, (uint32_t)fd, (uint32_t)buf, count);
+    int result;
+    do {
+        result = (int)syscall3(SYS_WRITE, (uint32_t)fd, (uint32_t)buf, count);
+    } while ((uint32_t)result == SYS_RESTART);
+    return result;
 }
 static inline int close(int fd) {
     return (int)syscall1(SYS_CLOSE, (uint32_t)fd);

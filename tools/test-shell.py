@@ -75,7 +75,7 @@ KEYS = {
     "|": "shift-backslash", "&": "shift-7",
     "'": "apostrophe", '"': "shift-apostrophe",
     "$": "shift-4", ";": "semicolon", "\\": "backslash",
-    "?": "shift-slash",
+    "?": "shift-slash", "*": "shift-8",
 }
 KEYS.update({chr(c): f"shift-{chr(c + 32)}" for c in range(ord("A"), ord("Z") + 1)})
 KEYS["="] = "equal"
@@ -180,6 +180,50 @@ try:
     run("nosuch-command 2>&1 | cat", "sh:/shdir>",
         "sh: not found: nosuch-command\n", name="stderr to stdout")
     run("ls", "sh:/shdir>", "a.txt\n", name="ls utility")
+    run("echo beta > beta.txt", "sh:/shdir>", name="glob setup beta")
+    run("echo alpha > alpha.txt", "sh:/shdir>", name="glob setup alpha")
+    run("echo markdown > note.md", "sh:/shdir>", name="glob setup note")
+    run("echo *.txt", "sh:/shdir>", "a.txt alpha.txt beta.txt err.txt\n",
+        name="wildcard expands and sorts")
+    run("echo note.?d", "sh:/shdir>", "note.md\n",
+        name="wildcard question mark")
+    run('echo "*.txt"', "sh:/shdir>", "*.txt\n",
+        name="quoted wildcard stays literal")
+    run("echo /bin/sh*", "sh:/shdir>", "/bin/sh\n",
+        name="absolute wildcard prefix")
+
+    mark()
+    type_text("pw")
+    send("sendkey tab")
+    type_text("\n")
+    check("tab completes builtin", wait_since("/shdir\n", 10, "tab-builtin"))
+    check("tab builtin prompt", wait_since("sh:/shdir> ", 10,
+                                           "tab-builtin-prompt"))
+
+    mark()
+    type_text("cat alph")
+    send("sendkey tab")
+    type_text("\n")
+    check("tab completes path entry", wait_since("alpha\n", 10,
+                                                 "tab-path"))
+    check("tab path prompt", wait_since("sh:/shdir> ", 10,
+                                        "tab-path-prompt"))
+
+    mark()
+    type_text("cat /shdir/alph")
+    send("sendkey tab")
+    type_text("\n")
+    check("tab completes absolute path", wait_since("alpha\n", 10,
+                                                    "tab-absolute"))
+    check("tab absolute prompt", wait_since("sh:/shdir> ", 10,
+                                            "tab-absolute-prompt"))
+
+    mark()
+    type_text("cd /shd")
+    send("sendkey tab")
+    type_text("\n")
+    check("tab completes directory", wait_since("sh:/shdir> ", 10,
+                                                "tab-directory"))
     run("cd /", "sh:/>", name="cd root")
 
     mark()
@@ -237,12 +281,33 @@ try:
         name="unknown command")
     run("echo broken |", "sh:/>", "sh: syntax error",
         name="syntax error")
-    run("rm /shdir/a.txt /shdir/err.txt /bgout", "sh:/>", name="rm utility")
+    run("rm /shdir/a.txt /shdir/beta.txt /shdir/alpha.txt "
+        "/shdir/note.md /shdir/err.txt /bgout", "sh:/>", name="rm utility")
     run("rm /shdir", "sh:/>", name="remove empty directory")
+
+    run("echo history-persisted", "sh:/>", "history-persisted\n",
+        name="history seed")
+    mark()
+    send("sendkey up")
+    send("sendkey ret")
+    check("up arrow recalls history", wait_since("history-persisted\n", 10,
+                                                 "history-up"))
+    check("history recall prompt", wait_since("sh:/> ", 10,
+                                              "history-up-prompt"))
     mark()
     type_text("exit\n")
-    check("exit user shell",
+    check("exit user shell before history reload",
           wait_since("[USER] exit code=0x00000000", 15.0, "shell-exit"))
+    mark()
+    type_text("run sh\n")
+    check("history shell restarts", wait_since("sh:/> ", 15.0,
+                                               "history-shell"))
+    run("history 6", "sh:/>", "echo history-persisted",
+        name="history persists across shell restart")
+    mark()
+    type_text("exit\n")
+    check("final exit user shell",
+          wait_since("[USER] exit code=0x00000000", 15.0, "final-shell-exit"))
 finally:
     try:
         qemu.terminate()
@@ -252,5 +317,6 @@ finally:
     serial_file.close()
 
 print()
-print("SUMMARY:", "ALL PASS" if all(ok for _, ok in results) else "SOME FAILED")
+print("SUMMARY:", f"{len(results)} checks",
+      "ALL PASS" if all(ok for _, ok in results) else "SOME FAILED")
 sys.exit(0 if results and all(ok for _, ok in results) else 1)

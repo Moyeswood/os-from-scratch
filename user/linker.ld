@@ -7,4 +7,8 @@ SECTIONS {
     .rodata : { *(.rodata) }
     .data   : { *(.data) }
     .bss    : { *(.bss) }
+    /* objcopy -O binary stops at the last PROGBITS byte. Emit one byte after
+       .bss so the zero-filled image includes all allocated static storage;
+       otherwise a larger .bss leaves its tail unmapped in the flat loader. */
+    .image  : { BYTE(0) }
 }

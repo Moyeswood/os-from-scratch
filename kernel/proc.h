@@ -44,12 +44,14 @@ int  proc_set_foreground(int pgid);    // 设置控制台前台进程组 (0 = �
 int  proc_signal(int pid, int sig);    // 正 pid 单进程, 负 pid 表示整组
 int  proc_signal_foreground(int sig);  // 键盘 Ctrl+C 使用
 int  proc_sigaction(int sig, uint32_t handler, uint32_t restorer);
+int  proc_sigaction_flags(int sig, uint32_t flags);
 int  proc_sigprocmask(int how, uint32_t set, uint32_t* oldset);
 int  proc_sigreturn(user_frame_t* f);
 void proc_deliver_signal(user_frame_t* f);
 void proc_deliver_current_saved(void);
 void proc_reset_signals(void);
 int  proc_signal_pending_current(void);
+int  proc_signal_restart_current(void);
 void proc_exit(int code);              // SYS_EXIT 内核侧 (永不返回)
 int  proc_fork(user_frame_t* f);       // SYS_FORK 内核侧: 父得子 pid, 子得 0
 void proc_fault_kill(void);            // 异常处理调用 (永不返回)

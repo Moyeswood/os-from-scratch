@@ -72,6 +72,7 @@ typedef struct {
     uint32_t signal_pending;              // bit (signo-1)
     uint32_t signal_mask;                 // bit (signo-1)
     uint32_t signal_handlers[TASK_SIGNAL_MAX];
+    uint32_t signal_restart_mask;         // SA_RESTART actions
     uint32_t signal_restorer;             // 用户态 sigreturn 跳板地址
 } task_t;
 

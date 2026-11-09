@@ -76,6 +76,7 @@ typedef struct {
 #define SYS_SIGACTION 32 // 里程碑 26: 安装用户态信号处理函数
 #define SYS_SIGPROCMASK 33 // 里程碑 26: 修改信号屏蔽字
 #define SYS_SIGRETURN 34 // 里程碑 26: 从 handler 返回原用户上下文
+#define SYS_SIGACTION_FLAGS 35 // 里程碑 27b: 为已安装的 action 设置标志
 
 #define SIGINT   2
 #define SIGKILL  9
@@ -88,6 +89,7 @@ typedef struct {
 #define SIG_BLOCK   0
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2
+#define SA_RESTART  0x10000000u
 
 #define O_RDONLY     0x0001
 #define O_WRONLY     0x0002
@@ -101,6 +103,9 @@ typedef struct {
 #define SEEK_END 2
 
 #define EINTR 4
+// Blocking syscalls interrupted by a SA_RESTART handler return this private
+// sentinel. The handler still runs first; lib.h wrappers then retry the call.
+#define SYS_RESTART 0xFFFFFFFDu
 
 // 用户态 readdir 结果（与 user/lib.h 的 user_dirent_t 布局一致）。
 typedef struct {

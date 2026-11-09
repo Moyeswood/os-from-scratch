@@ -195,13 +195,17 @@ int fd_pipe_read(task_file_t* file, void* buf, uint32_t count) {
             irq_restore(flags);
             return (int)n;
         }
-        if (!pipe->writers) {
+        if (proc_signal_restart_current()) {
             irq_restore(flags);
-            return 0;
+            return (int)SYS_RESTART;
         }
         if (proc_signal_pending_current()) {
             irq_restore(flags);
             return -1;
+        }
+        if (!pipe->writers) {
+            irq_restore(flags);
+            return 0;
         }
         task_sleep_switch_locked(TASK_WAIT_PIPE, 0);
     }
@@ -228,6 +232,14 @@ int fd_pipe_write(task_file_t* file, const void* buf, uint32_t count) {
             }
             task_wake_pipe();
             continue;
+        }
+        if (!done && proc_signal_restart_current()) {
+            irq_restore(flags);
+            return (int)SYS_RESTART;
+        }
+        if (proc_signal_pending_current()) {
+            irq_restore(flags);
+            return done ? (int)done : -1;
         }
         task_sleep_switch_locked(TASK_WAIT_PIPE, 0);
     }

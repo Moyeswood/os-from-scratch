@@ -109,6 +109,11 @@ try:
         "[SIGTEST] unmask-deliver=1",
         "[SIGTEST] ignore=1",
         "[SIGTEST] returned=1",
+        "[SIGTEST] install-restart=1",
+        "[SIGTEST] restart-handler=1",
+        "[SIGTEST] restart-resumed=1",
+        "[SIGTEST] pipe-restart=1",
+        "[SIGTEST] eintr=1",
         "[SIGTEST] done=1",
     ]
     for marker in markers:
@@ -124,5 +129,6 @@ finally:
         sock.close()
 
 print()
-print("SUMMARY:", "ALL PASS" if all(ok for _, ok in results) else "SOME FAILED")
+print("SUMMARY:", f"{len(results)} checks",
+      "ALL PASS" if all(ok for _, ok in results) else "SOME FAILED")
 sys.exit(0 if results and all(ok for _, ok in results) else 1)

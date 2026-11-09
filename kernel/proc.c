@@ -295,6 +295,14 @@ int proc_waitpid(int pid, int* status, int flags) {
             __asm__ volatile("sti");
             return 0;
         }
+        if (proc_signal_restart_current()) {
+            __asm__ volatile("sti");
+            return (int)SYS_RESTART;
+        }
+        if (proc_signal_pending_current()) {
+            __asm__ volatile("sti");
+            return -1;
+        }
         task_sleep_switch_locked(TASK_WAIT_PROC, 0);
         __asm__ volatile("sti");
     }
@@ -356,6 +364,7 @@ int proc_fork(user_frame_t* f) {
     child->signal_pending = parent->signal_pending;
     child->signal_mask = parent->signal_mask;
     child->signal_restorer = parent->signal_restorer;
+    child->signal_restart_mask = parent->signal_restart_mask;
     k_memcpy(child->signal_handlers, parent->signal_handlers,
              sizeof(child->signal_handlers));
     task_fd_copy(child, parent);
@@ -482,6 +491,7 @@ int proc_sigaction(int sig, uint32_t handler, uint32_t restorer) {
 
     uint32_t old = t->signal_handlers[sig - 1];
     t->signal_handlers[sig - 1] = handler;
+    t->signal_restart_mask &= ~SIGNAL_BIT(sig);
     if (handler != SIG_DFL && handler != SIG_IGN)
         t->signal_restorer = restorer;
     serial_puts("[SIG] pid ");
@@ -492,6 +502,26 @@ int proc_sigaction(int sig, uint32_t handler, uint32_t restorer) {
     serial_put_hex(handler);
     serial_puts("\n\r");
     return (int)old;
+}
+
+int proc_sigaction_flags(int sig, uint32_t flags) {
+    task_t* t = task_current();
+    if (!t || !t->is_user || !signal_supported(sig) ||
+        sig == SIGKILL || sig == SIGSTOP ||
+        (flags & ~SA_RESTART))
+        return -1;
+    if (t->signal_handlers[sig - 1] <= SIG_IGN)
+        return -1;
+    if (flags & SA_RESTART)
+        t->signal_restart_mask |= SIGNAL_BIT(sig);
+    else
+        t->signal_restart_mask &= ~SIGNAL_BIT(sig);
+    serial_puts("[SIG] pid ");
+    serial_put_hex(t->pid);
+    serial_puts(" restart-mask=");
+    serial_put_hex(t->signal_restart_mask);
+    serial_puts("\n\r");
+    return 0;
 }
 
 int proc_sigprocmask(int how, uint32_t set, uint32_t* oldset) {
@@ -608,6 +638,7 @@ void proc_reset_signals(void) {
     if (!t) return;
     t->signal_pending = 0;
     t->signal_mask = 0;
+    t->signal_restart_mask = 0;
     t->signal_restorer = 0;
     k_memset(t->signal_handlers, 0, sizeof(t->signal_handlers));
 }
@@ -620,6 +651,19 @@ int proc_signal_pending_current(void) {
     for (int sig = 1; sig <= TASK_SIGNAL_MAX; sig++) {
         if (!(ready & SIGNAL_BIT(sig))) continue;
         if (t->signal_handlers[sig - 1] > SIG_IGN) return 1;
+    }
+    return 0;
+}
+
+int proc_signal_restart_current(void) {
+    task_t* t = task_current();
+    if (!t || !t->is_user) return 0;
+    uint32_t ready = t->signal_pending & ~t->signal_mask;
+    uint32_t restart = ready & t->signal_restart_mask;
+    for (int sig = 1; sig <= TASK_SIGNAL_MAX; sig++) {
+        if ((restart & SIGNAL_BIT(sig)) &&
+            t->signal_handlers[sig - 1] > SIG_IGN)
+            return 1;
     }
     return 0;
 }
