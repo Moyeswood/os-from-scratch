@@ -2,6 +2,15 @@
 
 ## 今日完成
 
+### 里程碑 31：32 位汇编器与 DEBUG Monitor
+
+- 新增 `asm SRC -o DEST` 两遍扫描 flat 汇编器。
+- 支持标签、`db/dd`、Intel 语法 mov/算术/逻辑/栈/分支/call/int。
+- 支持立即数、寄存器、绝对内存和 `[reg+disp]` 寻址。
+- 新增 `debug FILE` Monitor：`r/d/u/e/w/g/q`。
+- 汇编生成的 `/bin/helloasm` 在 Ring 3 输出 `ASM OK` 并退出。
+- 新增汇编/调试联合测试 21 项。
+
 ### 里程碑 30：vi modal 编辑器
 
 - 新增内核恢复 Shell 的 `vi FILE` 命令。
@@ -71,6 +80,7 @@
 - 里程碑 29 后内核镜像：259204 字节。
 - 里程碑 29 后用户 Shell 镜像：43889 字节。
 - 里程碑 30 后内核镜像：264388 字节。
+- 里程碑 31 后内核镜像：279364 字节。
 
 ## 当前限制
 
@@ -82,23 +92,27 @@
 - errno 是单翻译单元静态值；复杂文件系统错误仍可能归并为 EIO。
 - vi 只有单一 4KB yank register，尚无 visual mode、宏和 `:s` 替换。
 - `vi` 位于内核恢复 Shell；Ring 3 用户 Shell 尚无 modal 编辑器。
+- 汇编器是自定义指令子集，尚不兼容完整 NASM/GAS。
+- DEBUG 的 `g` 为整程序运行；真实 `t/p/bp` 尚未实现。
 - 通配符在用户态目录枚举上实现，没有独立 glob 模块。
 - 文件系统锁等待不返回 EINTR；现有阻塞键盘、pipe 和 waitpid 已覆盖
   `SA_RESTART`。
 - 最多四段管道；fd 上限 16；pipe 缓冲区 1KB；argv 内核上限 16。
 
-## 下次建议：里程碑 31（Shell 控制流）
+## 下次建议：里程碑 32（真实单步与断点）
 
-1. `&&`、`||`、`!` 和分组。
-2. `if/for/while/case`。
-3. `test`、函数和 positional parameters。
-4. 命令替换状态与赋值字段语义。
-5. 脚本续行和跨行引号。
+1. 调试目标以暂停用户进程加载，保存实际寄存器现场。
+2. EFLAGS.TF + #DB 单步。
+3. `INT3/#BP` 断点和恢复原始字节。
+4. `p` step-over、`g` 继续执行。
+5. Monitor 自动反汇编实际 EIP 并显示栈。
 
 ## 关键文件
 
 - `user/sh.c`：词法、字段/通配展开、补全、历史和行编辑入口。
 - `kernel/editor.c`：共享文本缓冲、nano 键位和 vi modal 状态机。
+- `kernel/assembler.c`：两遍扫描、指令编码和 flat 文件生成。
+- `kernel/debugger.c`：DEBUG Monitor、内存转储和反汇编。
 - `user/lib.h`：syscall 包装与 `SA_RESTART` 重试。
 - `kernel/proc.c` / `kernel/fd.c`：信号 action、重启掩码和阻塞队列。
 - `kernel/user.c`：重启哨兵跨 syscall 层传播。

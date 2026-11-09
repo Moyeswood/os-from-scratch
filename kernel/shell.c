@@ -15,6 +15,8 @@
 #include "fs.h"
 #include "string.h"
 #include "editor.h"
+#include "assembler.h"
+#include "debugger.h"
 #include "cc.h"
 #include "splash.h"
 #include "user.h"
@@ -140,6 +142,8 @@ static void cmd_help() {
     vga_puts("  pwd ls cd mkdir touch cat rm mv ln truncate stat df sync\n\r");
     vga_puts("  edit FILE (^S save, ^X exit; ^Z/^Y undo/redo)\n\r");
     vga_puts("  vi FILE (i/a/o insert, Esc normal, :w/:q/:wq)\n\r");
+    vga_puts("  asm SRC -o DEST (32-bit Intel syntax -> flat program)\n\r");
+    vga_puts("  debug FILE (r/d/u/e/w/g/q flat-program monitor)\n\r");
     vga_puts("  cc f.c [ARGS]\n\r");
     vga_puts("  font [style] [N]; font list\n\r");
     vga_puts("  tetris mario testmode splash (ESC exits games)\n\r");
@@ -797,6 +801,16 @@ static void execute_command() {
             cc_run(argv[1], argc - 1, &argv[1]);
             kbd_drain();   // 排空运行期间/ESC 中断的残留扫描码
         }
+    } else if (k_strcmp(argv[0], "asm") == 0) {
+        if (argc != 4 || k_strcmp(argv[2], "-o") != 0) {
+            vga_puts("\n\rUsage: asm <source.asm> -o <output>\n\r");
+        } else if (asm_run(argv[1], argv[3]) == 0) {
+            vga_puts("\n\rasm: wrote ");
+            vga_puts(argv[3]);
+            vga_puts("\n\r");
+        } else {
+            vga_puts("\n\rasm: assembly failed\n\r");
+        }
     } else if (k_strcmp(argv[0], "run") == 0) {
         if (argc < 2) {
             serial_puts("[SH] run usage\n\r");
@@ -864,6 +878,13 @@ static void execute_command() {
             vga_puts("\n\rUsage: vi <file>\n\r");
         } else {
             vi_run(argv[1]);
+            vga_puts("MyQwen-OS v1.0.0\n\r");
+        }
+    } else if (k_strcmp(argv[0], "debug") == 0) {
+        if (argc < 2) {
+            vga_puts("\n\rUsage: debug <flat-program>\n\r");
+        } else {
+            debug_run(argv[1]);
             vga_puts("MyQwen-OS v1.0.0\n\r");
         }
     } else {

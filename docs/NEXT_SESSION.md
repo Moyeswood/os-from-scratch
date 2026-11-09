@@ -6,9 +6,9 @@
 
 - 项目目录：`/home/mfw/Documents/claude001/NewOS`
 - 分支：`main`
-- 当前进度：里程碑 30（vi modal 编辑器）完成
-- 回归：vi 28 项、原 edit 67 项、Shell 155 项及关联套件通过
-- 最终内核镜像 264388 字节，低于 448KB（458752 字节）加载上限
+- 当前进度：里程碑 31（汇编器与 DEBUG Monitor）完成
+- 回归：汇编/DEBUG 21 项、vi 28 项、原 edit 67 项、Shell 155 项通过
+- 最终内核镜像 279364 字节，低于 448KB（458752 字节）加载上限
 
 ## 今日完成
 
@@ -45,6 +45,8 @@
     `/bin` 程序、脚本与 `sh -c` 退出状态传播。
 18. 里程碑 30：vi Normal/Insert/Command 模式、行操作、搜索、
     撤销重做和 `:w/:q/:q!/:wq`。
+19. 里程碑 31：两遍 32 位汇编器、标签/数据/内存操作、flat 输出，
+    以及 `r/d/u/e/w/g/q` DEBUG Monitor。
 
 关键文档：
 
@@ -53,6 +55,7 @@
 - `docs/MILESTONE_28_SHELL_V3.md`（Shell 3.0 设计记录）
 - `docs/MILESTONE_29_ERRORS.md`（错误码与脚本状态设计）
 - `docs/MILESTONE_30_VI.md`（vi modal 编辑器设计）
+- `docs/MILESTONE_31_ASSEMBLY_DEBUG.md`（汇编器与 Monitor 设计）
 - `docs/MILESTONE_13_VM.md`
 - `docs/MILESTONE_14_EXEC.md`
 - `docs/MILESTONE_15_PROCESS_ELF.md`
@@ -148,7 +151,23 @@ make test-fs-journal
 - `:w`、`:q`、`:q!`、`:wq`、`:x`。
 - 原 `edit` nano 模式保持兼容。
 
-## 下次建议：里程碑 31（Shell 控制流）
+## 已完成：里程碑 31（汇编器与 DEBUG Monitor）
+
+- `asm SRC -o DEST` 两遍扫描生成 flat Ring 3 程序。
+- 支持标签、`db/dd`、立即数/寄存器/绝对和基址内存操作。
+- 支持 mov/lea、算术逻辑、栈、条件分支、call/ret 和 `int 0x80`。
+- `debug FILE` 提供 `r/d/u/e/w/g/q`。
+- 汇编成功程序输出 `ASM OK`，错误报告准确行号。
+
+## 下次建议：里程碑 32（真实单步与断点）
+
+1. 将目标程序加载为暂停用户进程并保存初始现场。
+2. 使用 EFLAGS.TF/#DB 实现 `t` 单步。
+3. 使用 `INT3/#BP` 实现断点、恢复原始字节和命中展示。
+4. 实现 `p` step-over call 和 `g` 从断点继续。
+5. Monitor 自动反汇编 EIP、显示实际寄存器和栈。
+
+## 后续：Shell 控制流
 
 1. `&&`、`||`、`!` 和括号分组。
 2. `if/for/while/case`。
@@ -164,6 +183,8 @@ make test-fs-journal
 - Shell 已支持行内编辑、Ctrl+R、可变环境、命令替换、多行和脚本；
   赋值字段语义和命令替换 `$?` 仍需完善。
 - errno 当前是单翻译单元静态值；复杂文件系统失败仍常归并为 EIO。
+- 汇编器仅支持自定义指令子集，不兼容完整 NASM/GAS。
+- DEBUG 的 `g` 当前整程序运行；`t/p/bp` 真实单步和断点尚未实现。
 - argv 上限 16，envp 上限 8，参数文本上限 3KB。
 - 文件系统为 1MB 持久化 FS；结构上已支持一级间接块，实际单文件上限
   受磁盘容量约束。

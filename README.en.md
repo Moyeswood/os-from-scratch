@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-30%2F30%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-724%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-31%2F31%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-745%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -88,6 +88,12 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 
 **`open/read` talk to the OS's own filesystem** — C programs can read files inside the OS! Compile errors include line numbers; runaway loops can be interrupted with ESC.
 
+### 🔧 Assembler & DEBUG Monitor
+- `asm source.asm -o /bin/program`: two-pass 32-bit Intel-syntax assembler
+- Labels, `db/dd`, register/immediate/memory operands, arithmetic, branches, stack, and `int`
+- Produces flat Ring 3 programs that run directly from `/bin`
+- `debug /bin/program`: `r` registers, `d` memory, `u` disassembly, `e` edit, `w` write, `g` run
+
 ### 🎮 Fun & Applications
 - **Tetris**: 7-bag randomizer, wall kicks, lock delay, hold piece, line-clear animation, 5 color themes, beep SFX
 - **Super Mario**: two themed stages, super/star abilities, checkpoints, stomp combos, variable jumps, jump buffering/coyote time, particles, screen shake, mid-stage retry, and a polished HUD
@@ -130,6 +136,8 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `edit file` | Open the editor (^S save, ^X asks to save on exit) |
 | `vi file` | Open the vi-style editor (Esc returns to Normal; `:wq` saves and exits) |
 | `cc file.c [args...]` | Compile and run a C program (args go to main) |
+| `asm source.asm -o dest` | Assemble a 32-bit Intel-syntax flat user program |
+| `debug file` | DOS DEBUG-style monitor: `r/d/u/e/w/g/q` |
 | `run prog [args] [&]` | Run an embedded or `/bin` executable (`args` enter the initial stack; `&` = detached background) |
 | `run sh` | Re-enter the user shell from recovery mode (the normal image already starts there) |
 | `sh FILE` / `sh -c CMD` | Run a script or command string in a separate user shell |
@@ -198,7 +206,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 Automated Tests
 
-24 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions):
+25 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions):
 
 ```bash
 python3 tools/test-memory.py  # E820 + page allocator + kernel heap (15 checks)
@@ -212,6 +220,7 @@ python3 tools/test-signals.py  # user handler/mask/pending/sigreturn
 python3 tools/test-boot-shell.py # normal Ring 3 boot / recovery kernel shell
 python3 tools/test-edit.py     # editor/undo/find/caret (67 checks)
 python3 tools/test-vi.py       # vi modes/motions/yank/search/commands (28 checks)
+python3 tools/test-asm.py      # assembler/flat program/DEBUG monitor (21 checks)
 python3 tools/test-cc.py       # C compiler   (41 checks)
 python3 tools/test-preempt.py  # preemption   (7 checks)
 python3 tools/test-mario.py    # Mario/powerups/UI/two themes (18 checks)
@@ -273,7 +282,7 @@ python3 tools/test-shell.py    # shell/pipelines/env/scripts/jobs (155 checks)
 │       waittest.c execargv.c elfdemo.c memdemo.c allocdemo.c
 │       filedemo.c fdstdin.c sh.c fdpipe.c fscheck.c
 ├── tetris/             # original real-mode assembly version (port reference)
-├── tools/              # font converter + 24 test suites
+├── tools/              # font converter + 25 test suites
 ├── note/               # development notes + screenshots
 └── Makefile
 ```
@@ -314,6 +323,7 @@ python3 tools/test-shell.py    # shell/pipelines/env/scripts/jobs (155 checks)
 | 28 | In-line editing/history search + mutable env + command substitution + multiline/scripts |
 | 29 | Negative-errno syscall ABI + user errno compatibility + script exit statuses |
 | 30 | vi Normal/Insert/Command modes, line operations, search, and `:w/:q/:wq/:q!` |
+| 31 | Two-pass 32-bit assembler + flat output + DEBUG monitor `r/d/u/e/w/g/q` |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 
