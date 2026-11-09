@@ -52,6 +52,7 @@
 
 - `docs/SESSION_2026-11-08_HANDOFF.md`（今日任务与明日起点）
 - `docs/SESSION_2026-11-09_HANDOFF.md`（27b 完成情况）
+- `docs/SESSION_2026-11-10_HANDOFF.md`（vi、汇编器与 DEBUG 交接）
 - `docs/MILESTONE_28_SHELL_V3.md`（Shell 3.0 设计记录）
 - `docs/MILESTONE_29_ERRORS.md`（错误码与脚本状态设计）
 - `docs/MILESTONE_30_VI.md`（vi modal 编辑器设计）
