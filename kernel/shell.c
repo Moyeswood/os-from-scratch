@@ -139,6 +139,7 @@ static void cmd_help() {
     vga_puts("  echo TEXT [> FILE]\n\r");
     vga_puts("  pwd ls cd mkdir touch cat rm mv ln truncate stat df sync\n\r");
     vga_puts("  edit FILE (^S save, ^X exit; ^Z/^Y undo/redo)\n\r");
+    vga_puts("  vi FILE (i/a/o insert, Esc normal, :w/:q/:wq)\n\r");
     vga_puts("  cc f.c [ARGS]\n\r");
     vga_puts("  font [style] [N]; font list\n\r");
     vga_puts("  tetris mario testmode splash (ESC exits games)\n\r");
@@ -856,6 +857,13 @@ static void execute_command() {
         } else {
             // 编辑器在文本模式内直接运行 (无模式切换), 返回后恢复屏幕
             editor_run(argv[1]);
+            vga_puts("MyQwen-OS v1.0.0\n\r");
+        }
+    } else if (k_strcmp(argv[0], "vi") == 0) {
+        if (argc < 2) {
+            vga_puts("\n\rUsage: vi <file>\n\r");
+        } else {
+            vi_run(argv[1]);
             vga_puts("MyQwen-OS v1.0.0\n\r");
         }
     } else {

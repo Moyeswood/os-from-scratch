@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-29%2F29%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-696%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-30%2F30%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-724%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -66,6 +66,13 @@ nano 风格的 `edit` 命令：
 - **Ctrl+S 保存、Ctrl+X 退出**（修改未保存时可选保存、丢弃或取消）
 - 精确定位光标格（修复换行残影）、底部状态栏、长行水平滚动
 - 自己轮询 8042 并跟踪 Shift/Ctrl/Caps/0xE0 扩展键前缀
+
+vi 风格的 `vi` 命令复用同一文本缓冲：
+
+- Normal/Insert/Command 三模式，`i/a/o`、`h/j/k/l`、`0/$`、`w/b`
+- `x`、`dd`、`yy`、`p`、`dw`、`d$`
+- `/`/`n` 搜索、`u`/Ctrl+R 撤销重做
+- `:w`、`:q`、`:q!`、`:wq`/`:x`
 
 ### ⚙️ C 编译器（c4 移植）
 `cc` 命令——**C in four functions**（Robert Swierczek）移植，编译 C 子集到内置栈式虚拟机执行：
@@ -121,6 +128,7 @@ nano 风格的 `edit` 命令：
 | `df` | 文件系统用量 |
 | `sync` | 强制提交延迟回写与元数据日志 |
 | `edit file` | 打开编辑器（^S 保存，^X 退出时询问保存） |
+| `vi file` | 打开 vi 风格编辑器（Esc 返回 Normal，`:wq` 保存退出） |
 | `cc file.c [args...]` | 编译并运行 C 程序（参数传给 main） |
 | `run prog [args] [&]` | 运行内嵌或 `/bin` 程序；参数进入初始用户栈，& = detached 后台任务 |
 | `run sh` | 从恢复 Shell 再进入用户态 Shell（正式镜像默认已进入） |
@@ -195,7 +203,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 自动化测试
 
-23 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言）：
+24 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言）：
 
 ```bash
 python3 tools/test-memory.py  # E820 + 页分配 + 内核堆 (15 项)
@@ -208,6 +216,7 @@ python3 tools/test-fs-journal.py # 日志提交后断电与启动重放
 python3 tools/test-signals.py  # 用户 handler/屏蔽/pending/sigreturn
 python3 tools/test-boot-shell.py # 正式镜像 Ring 3 / 恢复镜像内核 Shell
 python3 tools/test-edit.py     # 编辑器/撤销/搜索/光标 (67 项)
+python3 tools/test-vi.py       # vi 模式/行操作/搜索/退出命令 (28 项)
 python3 tools/test-cc.py       # C 编译器 (41 项)
 python3 tools/test-preempt.py  # 抢占调度 (7 项)
 python3 tools/test-mario.py    # 马里奥/道具/界面/双主题 (18 项)
@@ -219,8 +228,8 @@ python3 tools/test-alloc.py    # 空闲链表/合并/realloc (24 项)
 python3 tools/test-vm.py       # 按需分页/COW/guard/brk/mmap (22 项)
 python3 tools/test-exec.py     # 文件加载/exec/失败回滚 (26 项)
 python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 项)
-python3 tools/test-fd.py       # fd/CWD/共享偏移/pipe/dup2 (42 项)
-python3 tools/test-shell.py    # Shell/管道/进程组/暂停恢复/作业 (59 项)
+python3 tools/test-fd.py       # fd/CWD/共享偏移/pipe/dup2/errno (63 项)
+python3 tools/test-shell.py    # Shell/管道/环境/脚本/作业 (155 项)
 ```
 
 > test-preempt / test-mario 是附着式测试（argv[1]=monitor socket），请用
@@ -269,7 +278,7 @@ python3 tools/test-shell.py    # Shell/管道/进程组/暂停恢复/作业 (59 
 │       waittest.c execargv.c elfdemo.c memdemo.c allocdemo.c
 │       filedemo.c fdstdin.c sh.c fdpipe.c fscheck.c
 ├── tetris/             # 原始实模式汇编版 (移植蓝本)
-├── tools/              # 字体转换 + 20 套测试脚本
+├── tools/              # 字体转换 + 24 套测试脚本
 ├── note/               # 开发记录 + 截图
 └── Makefile
 ```
@@ -309,6 +318,7 @@ python3 tools/test-shell.py    # Shell/管道/进程组/暂停恢复/作业 (59 
 | 27b | 通配符/字段展开 + Tab 补全 + 持久化历史 + `SA_RESTART` |
 | 28 | 行内编辑/历史搜索 + 可变环境 + 命令替换 + 多行/脚本 |
 | 29 | 负 errno syscall ABI + 用户 errno 兼容层 + 脚本退出状态 |
+| 30 | vi Normal/Insert/Command、行操作、搜索与 `:w/:q/:wq/:q!` |
 
 每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
 

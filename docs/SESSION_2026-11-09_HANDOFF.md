@@ -2,6 +2,15 @@
 
 ## 今日完成
 
+### 里程碑 30：vi modal 编辑器
+
+- 新增内核恢复 Shell 的 `vi FILE` 命令。
+- 实现 Normal/Insert/Command 模式及 `i/a/o`、Esc 切换。
+- 实现 `h/j/k/l`、`0/$`、`w/b`、`x`、`dd`、`yy`、`p`、`dw`、`d$`。
+- 实现 `/`/`n` 搜索、`u`/Ctrl+R 撤销重做。
+- 实现 `:w`、`:q`、`:q!`、`:wq`、`:x` 和修改保护。
+- 新 vi 套件 28 项通过，原 edit 套件 67 项通过。
+
 ### 里程碑 29：POSIX 错误码与脚本状态
 
 - syscall ABI 失败改为负 errno，用户库转换为 `-1 + errno`。
@@ -61,6 +70,7 @@
 - Shell 3.0 后用户 Shell 镜像：44305 字节。
 - 里程碑 29 后内核镜像：259204 字节。
 - 里程碑 29 后用户 Shell 镜像：43889 字节。
+- 里程碑 30 后内核镜像：264388 字节。
 
 ## 当前限制
 
@@ -70,12 +80,14 @@
 - 命令替换输出上限 1KB，且非零退出状态尚未转换为 `$?`。
 - 脚本 `exit` 状态已传播；跨行引号和续行仍未完全解析。
 - errno 是单翻译单元静态值；复杂文件系统错误仍可能归并为 EIO。
+- vi 只有单一 4KB yank register，尚无 visual mode、宏和 `:s` 替换。
+- `vi` 位于内核恢复 Shell；Ring 3 用户 Shell 尚无 modal 编辑器。
 - 通配符在用户态目录枚举上实现，没有独立 glob 模块。
 - 文件系统锁等待不返回 EINTR；现有阻塞键盘、pipe 和 waitpid 已覆盖
   `SA_RESTART`。
 - 最多四段管道；fd 上限 16；pipe 缓冲区 1KB；argv 内核上限 16。
 
-## 下次建议：里程碑 30（Shell 控制流）
+## 下次建议：里程碑 31（Shell 控制流）
 
 1. `&&`、`||`、`!` 和分组。
 2. `if/for/while/case`。
@@ -86,6 +98,7 @@
 ## 关键文件
 
 - `user/sh.c`：词法、字段/通配展开、补全、历史和行编辑入口。
+- `kernel/editor.c`：共享文本缓冲、nano 键位和 vi modal 状态机。
 - `user/lib.h`：syscall 包装与 `SA_RESTART` 重试。
 - `kernel/proc.c` / `kernel/fd.c`：信号 action、重启掩码和阻塞队列。
 - `kernel/user.c`：重启哨兵跨 syscall 层传播。

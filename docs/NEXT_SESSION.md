@@ -6,9 +6,9 @@
 
 - 项目目录：`/home/mfw/Documents/claude001/NewOS`
 - 分支：`main`
-- 当前进度：里程碑 29（错误码与脚本状态）完成
-- 回归：Shell 155 项、fd+errno、信号、exec/process/ELF32 通过
-- 最终内核镜像 259204 字节，低于 448KB（458752 字节）加载上限
+- 当前进度：里程碑 30（vi modal 编辑器）完成
+- 回归：vi 28 项、原 edit 67 项、Shell 155 项及关联套件通过
+- 最终内核镜像 264388 字节，低于 448KB（458752 字节）加载上限
 
 ## 今日完成
 
@@ -43,6 +43,8 @@
     可变环境、`$()` 命令替换、多行输入、脚本与 `sh -c`。
 17. 里程碑 29：负 errno syscall ABI、用户 errno 兼容层、23 个
     `/bin` 程序、脚本与 `sh -c` 退出状态传播。
+18. 里程碑 30：vi Normal/Insert/Command 模式、行操作、搜索、
+    撤销重做和 `:w/:q/:q!/:wq`。
 
 关键文档：
 
@@ -50,6 +52,7 @@
 - `docs/SESSION_2026-11-09_HANDOFF.md`（27b 完成情况）
 - `docs/MILESTONE_28_SHELL_V3.md`（Shell 3.0 设计记录）
 - `docs/MILESTONE_29_ERRORS.md`（错误码与脚本状态设计）
+- `docs/MILESTONE_30_VI.md`（vi modal 编辑器设计）
 - `docs/MILESTONE_13_VM.md`
 - `docs/MILESTONE_14_EXEC.md`
 - `docs/MILESTONE_15_PROCESS_ELF.md`
@@ -136,7 +139,16 @@ make test-fs-journal
 - `exit [N]`、`sh -c "exit N"` 和脚本 `exit N` 传播非零状态。
 - `/bin` 用户程序从 22 个增至 23 个。
 
-## 下次建议：里程碑 30（Shell 控制流）
+## 已完成：里程碑 30（vi modal 编辑器）
+
+- 新增 `vi FILE`，复用现有文本缓冲、撤销栈、搜索和 FS 保存。
+- `i/a/o`、Esc、方向键、Home/End、PgUp/PgDn。
+- `h/j/k/l`、`0/$`、`w/b`、`x`、`dd`、`yy`、`p`、`dw`、`d$`。
+- `/`、`n`、`u`、Ctrl+R。
+- `:w`、`:q`、`:q!`、`:wq`、`:x`。
+- 原 `edit` nano 模式保持兼容。
+
+## 下次建议：里程碑 31（Shell 控制流）
 
 1. `&&`、`||`、`!` 和括号分组。
 2. `if/for/while/case`。

@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-29%2F29%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-696%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-30%2F30%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-724%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -66,6 +66,13 @@ A nano-style `edit` command:
 - **Ctrl+S to save, Ctrl+X to exit** (save, discard, or cancel when modified)
 - Exact line/column cursor highlighting (fixes newline ghosts), status bar, horizontal scrolling of long lines
 - Polls the 8042 directly and tracks Shift/Ctrl/CapsLock/0xE0 extended-key prefixes itself
+
+A vi-style `vi` command reuses the same text buffer:
+
+- Normal/Insert/Command modes, `i/a/o`, `h/j/k/l`, `0/$`, `w/b`
+- `x`, `dd`, `yy`, `p`, `dw`, `d$`
+- `/`/`n` search, `u`/Ctrl+R undo/redo
+- `:w`, `:q`, `:q!`, `:wq`/`:x`
 
 ### ⚙️ C Compiler (c4 port)
 The `cc` command — a port of **C in four functions** (by Robert Swierczek), compiling a C subset to a built-in stack virtual machine:
@@ -121,6 +128,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `df` | Filesystem usage |
 | `sync` | Force delayed writes and the metadata journal to disk |
 | `edit file` | Open the editor (^S save, ^X asks to save on exit) |
+| `vi file` | Open the vi-style editor (Esc returns to Normal; `:wq` saves and exits) |
 | `cc file.c [args...]` | Compile and run a C program (args go to main) |
 | `run prog [args] [&]` | Run an embedded or `/bin` executable (`args` enter the initial stack; `&` = detached background) |
 | `run sh` | Re-enter the user shell from recovery mode (the normal image already starts there) |
@@ -190,7 +198,7 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 ## 🧪 Automated Tests
 
-23 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions):
+24 serial-driven headless test suites (QEMU monitor key injection + kernel serial marker assertions):
 
 ```bash
 python3 tools/test-memory.py  # E820 + page allocator + kernel heap (15 checks)
@@ -203,6 +211,7 @@ python3 tools/test-fs-journal.py # committed-journal power-loss replay
 python3 tools/test-signals.py  # user handler/mask/pending/sigreturn
 python3 tools/test-boot-shell.py # normal Ring 3 boot / recovery kernel shell
 python3 tools/test-edit.py     # editor/undo/find/caret (67 checks)
+python3 tools/test-vi.py       # vi modes/motions/yank/search/commands (28 checks)
 python3 tools/test-cc.py       # C compiler   (41 checks)
 python3 tools/test-preempt.py  # preemption   (7 checks)
 python3 tools/test-mario.py    # Mario/powerups/UI/two themes (18 checks)
@@ -214,8 +223,8 @@ python3 tools/test-alloc.py    # free list/coalescing/realloc (24 checks)
 python3 tools/test-vm.py       # demand paging/COW/guard (22 checks)
 python3 tools/test-exec.py     # file loader/exec/rollback (26 checks)
 python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 checks)
-python3 tools/test-fd.py       # fd/CWD/shared offsets/pipes/dup2 (42 checks)
-python3 tools/test-shell.py    # shell/pipelines/groups/stop-resume/jobs (59 checks)
+python3 tools/test-fd.py       # fd/CWD/shared offsets/pipes/dup2/errno (63 checks)
+python3 tools/test-shell.py    # shell/pipelines/env/scripts/jobs (155 checks)
 ```
 
 > test-preempt / test-mario are attached tests (argv[1] = monitor socket);
@@ -264,7 +273,7 @@ python3 tools/test-shell.py    # shell/pipelines/groups/stop-resume/jobs (59 che
 │       waittest.c execargv.c elfdemo.c memdemo.c allocdemo.c
 │       filedemo.c fdstdin.c sh.c fdpipe.c fscheck.c
 ├── tetris/             # original real-mode assembly version (port reference)
-├── tools/              # font converter + 20 test suites
+├── tools/              # font converter + 24 test suites
 ├── note/               # development notes + screenshots
 └── Makefile
 ```
@@ -304,6 +313,7 @@ python3 tools/test-shell.py    # shell/pipelines/groups/stop-resume/jobs (59 che
 | 27b | Globs/field splitting + Tab completion + persistent history + `SA_RESTART` |
 | 28 | In-line editing/history search + mutable env + command substitution + multiline/scripts |
 | 29 | Negative-errno syscall ABI + user errno compatibility + script exit statuses |
+| 30 | vi Normal/Insert/Command modes, line operations, search, and `:w/:q/:wq/:q!` |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 

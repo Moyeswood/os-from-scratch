@@ -40,6 +40,7 @@
 #define ED_COLS    80      // 所有字号都是 80 列
 #define ED_HISTORY 128     // 撤销/重做操作数上限
 #define ED_QUERY   48      // 搜索/跳行输入上限
+#define ED_VI_YANK 4096    // yy/dd 复制缓冲上限
 #define ED_SEQ_INVALID 0xFFFFFFFFu
 
 enum {
@@ -81,6 +82,17 @@ static uint32_t ed_next_group;
 static uint32_t ed_active_group;
 static char ed_last_query[ED_QUERY];
 static uint32_t ed_last_match;
+static char ed_vi_yank[ED_VI_YANK];
+static uint32_t ed_vi_yank_len;
+static int ed_vi_yank_linewise;
+static int ed_vi_active;
+static int ed_vi_mode;
+
+enum {
+    ED_VI_NORMAL = 0,
+    ED_VI_INSERT = 1,
+    ED_VI_COMMAND = 2,
+};
 
 static int ed_poll(void);
 
@@ -344,7 +356,13 @@ static void ed_render(void) {
     static char status[ED_COLS + 1];
     k_memset(status, ' ', ED_COLS);
     int pos = 0;
-    const char* s = " ^S Save ^X Exit ^Z Undo ^F Find ^G Goto | L";
+    const char* s;
+    if (ed_vi_active)
+        s = ed_vi_mode == ED_VI_INSERT ? "-- INSERT --" :
+            ed_vi_mode == ED_VI_COMMAND ? "-- COMMAND --" :
+            "-- NORMAL -- i/a/o insert :w :q / search";
+    else
+        s = " ^S Save ^X Exit ^Z Undo ^F Find ^G Goto | L";
     while (*s && pos < ED_COLS - 4) status[pos++] = *s++;
     char num[12];
     ed_uint_to_str((uint32_t)line + 1, num);
@@ -522,8 +540,347 @@ static int ed_poll(void) {
     return kbd_pop();
 }
 
+// ---------- vi modal 编辑 ----------
+static int ed_vi_copy(uint32_t from, uint32_t to, int linewise) {
+    if (from >= to || to > ed_len) return -1;
+    uint32_t len = to - from;
+    if (len > ED_VI_YANK) len = ED_VI_YANK;
+    for (uint32_t i = 0; i < len; i++) ed_vi_yank[i] = ed_buf[from + i];
+    ed_vi_yank_len = len;
+    ed_vi_yank_linewise = linewise;
+    return 0;
+}
+
+static void ed_vi_delete_line(void) {
+    int line, col;
+    ed_pos(ed_cur, &line, &col);
+    uint32_t start = ed_line_start(line);
+    uint32_t end = ed_line_end(line);
+    if (end < ed_len) end++;
+    else if (start > 0) start--;
+    if (ed_vi_copy(start, end, 1) < 0) return;
+    ed_break_group();
+    ed_cur = start;
+    ed_delete_range(start, end);
+    ed_break_group();
+    if (ed_cur >= ed_len && ed_len) ed_cur = ed_len - 1;
+    k_strcpy(ed_msg, "1 line deleted");
+    serial_puts("[VI] dd\n\r");
+}
+
+static void ed_vi_yank_line(void) {
+    int line, col;
+    ed_pos(ed_cur, &line, &col);
+    uint32_t start = ed_line_start(line);
+    uint32_t end = ed_line_end(line);
+    if (end < ed_len) end++;
+    if (ed_vi_copy(start, end, 1) < 0) return;
+    k_strcpy(ed_msg, "1 line yanked");
+    serial_puts("[VI] yy\n\r");
+}
+
+static void ed_vi_paste(void) {
+    if (!ed_vi_yank_len) {
+        k_strcpy(ed_msg, "Register empty");
+        return;
+    }
+    ed_break_group();
+    if (ed_vi_yank_linewise) {
+        int line, col;
+        ed_pos(ed_cur, &line, &col);
+        uint32_t end = ed_line_end(line);
+        uint32_t target = end;
+        if (end < ed_len) target++;
+        else if (ed_len && ed_buf[ed_len - 1] != '\n') {
+            if (ed_insert_action('\n') < 0) return;
+            target = ed_len;
+        }
+        ed_cur = target > ed_len ? ed_len : target;
+        for (uint32_t i = 0; i < ed_vi_yank_len; i++)
+            if (ed_insert_action(ed_vi_yank[i]) < 0) break;
+    } else {
+        if (ed_cur < ed_len && ed_buf[ed_cur] != '\n') ed_cur++;
+        for (uint32_t i = 0; i < ed_vi_yank_len; i++)
+            if (ed_insert_action(ed_vi_yank[i]) < 0) break;
+        if (ed_cur) ed_cur--;
+    }
+    ed_break_group();
+    k_strcpy(ed_msg, "Pasted");
+    serial_puts("[VI] paste\n\r");
+}
+
+static int ed_vi_find(const char* query, uint32_t start) {
+    uint32_t qlen = k_strlen(query);
+    if (!qlen || qlen > ed_len) return 0;
+    if (start >= ed_len) start = 0;
+    for (uint32_t delta = 0; delta < ed_len; delta++) {
+        uint32_t at = (start + delta) % ed_len;
+        if (at + qlen > ed_len) continue;
+        int match = 1;
+        for (uint32_t i = 0; i < qlen; i++) {
+            if (ed_buf[at + i] != query[i]) { match = 0; break; }
+        }
+        if (match) {
+            ed_cur = at;
+            ed_last_match = at;
+            k_strcpy(ed_last_query, query);
+            k_strcpy(ed_msg, "Search hit");
+            serial_puts("[VI] search hit\n\r");
+            return 1;
+        }
+    }
+    k_strcpy(ed_msg, "Pattern not found");
+    serial_puts("[VI] search miss\n\r");
+    return 0;
+}
+
+static void ed_vi_set_mode(int mode) {
+    ed_vi_mode = mode;
+    ed_break_group();
+    ed_render();
+}
+
+static int ed_vi_run_command(int* shift, int* ctrl, int* caps, int* e0) {
+    char input[ED_QUERY];
+    input[0] = '\0';
+    int old_mode = ed_vi_mode;
+    ed_vi_mode = ED_VI_COMMAND;
+    int accepted = ed_read_prompt(":", input, sizeof(input), 0,
+                                  shift, ctrl, caps, e0);
+    ed_vi_mode = old_mode;
+    if (!accepted || !input[0]) {
+        k_strcpy(ed_msg, "Command cancelled");
+        return 0;
+    }
+    if (k_strcmp(input, "w") == 0) {
+        ed_save();
+        return 0;
+    }
+    if (k_strcmp(input, "wq") == 0 || k_strcmp(input, "x") == 0) {
+        if (ed_save() == 0) {
+            serial_puts("[VI] exit saved\n\r");
+            return 1;
+        }
+        return 0;
+    }
+    if (k_strcmp(input, "q!") == 0) {
+        serial_puts("[VI] exit forced\n\r");
+        return 1;
+    }
+    if (k_strcmp(input, "q") == 0) {
+        if (!ed_modified) {
+            serial_puts("[VI] exit saved\n\r");
+            return 1;
+        }
+        k_strcpy(ed_msg, "No write since last change (:q! overrides)");
+        serial_puts("[VI] q blocked\n\r");
+        return 0;
+    }
+    k_strcpy(ed_msg, "Unknown vi command");
+    serial_puts("[VI] unknown command\n\r");
+    return 0;
+}
+
+static void ed_vi_loop(void) {
+    int shift = 0, ctrl = 0, caps = 0, e0 = 0;
+    int pending = 0;
+    int running = 1;
+    ed_vi_mode = ED_VI_NORMAL;
+    ed_render();
+    serial_puts("[VI] normal mode\n\r");
+
+    while (running) {
+        int sc = ed_poll();
+        if (sc < 0) { __asm__ volatile("hlt"); continue; }
+        if (sc == 0xE0) { e0 = 1; continue; }
+        int release = (sc & 0x80) != 0;
+        uint8_t k = (uint8_t)(sc & 0x7F);
+        if (k == SC_LSHIFT || k == SC_RSHIFT) { shift = !release; e0 = 0; continue; }
+        if (k == SC_CTRL) { ctrl = !release; e0 = 0; continue; }
+        if (k == SC_CAPS) { if (!release) caps ^= 1; e0 = 0; continue; }
+        if (release) { e0 = 0; continue; }
+
+        if (e0) {
+            e0 = 0;
+            ed_break_group();
+            switch (k) {
+            case 0x48: ed_up(); break;
+            case 0x50: ed_down(); break;
+            case 0x4B: ed_left(); break;
+            case 0x4D: ed_right(); break;
+            case 0x47: ed_home(); break;
+            case 0x4F: ed_end(); break;
+            case 0x49: for (int i = 0; i < ed_view_rows; i++) ed_up(); break;
+            case 0x51: for (int i = 0; i < ed_view_rows; i++) ed_down(); break;
+            case 0x53:
+                ed_delete_action(ed_cur);
+                serial_puts("[VI] delete\n\r");
+                break;
+            }
+            ed_render();
+            continue;
+        }
+
+        if (ed_vi_mode == ED_VI_INSERT) {
+            if (k == SC_ESC) {
+                if (ed_cur > 0 && ed_buf[ed_cur - 1] != '\n') ed_cur--;
+                serial_puts("[VI] insert mode exit\n\r");
+                ed_vi_set_mode(ED_VI_NORMAL);
+                continue;
+            }
+            if (ctrl && k == 0x1F) {
+                ed_save();
+                ed_render();
+                continue;
+            }
+            if (k == SC_ENTER) {
+                ed_break_group();
+                ed_insert_action('\n');
+                ed_break_group();
+            } else if (k == SC_BACKSPACE) {
+                ed_break_group();
+                if (ed_cur > 0) ed_delete_action(ed_cur - 1);
+                ed_break_group();
+            } else if (k == SC_TAB) {
+                ed_break_group();
+                for (int i = 0; i < ED_TAB; i++) ed_insert_action(' ');
+                ed_break_group();
+            } else {
+                int upper = shift ^ caps;
+                char c = upper ? keymap_shift[k] : keymap_normal[k];
+                if (c >= 32) ed_insert_action(c);
+            }
+            ed_render();
+            continue;
+        }
+
+        if (k == SC_ESC) {
+            pending = 0;
+            k_strcpy(ed_msg, "");
+            ed_render();
+            continue;
+        }
+        if (ctrl) {
+            if (k == 0x13) {
+                ed_redo();
+                ed_render();
+            } else if (k == 0x2C) {
+                ed_undo();
+                ed_render();
+            } else if (k == 0x1F) {
+                ed_save();
+                ed_render();
+            }
+            continue;
+        }
+
+        char c = (shift ^ caps) ? keymap_shift[k] : keymap_normal[k];
+        if (pending == 'd') {
+            pending = 0;
+            ed_break_group();
+            if (c == 'd') {
+                ed_vi_delete_line();
+            } else if (c == 'w') {
+                uint32_t start = ed_cur;
+                ed_next_word();
+                uint32_t end = ed_cur;
+                ed_cur = start;
+                ed_vi_copy(start, end, 0);
+                ed_delete_range(start, end);
+                k_strcpy(ed_msg, "Word deleted");
+                serial_puts("[VI] dw\n\r");
+            } else if (c == '$') {
+                int line, col;
+                ed_pos(ed_cur, &line, &col);
+                uint32_t start = ed_cur, end = ed_line_end(line);
+                ed_vi_copy(start, end, 0);
+                ed_delete_range(start, end);
+                k_strcpy(ed_msg, "Deleted to end");
+                serial_puts("[VI] d$\n\r");
+            } else {
+                k_strcpy(ed_msg, "Unsupported delete motion");
+            }
+            ed_break_group();
+            ed_render();
+            continue;
+        }
+        if (pending == 'y') {
+            pending = 0;
+            if (c == 'y') ed_vi_yank_line();
+            else k_strcpy(ed_msg, "Unsupported yank motion");
+            ed_render();
+            continue;
+        }
+
+        switch (c) {
+        case 'h': ed_left(); break;
+        case 'l': ed_right(); break;
+        case 'j': ed_down(); break;
+        case 'k': ed_up(); break;
+        case '0': ed_home(); break;
+        case '$': ed_end(); break;
+        case 'w': ed_next_word(); break;
+        case 'b': ed_prev_word(); break;
+        case 'G':
+            ed_cur = ed_len ? ed_len - 1 : 0;
+            ed_home();
+            for (int i = 0; i < ed_rows * 4; i++) ed_down();
+            break;
+        case 'i':
+            serial_puts("[VI] insert mode\n\r");
+            ed_vi_set_mode(ED_VI_INSERT);
+            continue;
+        case 'a':
+            if (ed_cur < ed_len && ed_buf[ed_cur] != '\n') ed_cur++;
+            serial_puts("[VI] insert mode append\n\r");
+            ed_vi_set_mode(ED_VI_INSERT);
+            continue;
+        case 'o':
+            ed_end();
+            ed_break_group();
+            ed_insert_action('\n');
+            ed_break_group();
+            serial_puts("[VI] insert mode open line\n\r");
+            ed_vi_set_mode(ED_VI_INSERT);
+            continue;
+        case 'x':
+            ed_break_group();
+            ed_delete_action(ed_cur);
+            ed_break_group();
+            serial_puts("[VI] x\n\r");
+            break;
+        case 'd': pending = 'd'; k_strcpy(ed_msg, "d"); break;
+        case 'y': pending = 'y'; k_strcpy(ed_msg, "y"); break;
+        case 'p': ed_vi_paste(); break;
+        case 'u': ed_undo(); break;
+        case '/': {
+            char query[ED_QUERY];
+            query[0] = '\0';
+            ed_vi_mode = ED_VI_COMMAND;
+            int accepted = ed_read_prompt("/", query, sizeof(query), 0,
+                                          &shift, &ctrl, &caps, &e0);
+            ed_vi_mode = ED_VI_NORMAL;
+            if (accepted && query[0]) ed_vi_find(query, ed_cur);
+            else k_strcpy(ed_msg, "Search cancelled");
+            break;
+        }
+        case 'n':
+            if (ed_last_query[0])
+                ed_vi_find(ed_last_query, ed_last_match + 1);
+            else k_strcpy(ed_msg, "No previous search");
+            break;
+        case ':':
+            if (ed_vi_run_command(&shift, &ctrl, &caps, &e0)) running = 0;
+            break;
+        default:
+            break;
+        }
+        ed_render();
+    }
+}
+
 // ---------- 主入口 ----------
-void editor_run(const char* path) {
+static void editor_run_mode(const char* path, int vi) {
     k_strcpy(ed_path, path);
     ed_len = 0; ed_cur = 0; ed_modified = 0;
     ed_msg[0] = '\0';
@@ -532,6 +889,10 @@ void editor_run(const char* path) {
     ed_state_seq = 0; ed_next_seq = 1; ed_saved_seq = 0;
     ed_next_group = 1; ed_active_group = 0;
     ed_last_query[0] = '\0'; ed_last_match = ED_SEQ_INVALID;
+    ed_vi_active = vi;
+    ed_vi_mode = ED_VI_NORMAL;
+    ed_vi_yank_len = 0;
+    ed_vi_yank_linewise = 0;
     ed_rows = vga_get_rows();
     ed_view_rows = ed_rows - 2;
 
@@ -568,6 +929,14 @@ void editor_run(const char* path) {
     kbd_drain();
 
     int shift = 0, ctrl = 0, caps = 0, e0 = 0;
+    if (vi) {
+        ed_vi_loop();
+        serial_puts(ed_modified ? "[ED] exit: discarded\n\r" :
+                    "[ED] exit: saved\n\r");
+        kbd_drain();
+        vga_clear();
+        return;
+    }
     ed_render();
     while (1) {
         int sc = ed_poll();
@@ -729,4 +1098,12 @@ void editor_run(const char* path) {
     serial_puts(ed_modified ? "[ED] exit: discarded\n\r" : "[ED] exit: saved\n\r");
     kbd_drain();
     vga_clear();
+}
+
+void editor_run(const char* path) {
+    editor_run_mode(path, 0);
+}
+
+void vi_run(const char* path) {
+    editor_run_mode(path, 1);
 }

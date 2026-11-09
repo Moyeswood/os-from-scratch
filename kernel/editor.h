@@ -8,4 +8,7 @@
 // 有修改时 ^X 会询问 Y=保存退出 / N=丢弃 / Esc=取消。
 void editor_run(const char* path);
 
+// vi 风格 modal 编辑器，复用同一个文本缓冲、撤销和文件系统实现。
+void vi_run(const char* path);
+
 #endif
