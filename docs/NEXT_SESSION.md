@@ -6,9 +6,9 @@
 
 - 项目目录：`/home/mfw/Documents/claude001/NewOS`
 - 分支：`main`
-- 当前进度：里程碑 27b 完成
-- 回归：Shell、信号/SA_RESTART 及关联用户态套件通过；全量回归入口保留
-- 最终内核镜像 245796 字节，低于 448KB（458752 字节）加载上限
+- 当前进度：里程碑 28（Shell 3.0）完成
+- 回归：Shell 146 项、用户态键盘、fd 与默认 Ring 3 启动通过
+- 最终内核镜像 258212 字节，低于 448KB（458752 字节）加载上限
 
 ## 今日完成
 
@@ -39,11 +39,14 @@
     阻塞读取 EINTR，以及 command-not-found 作业状态误判修复。
 15. 里程碑 27b：`*`/`?` 通配符、字段拆分、Tab 补全、
     持久化历史、上下键导航与 `SA_RESTART` 自动重启。
+16. 里程碑 28：左右/Home/End/Delete、Ctrl+R 历史搜索、草稿恢复、
+    可变环境、`$()` 命令替换、多行输入、脚本与 `sh -c`。
 
 关键文档：
 
 - `docs/SESSION_2026-11-08_HANDOFF.md`（今日任务与明日起点）
 - `docs/SESSION_2026-11-09_HANDOFF.md`（27b 完成情况）
+- `docs/MILESTONE_28_SHELL_V3.md`（Shell 3.0 设计记录）
 - `docs/MILESTONE_13_VM.md`
 - `docs/MILESTONE_14_EXEC.md`
 - `docs/MILESTONE_15_PROCESS_ELF.md`
@@ -114,21 +117,29 @@ make test-fs-journal
   `waitpid` 在 handler 返回后自动恢复。
 - 修复 flat 用户镜像 `.bss` 尾部未映射的问题。
 
-## 下次建议：里程碑 28（Shell 3.0）
+## 已完成：里程碑 28（Shell 3.0）
 
-1. 行内光标编辑、Home/End、历史搜索和未提交草稿保留。
-2. `NAME=value`/`export` 与可变环境，替换当前只读默认 envp。
-3. `$(...)` 命令替换、多行输入和脚本文件执行。
-4. 统一其余阻塞 syscall 的 EINTR 与更完整的 POSIX 错误码。
-5. 为 Shell 补全与历史增加独立压力测试。
+- 行内光标编辑、Home/End/Delete、历史草稿恢复与 Ctrl+R 搜索。
+- 16 项可变环境表，支持局部赋值、export、unset、set、env 和临时环境。
+- `$()` 命令替换支持嵌套、多行输出和单引号抑制。
+- 未闭合引号/`$()`/尾部反斜杠的多行输入。
+- `sh FILE` 脚本执行与 `sh -c CMD`。
+
+## 下次建议：里程碑 29（Shell 稳定性与错误码）
+
+1. 统一 POSIX 错误码，减少所有失败都返回 `-1`。
+2. 修正赋值右侧字段拆分与命令替换非零状态的 `$?`。
+3. 脚本支持续行、跨行引号和退出状态传播。
+4. 为 glob/Tab/历史/环境增加独立边界压力测试。
+5. 评估命令替换 1KB 上限，改为可回收用户堆缓冲。
 
 ## 当前已知限制
 
 - 不支持动态链接、PT_INTERP、ET_DYN/PIE。
 - 用户态信号已有 pending/mask/handler/sigreturn；键盘/pipe/waitpid
   支持 `SA_RESTART`，文件系统锁等待不返回 EINTR。
-- Shell 已支持通配符、Tab 补全和持久化历史；尚无行内光标编辑、
-  历史搜索、变量赋值/export 和命令替换。
+- Shell 已支持行内编辑、Ctrl+R、可变环境、命令替换、多行和脚本；
+  错误码、赋值字段语义和脚本退出状态仍需统一。
 - argv 上限 16，envp 上限 8，参数文本上限 3KB。
 - 文件系统为 1MB 持久化 FS；结构上已支持一级间接块，实际单文件上限
   受磁盘容量约束。

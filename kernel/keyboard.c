@@ -86,9 +86,15 @@ int kbd_getchar(int esc_to_27) {
         if (sc & 0x80) continue;                 // 释放码
         if (key == 0x48) return '\x11';          // 上方向键
         if (key == 0x50) return '\x12';          // 下方向键
+        if (key == 0x4B) return '\x13';          // 左方向键
+        if (key == 0x4D) return '\x14';          // 右方向键
+        if (key == 0x47) return '\x15';          // Home
+        if (key == 0x4F) return '\x16';          // End
+        if (key == 0x53) return '\x17';          // Delete
         int is_upper = shift_pressed ^ caps_lock_on;
         char c = is_upper ? keymap_shift[key] : keymap_normal[key];
         if (ctrl_pressed && (c == 'c' || c == 'C')) return 3;
+        if (ctrl_pressed && (c == 'r' || c == 'R')) return '\x18';
         if (c) return c;
     }
 }

@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-27%2F27%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-621%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-28%2F28%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-666%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -37,7 +37,7 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 - **Privilege isolation**: TSS kernel-stack switch, user code/data segments (DPL3), page-table U/S protection — a user program touching kernel memory gets a #PF
 - **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/link/truncate/sigaction/sigprocmask/sigreturn/setpgid/tcsetpgrp/kill; user pointers are validated page by page
 - **User signals**: install or ignore `SIGINT/SIGTERM/SIGCONT`, with a pending bitmap, signal mask, automatic current-signal blocking, and a SysV-style user-stack return frame
-- **Default user shell 2.0**: normal boot enters a Ring 3 `sh:/>`; supports quoting, escapes, `$VAR/$?`, field splitting, `*`/`?` globbing, Tab completion, arrow-key and persistent history, `;`, `2>/2>&1`, four-stage pipelines, process groups, signals, jobs, and `mv/ln/truncate/stat/ls -l`. `exit` enters the kernel recovery shell
+- **Default user shell 3.0**: normal boot enters a Ring 3 `sh:/>`; supports quoting, escapes, `$VAR/$?`, field splitting, `*`/`?` globbing, `$(...)` command substitution, multiline input, scripts and `sh -c`, in-line editing, Ctrl+R history search, Tab completion, persistent history, mutable environments, `;`, `2>/2>&1`, four-stage pipelines, process groups, signals, jobs, and `mv/ln/truncate/stat/ls -l`. `exit` enters the kernel recovery shell
 - **Exception handling**: 32 exception handlers print the full fault context (EIP/CS/EFLAGS/ESP/CR2 + page-fault error code P/W/U decoding); a user-mode fault kills the process and returns to the shell, a kernel-mode fault panics
 - **22 flat programs + 1 ELF32 demo**: coverage includes the user shell, signal handling, shared opens, pipes, waitpid, execve, ELF32, fork heap isolation, the free-list allocator, per-process working directories, and filesystem concurrency stress
 
@@ -92,6 +92,8 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 |---|---|
 | `help` | List all commands |
 | `history [N]` | Show the last N commands; Up/Down recalls them |
+| `NAME=value` / `export NAME` / `unset NAME` | Set a local variable, export it, or remove it |
+| `set` / `env` | Show all shell variables / the exported environment |
 | `clear` | Clear the screen |
 | `meminfo` | Memory statistics (pages) |
 | `memmap` | Show the BIOS E820 memory map |
@@ -122,6 +124,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `cc file.c [args...]` | Compile and run a C program (args go to main) |
 | `run prog [args] [&]` | Run an embedded or `/bin` executable (`args` enter the initial stack; `&` = detached background) |
 | `run sh` | Re-enter the user shell from recovery mode (the normal image already starts there) |
+| `sh FILE` / `sh -c CMD` | Run a script or command string in a separate user shell |
 | `splash` | Replay the boot screen |
 
 ## 🚀 Quick Start
@@ -299,6 +302,7 @@ python3 tools/test-shell.py    # shell/pipelines/groups/stop-resume/jobs (59 che
 | 26b | Normal Ring 3 boot + boot-mode byte + recovery kernel shell/test image |
 | 27a | Shell quoting/variables/sequences + stderr redirection + EINTR and job-status fixes |
 | 27b | Globs/field splitting + Tab completion + persistent history + `SA_RESTART` |
+| 28 | In-line editing/history search + mutable env + command substitution + multiline/scripts |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 

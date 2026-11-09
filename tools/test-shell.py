@@ -76,6 +76,7 @@ KEYS = {
     "'": "apostrophe", '"': "shift-apostrophe",
     "$": "shift-4", ";": "semicolon", "\\": "backslash",
     "?": "shift-slash", "*": "shift-8",
+    "(": "shift-9", ")": "shift-0",
 }
 KEYS.update({chr(c): f"shift-{chr(c + 32)}" for c in range(ord("A"), ord("Z") + 1)})
 KEYS["="] = "equal"
@@ -169,6 +170,33 @@ try:
         name="double quotes")
     run("echo '$HOME'", "sh:/shdir>", "$HOME\n", name="single quotes")
     run('echo "$HOME"', "sh:/shdir>", "/\n", name="variable expansion")
+    run("NAME=world", "sh:/shdir>", name="local assignment")
+    run("echo hello-$NAME", "sh:/shdir>", "hello-world\n",
+        name="local variable expansion")
+    run("export NAME", "sh:/shdir>", name="export variable")
+    run("env", "sh:/shdir>", "NAME=world\n",
+        name="exported variable reaches env")
+    run("TEMP=temp env", "sh:/shdir>", "TEMP=temp\n",
+        name="temporary command environment")
+    run("echo x$TEMP", "sh:/shdir>", "x\n",
+        name="temporary environment restored")
+    run("unset NAME", "sh:/shdir>", name="unset variable")
+    run("echo after-$NAME", "sh:/shdir>", "after-\n",
+        name="unset removes variable")
+    run("echo value=$(echo nested)", "sh:/shdir>", "value=nested\n",
+        name="command substitution")
+    run("echo $(echo a; echo b)", "sh:/shdir>", "a b\n",
+        name="multiline command substitution")
+    run("echo $(echo $(echo nested2))", "sh:/shdir>", "nested2\n",
+        name="nested command substitution")
+    run("echo $(echo '$HOME')", "sh:/shdir>", "$HOME\n",
+        name="substitution output is not re-expanded")
+    run("echo $(echo 'a;b')", "sh:/shdir>", "a;b\n",
+        name="substitution output operators stay literal")
+    run("echo '$(echo literal)'", "sh:/shdir>", "$(echo literal)\n",
+        name="quoted command substitution")
+    run("sh -c \"echo dash-c\"", "sh:/shdir>", "dash-c\n",
+        name="shell dash-c command")
     run("echo escaped\\ space", "sh:/shdir>", "escaped space\n",
         name="backslash escape")
     run('echo "quoted;literal"', "sh:/shdir>", "quoted;literal\n",
@@ -191,6 +219,68 @@ try:
         name="quoted wildcard stays literal")
     run("echo /bin/sh*", "sh:/shdir>", "/bin/sh\n",
         name="absolute wildcard prefix")
+
+    mark()
+    type_text('echo "multi')
+    type_text("\n")
+    type_text('line"')
+    type_text("\n")
+    check("multiline quoted input", wait_since("multi line\n", 10,
+                                               "multiline"))
+    check("multiline prompt returns", wait_since("sh:/shdir> ", 10,
+                                                 "multiline-prompt"))
+
+    mark()
+    type_text("echo abc")
+    send("sendkey home")
+    for _ in range(5):
+        send("sendkey right")
+    type_text("X")
+    send("sendkey end")
+    type_text("\n")
+    check("home/right/end insert", wait_since("Xabc\n", 10, "home-edit"))
+    check("home edit prompt", wait_since("sh:/shdir> ", 10,
+                                         "home-edit-prompt"))
+
+    mark()
+    type_text("echo ac")
+    send("sendkey left")
+    type_text("b")
+    type_text("\n")
+    check("left-arrow insert", wait_since("abc\n", 10, "left-edit"))
+    check("left edit prompt", wait_since("sh:/shdir> ", 10,
+                                         "left-edit-prompt"))
+
+    mark()
+    type_text("echo abc")
+    send("sendkey left")
+    send("sendkey delete")
+    type_text("\n")
+    check("delete at cursor", wait_since("ab\n", 10, "delete-edit"))
+    check("delete prompt", wait_since("sh:/shdir> ", 10,
+                                      "delete-edit-prompt"))
+
+    mark()
+    type_text("echo draft-restored")
+    send("sendkey up")
+    send("sendkey down")
+    type_text("\n")
+    check("history navigation restores draft",
+          wait_since("draft-restored\n", 10, "draft-restore"))
+    check("draft restore prompt", wait_since("sh:/shdir> ", 10,
+                                             "draft-restore-prompt"))
+
+    run("echo search-seed", "sh:/shdir>", "search-seed\n",
+        name="history search seed")
+    mark()
+    send("sendkey ctrl-r")
+    type_text("search-seed")
+    send("sendkey ret")
+    send("sendkey ret")
+    check("ctrl-r history search", wait_since("search-seed\n", 10,
+                                              "history-search"))
+    check("history search prompt", wait_since("sh:/shdir> ", 10,
+                                              "history-search-prompt"))
 
     mark()
     type_text("pw")
@@ -281,8 +371,15 @@ try:
         name="unknown command")
     run("echo broken |", "sh:/>", "sh: syntax error",
         name="syntax error")
+    run("echo \"echo script-one; echo script-two\" > /script.sh",
+        "sh:/>", name="write shell script")
+    run("sh /script.sh", "sh:/>", "script-one\n",
+        name="execute shell script first line")
+    check("execute shell script second line",
+          wait_since("script-two\n", 5, "script-second"))
     run("rm /shdir/a.txt /shdir/beta.txt /shdir/alpha.txt "
-        "/shdir/note.md /shdir/err.txt /bgout", "sh:/>", name="rm utility")
+        "/shdir/note.md /shdir/err.txt /bgout /script.sh",
+        "sh:/>", name="rm utility")
     run("rm /shdir", "sh:/>", name="remove empty directory")
 
     run("echo history-persisted", "sh:/>", "history-persisted\n",

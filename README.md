@@ -11,8 +11,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-27%2F27%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-621%20Passing-brightgreen" alt="tests"/>
+  <img src="https://img.shields.io/badge/Milestones-28%2F28%20Done-blue" alt="milestones"/>
+  <img src="https://img.shields.io/badge/Tests-666%20Passing-brightgreen" alt="tests"/>
   <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
 </p>
 
@@ -37,7 +37,7 @@ NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编�
 - **特权级隔离**：TSS 内核栈切换、用户代码/数据段（DPL3）、页表 U/S 位保护——用户程序碰内核内存直接 #PF
 - **系统调用**：`int 0x80`（门 DPL3）——putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/link/truncate/sigaction/sigprocmask/sigreturn/setpgid/tcsetpgrp/kill，内核逐页校验用户传入的指针
 - **用户态信号**：`SIGINT/SIGTERM/SIGCONT` 可安装 handler 或忽略；支持 pending 位图、屏蔽字、自动屏蔽当前信号和 SysV 风格用户栈返回帧
-- **默认用户态 Shell 2.0**：正常启动直接进入 Ring 3 `sh:/>`；支持单/双引号、反斜杠、`$VAR/$?`、字段拆分、`*`/`?` 通配符、Tab 补全、上下键与持久化历史、`;`、`2>/2>&1`、四段管道、进程组、信号、作业控制与 `mv/ln/truncate/stat/ls -l`。`exit` 进入内核恢复 Shell
+- **默认用户态 Shell 3.0**：正常启动直接进入 Ring 3 `sh:/>`；支持单/双引号、反斜杠、`$VAR/$?`、字段拆分、`*`/`?` 通配符、`$(...)` 命令替换、多行输入、脚本与 `sh -c`、行内编辑、Ctrl+R 历史搜索、Tab 补全、上下键与持久化历史、可变环境、`;`、`2>/2>&1`、四段管道、进程组、信号、作业控制与 `mv/ln/truncate/stat/ls -l`。`exit` 进入内核恢复 Shell
 - **异常处理**：32 个异常处理器打印完整现场（EIP/CS/EFLAGS/ESP/CR2 + 页错误码 P/W/U 位解读），用户态异常杀进程回 shell，内核态异常 panic
 - **22 个 flat 程序 + 1 个 ELF32 演示程序**：覆盖用户 Shell、信号处理、共享打开文件、管道、waitpid、execve、ELF32、fork 堆隔离、空闲链表 allocator、每进程工作目录和文件系统并发压力测试
 
@@ -92,6 +92,8 @@ nano 风格的 `edit` 命令：
 |---|---|
 | `help` | 显示所有命令 |
 | `history [N]` | 显示最近 N 条命令；上下方向键回忆 |
+| `NAME=value` / `export NAME` / `unset NAME` | 设置局部变量、导出到环境或删除变量 |
+| `set` / `env` | 显示全部 Shell 变量 / 已导出环境 |
 | `clear` | 清屏 |
 | `meminfo` | 内存统计（页） |
 | `memmap` | 显示 BIOS E820 内存地图和各区域类型 |
@@ -122,6 +124,7 @@ nano 风格的 `edit` 命令：
 | `cc file.c [args...]` | 编译并运行 C 程序（参数传给 main） |
 | `run prog [args] [&]` | 运行内嵌或 `/bin` 程序；参数进入初始用户栈，& = detached 后台任务 |
 | `run sh` | 从恢复 Shell 再进入用户态 Shell（正式镜像默认已进入） |
+| `sh FILE` / `sh -c CMD` | 在独立用户 Shell 中执行脚本或命令串 |
 | `splash` | 重放开机画面 |
 
 ## 🚀 快速开始
@@ -304,6 +307,7 @@ python3 tools/test-shell.py    # Shell/管道/进程组/暂停恢复/作业 (59 
 | 26b | 正式镜像默认 Ring 3 Shell + 启动模式字节 + 内核恢复 Shell/测试镜像 |
 | 27a | Shell 引号/变量/分号 + stderr 重定向 + EINTR 与作业状态修复 |
 | 27b | 通配符/字段展开 + Tab 补全 + 持久化历史 + `SA_RESTART` |
+| 28 | 行内编辑/历史搜索 + 可变环境 + 命令替换 + 多行/脚本 |
 
 每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
 
