@@ -89,6 +89,11 @@ user_sigtest_start: incbin "build/sigtest.bin"
 global user_sigtest_end
 user_sigtest_end:
 
+global user_errtest_start
+user_errtest_start: incbin "build/errtest.bin"
+global user_errtest_end
+user_errtest_end:
+
 global user_vmtest_start
 user_vmtest_start: incbin "build/vmtest.bin"
 global user_vmtest_end

@@ -27,8 +27,9 @@ extern const char user_sh_start[], user_sh_end[];
 extern const char user_fdpipe_start[], user_fdpipe_end[];
 extern const char user_fscheck_start[], user_fscheck_end[];
 extern const char user_sigtest_start[], user_sigtest_end[];
+extern const char user_errtest_start[], user_errtest_end[];
 
-static user_prog_t progs[22];
+static user_prog_t progs[23];
 const user_prog_t* user_progs = progs;
 const int user_prog_count = sizeof(progs) / sizeof(progs[0]);
 
@@ -120,4 +121,8 @@ void user_progs_init(void) {
     progs[21].name = "sigtest";
     progs[21].data = (const uint8_t*)user_sigtest_start;
     progs[21].size = (uint32_t)(user_sigtest_end - user_sigtest_start);
+
+    progs[22].name = "errtest";
+    progs[22].data = (const uint8_t*)user_errtest_start;
+    progs[22].size = (uint32_t)(user_errtest_end - user_errtest_start);
 }

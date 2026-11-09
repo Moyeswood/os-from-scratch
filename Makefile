@@ -67,7 +67,7 @@ KERNEL_OBJS = $(KERNEL_DIR)/entry.o \
 # 里程碑 15 + 本地 allocator 演示；elfdemo 作为独立 ELF 镜像嵌入
 USER_PROGS = hello count crash div0 echo badptr forkdemo spinner vmtest vmguard \
              execdemo execbad waittest execargv memdemo allocdemo filedemo fdstdin \
-             sh fdpipe fscheck sigtest
+             sh fdpipe fscheck sigtest errtest
 USER_BINS  = $(patsubst %,$(BUILD_DIR)/%.bin,$(USER_PROGS))
 ELF_DEMO   = $(BUILD_DIR)/elfdemo.elf
 

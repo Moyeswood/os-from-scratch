@@ -22,6 +22,17 @@ static inline uint32_t syscall3(uint32_t n, uint32_t a, uint32_t b, uint32_t c) 
 static inline uint32_t syscall1(uint32_t n, uint32_t a) { return syscall3(n, a, 0, 0); }
 static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 
+static int errno;
+
+static inline int syscall_status(uint32_t result) {
+    int value = (int)result;
+    if (value < 0 && value >= -4095) {
+        errno = -value;
+        return -1;
+    }
+    return value;
+}
+
 #define SYS_EXIT     0   // 结束进程, 参数 = 退出码
 #define SYS_PUTC     1   // 输出一个字符 (屏幕 + 串口)
 #define SYS_PUTS     2   // 输出字符串 (指针必须指向用户区, 内核会校验)
@@ -72,11 +83,47 @@ static inline uint32_t syscall0(uint32_t n) { return syscall3(n, 0, 0, 0); }
 #define SIG_SETMASK 2
 #define SA_RESTART  0x10000000u
 
+#define EPERM           1
+#define ENOENT          2
+#define ESRCH           3
+#define EINTR           4
+#define EIO             5
+#define ENXIO           6
+#define E2BIG           7
+#define ENOEXEC         8
+#define EBADF           9
+#define ECHILD         10
+#define EAGAIN         11
+#define ENOMEM         12
+#define EACCES         13
+#define EFAULT         14
+#define EBUSY          16
+#define EEXIST         17
+#define EXDEV          18
+#define ENODEV         19
+#define ENOTDIR        20
+#define EISDIR         21
+#define EINVAL         22
+#define ENFILE         23
+#define EMFILE         24
+#define ENOTTY         25
+#define EFBIG          27
+#define ENOSPC         28
+#define ESPIPE         29
+#define EROFS          30
+#define EMLINK         31
+#define EPIPE          32
+#define EDOM           33
+#define ERANGE         34
+#define ENAMETOOLONG   36
+#define ENOSYS         38
+#define ENOTEMPTY      39
+
 typedef void (*sighandler_t)(int);
 
 static inline int sigprocmask(int how, const uint32_t* set, uint32_t* oldset) {
-    return (int)syscall3(SYS_SIGPROCMASK, (uint32_t)how,
-                         (uint32_t)set, (uint32_t)oldset);
+    return syscall_status(syscall3(SYS_SIGPROCMASK, (uint32_t)how,
+                                   (uint32_t)set, (uint32_t)oldset));
 }
 
 __attribute__((naked)) static void signal_trampoline(void) {
@@ -88,9 +135,10 @@ __attribute__((naked)) static void signal_trampoline(void) {
 }
 
 static inline sighandler_t signal(int sig, sighandler_t handler) {
-    return (sighandler_t)syscall3(SYS_SIGACTION, (uint32_t)sig,
-                                  (uint32_t)handler,
-                                  (uint32_t)signal_trampoline);
+    int result = syscall_status(syscall3(SYS_SIGACTION, (uint32_t)sig,
+                                         (uint32_t)handler,
+                                         (uint32_t)signal_trampoline));
+    return (sighandler_t)result;
 }
 
 // signal() deliberately remains the small three-argument ABI. This helper
@@ -136,7 +184,6 @@ typedef struct {
 #define SEEK_CUR 1
 #define SEEK_END 2
 
-#define EINTR 4
 #define SYS_RESTART 0xFFFFFFFDu
 
 // 与 kernel/vm.h 保持一致的用户虚拟布局。
@@ -157,120 +204,129 @@ static inline void exit(int code) {
 }
 
 static inline void putc(char c) { syscall1(SYS_PUTC, (uint32_t)(uint8_t)c); }
-static inline int  puts(const char* s) { return (int)syscall1(SYS_PUTS, (uint32_t)s); }
+static inline int puts(const char* s) {
+    return syscall_status(syscall1(SYS_PUTS, (uint32_t)s));
+}
 static inline int  getkey(void) {
-    int result;
+    uint32_t result;
     do {
-        result = (int)syscall1(SYS_GETKEY, 0);
-    } while ((uint32_t)result == SYS_RESTART);
-    return result;
+        result = syscall1(SYS_GETKEY, 0);
+    } while (result == SYS_RESTART);
+    return syscall_status(result);
 }
 static inline uint32_t ticks(void) { return syscall0(SYS_GETTICKS); }
-static inline int  fork(void) { return (int)syscall0(SYS_FORK); }
+static inline int  fork(void) { return syscall_status(syscall0(SYS_FORK)); }
 static inline int  getpid(void) { return (int)syscall0(SYS_GETPID); }
 static inline void sleep(uint32_t n) { syscall1(SYS_SLEEP, n); }
 static inline void* brk(void* address) {
-    return (void*)syscall1(SYS_BRK, (uint32_t)address);
+    int result = syscall_status(syscall1(SYS_BRK, (uint32_t)address));
+    return result < 0 ? (void*)-1 : (void*)result;
 }
 static inline void* mmap(uint32_t length) {
-    return (void*)syscall1(SYS_MMAP, length);
+    int result = syscall_status(syscall1(SYS_MMAP, length));
+    return result < 0 ? (void*)-1 : (void*)result;
 }
 static inline int execve(const char* path, char* const argv[],
                          char* const envp[]) {
-    return (int)syscall3(SYS_EXEC, (uint32_t)path, (uint32_t)argv,
-                         (uint32_t)envp);
+    return syscall_status(syscall3(SYS_EXEC, (uint32_t)path,
+                                   (uint32_t)argv, (uint32_t)envp));
 }
 static inline int exec(const char* path) {
     return execve(path, 0, 0);
 }
 static inline int waitpid(int pid, int* status) {
-    int result;
+    uint32_t result;
     do {
-        result = (int)syscall3(SYS_WAITPID, (uint32_t)pid,
-                               (uint32_t)status, 0);
-    } while ((uint32_t)result == SYS_RESTART);
-    return result;
+        result = syscall3(SYS_WAITPID, (uint32_t)pid,
+                          (uint32_t)status, 0);
+    } while (result == SYS_RESTART);
+    return syscall_status(result);
 }
 static inline int waitpid_flags(int pid, int* status, int flags) {
-    int result;
+    uint32_t result;
     do {
-        result = (int)syscall3(SYS_WAITPID, (uint32_t)pid, (uint32_t)status,
-                               (uint32_t)flags);
-    } while ((uint32_t)result == SYS_RESTART);
-    return result;
+        result = syscall3(SYS_WAITPID, (uint32_t)pid, (uint32_t)status,
+                          (uint32_t)flags);
+    } while (result == SYS_RESTART);
+    return syscall_status(result);
 }
 static inline int open(const char* path, uint32_t flags) {
-    return (int)syscall3(SYS_OPEN, (uint32_t)path, flags, 0);
+    return syscall_status(syscall3(SYS_OPEN, (uint32_t)path, flags, 0));
 }
 static inline int read(int fd, void* buf, uint32_t count) {
-    int result;
+    uint32_t result;
     do {
-        result = (int)syscall3(SYS_READ, (uint32_t)fd, (uint32_t)buf, count);
-    } while ((uint32_t)result == SYS_RESTART);
-    return result;
+        result = syscall3(SYS_READ, (uint32_t)fd, (uint32_t)buf, count);
+    } while (result == SYS_RESTART);
+    return syscall_status(result);
 }
 static inline int write(int fd, const void* buf, uint32_t count) {
-    int result;
+    uint32_t result;
     do {
-        result = (int)syscall3(SYS_WRITE, (uint32_t)fd, (uint32_t)buf, count);
-    } while ((uint32_t)result == SYS_RESTART);
-    return result;
+        result = syscall3(SYS_WRITE, (uint32_t)fd, (uint32_t)buf, count);
+    } while (result == SYS_RESTART);
+    return syscall_status(result);
 }
 static inline int close(int fd) {
-    return (int)syscall1(SYS_CLOSE, (uint32_t)fd);
+    return syscall_status(syscall1(SYS_CLOSE, (uint32_t)fd));
 }
 static inline int lseek(int fd, int offset, int whence) {
-    return (int)syscall3(SYS_LSEEK, (uint32_t)fd, (uint32_t)offset,
-                         (uint32_t)whence);
+    return syscall_status(syscall3(SYS_LSEEK, (uint32_t)fd,
+                                   (uint32_t)offset, (uint32_t)whence));
 }
 static inline int chdir(const char* path) {
-    return (int)syscall1(SYS_CHDIR, (uint32_t)path);
+    return syscall_status(syscall1(SYS_CHDIR, (uint32_t)path));
 }
 static inline char* getcwd(char* buf, uint32_t size) {
-    return (int)syscall3(SYS_GETCWD, (uint32_t)buf, size, 0) == 0 ? buf : 0;
+    return syscall_status(syscall3(SYS_GETCWD, (uint32_t)buf, size, 0)) < 0
+           ? 0 : buf;
 }
 static inline int mkdir(const char* path) {
-    return (int)syscall1(SYS_MKDIR, (uint32_t)path);
+    return syscall_status(syscall1(SYS_MKDIR, (uint32_t)path));
 }
 static inline int pipe(int fds[2]) {
-    return (int)syscall1(SYS_PIPE, (uint32_t)fds);
+    return syscall_status(syscall1(SYS_PIPE, (uint32_t)fds));
 }
 static inline int dup(int fd) {
-    return (int)syscall1(SYS_DUP, (uint32_t)fd);
+    return syscall_status(syscall1(SYS_DUP, (uint32_t)fd));
 }
 static inline int dup2(int oldfd, int newfd) {
-    return (int)syscall3(SYS_DUP2, (uint32_t)oldfd, (uint32_t)newfd, 0);
+    return syscall_status(syscall3(SYS_DUP2, (uint32_t)oldfd,
+                                   (uint32_t)newfd, 0));
 }
 static inline int remove(const char* path) {
-    return (int)syscall1(SYS_REMOVE, (uint32_t)path);
+    return syscall_status(syscall1(SYS_REMOVE, (uint32_t)path));
 }
 static inline int readdir(const char* path, uint32_t index,
                           user_dirent_t* entry) {
-    return (int)syscall3(SYS_READDIR, (uint32_t)path, index,
-                         (uint32_t)entry);
+    return syscall_status(syscall3(SYS_READDIR, (uint32_t)path, index,
+                                   (uint32_t)entry));
 }
 static inline int rename(const char* oldpath, const char* newpath) {
-    return (int)syscall3(SYS_RENAME, (uint32_t)oldpath,
-                         (uint32_t)newpath, 0);
+    return syscall_status(syscall3(SYS_RENAME, (uint32_t)oldpath,
+                                   (uint32_t)newpath, 0));
 }
 static inline int stat(const char* path, user_stat_t* info) {
-    return (int)syscall3(SYS_STAT, (uint32_t)path, (uint32_t)info, 0);
+    return syscall_status(syscall3(SYS_STAT, (uint32_t)path,
+                                   (uint32_t)info, 0));
 }
 static inline int link(const char* oldpath, const char* newpath) {
-    return (int)syscall3(SYS_LINK, (uint32_t)oldpath,
-                         (uint32_t)newpath, 0);
+    return syscall_status(syscall3(SYS_LINK, (uint32_t)oldpath,
+                                   (uint32_t)newpath, 0));
 }
 static inline int truncate(const char* path, uint32_t size) {
-    return (int)syscall3(SYS_TRUNCATE, (uint32_t)path, size, 0);
+    return syscall_status(syscall3(SYS_TRUNCATE, (uint32_t)path, size, 0));
 }
 static inline int setpgid(int pid, int pgid) {
-    return (int)syscall3(SYS_SETPGID, (uint32_t)pid, (uint32_t)pgid, 0);
+    return syscall_status(syscall3(SYS_SETPGID, (uint32_t)pid,
+                                   (uint32_t)pgid, 0));
 }
 static inline int tcsetpgrp(int pgid) {
-    return (int)syscall1(SYS_TCSETPGRP, (uint32_t)pgid);
+    return syscall_status(syscall1(SYS_TCSETPGRP, (uint32_t)pgid));
 }
 static inline int kill(int pid, int sig) {
-    return (int)syscall3(SYS_KILL, (uint32_t)pid, (uint32_t)sig, 0);
+    return syscall_status(syscall3(SYS_KILL, (uint32_t)pid,
+                                   (uint32_t)sig, 0));
 }
 
 // 里程碑 12 的 sbrk 接口在里程碑 13 的 brk 之上保持兼容。

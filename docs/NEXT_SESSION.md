@@ -1,14 +1,14 @@
 # 下次开发交接
 
-更新时间：2026-11-09
+更新时间：2026-11-10
 
 ## 当前稳定状态
 
 - 项目目录：`/home/mfw/Documents/claude001/NewOS`
 - 分支：`main`
-- 当前进度：里程碑 28（Shell 3.0）完成
-- 回归：Shell 146 项、用户态键盘、fd 与默认 Ring 3 启动通过
-- 最终内核镜像 258212 字节，低于 448KB（458752 字节）加载上限
+- 当前进度：里程碑 29（错误码与脚本状态）完成
+- 回归：Shell 155 项、fd+errno、信号、exec/process/ELF32 通过
+- 最终内核镜像 259204 字节，低于 448KB（458752 字节）加载上限
 
 ## 今日完成
 
@@ -41,12 +41,15 @@
     持久化历史、上下键导航与 `SA_RESTART` 自动重启。
 16. 里程碑 28：左右/Home/End/Delete、Ctrl+R 历史搜索、草稿恢复、
     可变环境、`$()` 命令替换、多行输入、脚本与 `sh -c`。
+17. 里程碑 29：负 errno syscall ABI、用户 errno 兼容层、23 个
+    `/bin` 程序、脚本与 `sh -c` 退出状态传播。
 
 关键文档：
 
 - `docs/SESSION_2026-11-08_HANDOFF.md`（今日任务与明日起点）
 - `docs/SESSION_2026-11-09_HANDOFF.md`（27b 完成情况）
 - `docs/MILESTONE_28_SHELL_V3.md`（Shell 3.0 设计记录）
+- `docs/MILESTONE_29_ERRORS.md`（错误码与脚本状态设计）
 - `docs/MILESTONE_13_VM.md`
 - `docs/MILESTONE_14_EXEC.md`
 - `docs/MILESTONE_15_PROCESS_ELF.md`
@@ -125,13 +128,21 @@ make test-fs-journal
 - 未闭合引号/`$()`/尾部反斜杠的多行输入。
 - `sh FILE` 脚本执行与 `sh -c CMD`。
 
-## 下次建议：里程碑 29（Shell 稳定性与错误码）
+## 已完成：里程碑 29（错误码与脚本状态）
 
-1. 统一 POSIX 错误码，减少所有失败都返回 `-1`。
-2. 修正赋值右侧字段拆分与命令替换非零状态的 `$?`。
-3. 脚本支持续行、跨行引号和退出状态传播。
-4. 为 glob/Tab/历史/环境增加独立边界压力测试。
-5. 评估命令替换 1KB 上限，改为可回收用户堆缓冲。
+- 内核 syscall 返回负 errno；用户库设置 `errno` 并保持 API 返回 `-1`。
+- `errtest` 覆盖 ENOENT/EISDIR/ENOTDIR/EBADF/EFAULT/EEXIST/ERANGE/
+  EPIPE/ESRCH/ECHILD 等错误。
+- `exit [N]`、`sh -c "exit N"` 和脚本 `exit N` 传播非零状态。
+- `/bin` 用户程序从 22 个增至 23 个。
+
+## 下次建议：里程碑 30（Shell 控制流）
+
+1. `&&`、`||`、`!` 和括号分组。
+2. `if/for/while/case`。
+3. `test`/`[`、Shell 函数和 positional parameters。
+4. 命令替换非零状态与赋值命令 `$?`。
+5. 脚本跨行引号、续行和行号错误。
 
 ## 当前已知限制
 
@@ -139,7 +150,8 @@ make test-fs-journal
 - 用户态信号已有 pending/mask/handler/sigreturn；键盘/pipe/waitpid
   支持 `SA_RESTART`，文件系统锁等待不返回 EINTR。
 - Shell 已支持行内编辑、Ctrl+R、可变环境、命令替换、多行和脚本；
-  错误码、赋值字段语义和脚本退出状态仍需统一。
+  赋值字段语义和命令替换 `$?` 仍需完善。
+- errno 当前是单翻译单元静态值；复杂文件系统失败仍常归并为 EIO。
 - argv 上限 16，envp 上限 8，参数文本上限 3KB。
 - 文件系统为 1MB 持久化 FS；结构上已支持一级间接块，实际单文件上限
   受磁盘容量约束。
@@ -157,6 +169,8 @@ cd /home/mfw/Documents/claude001/NewOS
 git status --short --branch
 make -j4
 python3 tools/test-fd.py
+python3 tools/test-signals.py
+python3 tools/test-exec.py
 python3 tools/test-shell.py
 python3 tools/test-disk.py
 python3 tools/test-fs2.py

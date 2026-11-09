@@ -377,8 +377,27 @@ try:
         name="execute shell script first line")
     check("execute shell script second line",
           wait_since("script-two\n", 5, "script-second"))
+    mark()
+    type_text("sh -c \"exit 7\"\n")
+    check("sh -c propagates exit status",
+          wait_since("(sh) exited code=0x00000007", 10,
+                     "sh-c-exit-status"))
+    check("sh -c restores shell prompt",
+          wait_since("sh:/> ", 10, "sh-c-status-prompt"))
+    run("echo dash-c-status=$?", "sh:/>", "dash-c-status=7\n",
+        name="sh -c status reaches dollar-question")
+    run("echo \"exit 9\" > /exit.sh", "sh:/>", name="write exit script")
+    mark()
+    type_text("sh /exit.sh\n")
+    check("script propagates exit status",
+          wait_since("(sh) exited code=0x00000009", 10,
+                     "script-exit-status"))
+    check("script exit restores shell prompt",
+          wait_since("sh:/> ", 10, "script-exit-prompt"))
+    run("echo script-status=$?", "sh:/>", "script-status=9\n",
+        name="script status reaches dollar-question")
     run("rm /shdir/a.txt /shdir/beta.txt /shdir/alpha.txt "
-        "/shdir/note.md /shdir/err.txt /bgout /script.sh",
+        "/shdir/note.md /shdir/err.txt /bgout /script.sh /exit.sh",
         "sh:/>", name="rm utility")
     run("rm /shdir", "sh:/>", name="remove empty directory")
 

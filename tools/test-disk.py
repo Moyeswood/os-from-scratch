@@ -196,7 +196,7 @@ def main():
               "[FS] no filesystem on disk" not in log)
         check("fs: mounted selftest", "[FS] selftest PASS" in log)
         check("bin: startup install is idempotent",
-              "[EXEC] installed 0x00000016/0x00000016 programs in /bin" in log)
+              "[EXEC] installed 0x00000017/0x00000017 programs in /bin" in log)
         check("fs: directory survives reboot",
               second.run("cd /persist", "[SH] cwd: /persist"),
               second.since()[-200:])

@@ -178,7 +178,7 @@ int fd_file_seek(task_file_t* file, int offset, int whence) {
 
 int fd_pipe_read(task_file_t* file, void* buf, uint32_t count) {
     if (!file || file->kind != FILE_PIPE ||
-        file->pipe_end != PIPE_READ_END || !count) return -1;
+        file->pipe_end != PIPE_READ_END || !count) return KERR(EINVAL);
 
     kernel_pipe_t* pipe = file->pipe;
     uint8_t* dst = (uint8_t*)buf;
@@ -201,7 +201,7 @@ int fd_pipe_read(task_file_t* file, void* buf, uint32_t count) {
         }
         if (proc_signal_pending_current()) {
             irq_restore(flags);
-            return -1;
+            return KERR(EINTR);
         }
         if (!pipe->writers) {
             irq_restore(flags);
@@ -213,7 +213,7 @@ int fd_pipe_read(task_file_t* file, void* buf, uint32_t count) {
 
 int fd_pipe_write(task_file_t* file, const void* buf, uint32_t count) {
     if (!file || file->kind != FILE_PIPE ||
-        file->pipe_end != PIPE_WRITE_END || !count) return -1;
+        file->pipe_end != PIPE_WRITE_END || !count) return KERR(EINVAL);
 
     kernel_pipe_t* pipe = file->pipe;
     const uint8_t* src = (const uint8_t*)buf;
@@ -222,7 +222,7 @@ int fd_pipe_write(task_file_t* file, const void* buf, uint32_t count) {
     while (done < count) {
         if (!pipe->readers) {
             irq_restore(flags);
-            return done ? (int)done : -1;
+            return done ? (int)done : KERR(EPIPE);
         }
         if (pipe->used < PIPE_CAPACITY) {
             while (done < count && pipe->used < PIPE_CAPACITY) {
@@ -239,7 +239,7 @@ int fd_pipe_write(task_file_t* file, const void* buf, uint32_t count) {
         }
         if (proc_signal_pending_current()) {
             irq_restore(flags);
-            return done ? (int)done : -1;
+            return done ? (int)done : KERR(EINTR);
         }
         task_sleep_switch_locked(TASK_WAIT_PIPE, 0);
     }

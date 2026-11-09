@@ -162,8 +162,8 @@ def main():
         log = first.log()
         check("fs2: blank disk formatted",
               "[FS] no filesystem on disk, formatting" in log)
-        check("fs2: 22 programs installed",
-              "[EXEC] installed 0x00000016/0x00000016 programs in /bin" in log)
+        check("fs2: 23 programs installed",
+              "[EXEC] installed 0x00000017/0x00000017 programs in /bin" in log)
 
         first.mark()
         first.type_text("run fscheck\n")

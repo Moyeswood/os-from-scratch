@@ -164,6 +164,34 @@ try:
         check(name, wait_since(needle, 20.0, name))
 
     mark()
+    type_text("run errtest\n")
+    errno_expected = [
+        ("missing open", "[ERR] missing-open=1"),
+        ("directory open", "[ERR] directory-open=1"),
+        ("bad fd close", "[ERR] bad-close=1"),
+        ("bad fd read", "[ERR] bad-read-fd=1"),
+        ("missing chdir", "[ERR] missing-chdir=1"),
+        ("mkdir create", "[ERR] mkdir-create=1"),
+        ("mkdir exists", "[ERR] mkdir-exists=1"),
+        ("file create", "[ERR] file-create=1"),
+        ("file write", "[ERR] file-write=1"),
+        ("file not directory", "[ERR] file-not-dir=1"),
+        ("bad read pointer", "[ERR] bad-read-pointer=1"),
+        ("missing stat", "[ERR] missing-stat=1"),
+        ("bad stat pointer", "[ERR] bad-stat-pointer=1"),
+        ("cwd range", "[ERR] cwd-range=1"),
+        ("pipe create", "[ERR] pipe-create=1"),
+        ("pipe no reader", "[ERR] pipe-no-reader=1"),
+        ("missing executable", "[ERR] missing-exec=1"),
+        ("missing process", "[ERR] missing-kill=1"),
+        ("missing child", "[ERR] missing-child=1"),
+        ("errno checks", "[ERR] done=1"),
+        ("errno process exit", "(errtest) exited code=0x00000000"),
+    ]
+    for name, needle in errno_expected:
+        check(name, wait_since(needle, 20.0, name))
+
+    mark()
     type_text("run fdstdin\n")
     check("stdin: program starts", wait_since("[FD] stdin-ready", 10.0, "stdin-ready"))
     type_text("hello\n")

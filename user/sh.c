@@ -45,6 +45,7 @@ static char shell_env_storage[ENV_MAX][ENV_TEXT_MAX];
 static unsigned char shell_env_exported[ENV_MAX];
 static int shell_env_count;
 static int last_status;
+static int shell_exit_status;
 static char history[HISTORY_MAX][LINE_MAX];
 static int history_count;
 static int history_index;
@@ -1204,6 +1205,10 @@ static int execute_pipeline(command_t cmds[PIPE_MAX], int count,
     if (count == 1 && !background && is_parent_builtin(&cmds[0])) {
         const char* name = basename(cmds[0].argv[0]);
         if (scmp(name, "exit") == 0) {
+            int code = last_status;
+            if (cmds[0].argc > 1)
+                parse_number(cmds[0].argv[1], &code);
+            shell_exit_status = code & 0xFF;
             for (int i = 0; i < JOB_MAX; ++i)
                 if (jobs[i].used) kill(-jobs[i].pgid, SIGTERM);
             return -1;
@@ -1853,7 +1858,7 @@ static int execute_script_file(const char* path) {
                     int status = execute_line(line + start);
                     if (status < 0) {
                         close(fd);
-                        return 0;
+                        return shell_exit_status;
                     }
                     last = status;
                 }
@@ -2059,7 +2064,7 @@ static int shell_loop(void) {
         continuation_prompt = 0;
         reap_background();
         if (*line) history_record(line);
-        if (execute_line(line) < 0) return 0;
+        if (execute_line(line) < 0) return shell_exit_status;
         shell_prompt();
     }
 }
@@ -2087,7 +2092,8 @@ void _start(int argc, char** argv, char** envp) {
         if (argc > 2 && scmp(argv[1], "-c") == 0) {
             char command[LINE_MAX];
             scopy(command, argv[2], sizeof(command));
-            exit(execute_line(command) < 0 ? 0 : last_status);
+            int status = execute_line(command);
+            exit(status < 0 ? shell_exit_status : last_status);
         }
         if (argc > 1) exit(execute_script_file(argv[1]));
         history_load();

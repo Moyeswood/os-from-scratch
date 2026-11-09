@@ -48,7 +48,7 @@ static int sys_puts(const char* s) {
     if ((uint32_t)s < USER_BASE || (uint32_t)s >= USER_BASE + USER_SIZE ||
         !vm_user_range_ok(me, (uint32_t)s, 1)) {
         serial_puts("[SYS] puts: rejected kernel pointer\n\r");
-        return -1;
+        return KERR(EFAULT);
     }
     // 读循环也限在用户区内: 字符串若越过 36MB 边界, 停住返回
     // (否则内核读到未映射页 → 内核态 #PF panic, 用户可借此 DoS)
@@ -59,7 +59,7 @@ static int sys_puts(const char* s) {
         s++;
         if (s < region_end && !vm_user_range_ok(me, (uint32_t)s, 1)) {
             serial_puts("\n\r[SYS] puts: rejected unmapped page\n\r");
-            return -1;
+            return KERR(EFAULT);
         }
     }
     return 0;
@@ -123,7 +123,8 @@ static int sys_fd_alloc(task_t* t) {
 
 static int sys_open(task_t* me, const char* user_path, uint32_t flags) {
     char path[FS_PATH_MAX];
-    if (copy_user_path(path, sizeof(path), user_path) < 0) return -1;
+    if (copy_user_path(path, sizeof(path), user_path) < 0)
+        return KERR(EFAULT);
 
     int readable = (flags & O_RDONLY) != 0;
     int writable = (flags & O_WRONLY) != 0;
@@ -133,16 +134,17 @@ static int sys_open(task_t* me, const char* user_path, uint32_t flags) {
     if (inum < 0 && (flags & O_CREAT)) {
         inum = fs_create(path, FS_FILE);
     }
-    if (inum < 0 || fs_inode_type((uint32_t)inum) != FS_FILE) return -1;
+    if (inum < 0) return KERR(ENOENT);
+    if (fs_inode_type((uint32_t)inum) != FS_FILE) return KERR(EISDIR);
     if ((flags & O_TRUNC) && writable && fs_truncate((uint32_t)inum) < 0)
-        return -1;
+        return KERR(EIO);
 
     int fd = sys_fd_alloc(me);
-    if (fd < 0) return -1;
+    if (fd < 0) return KERR(EMFILE);
     task_file_t* file = fd_file_new((uint32_t)inum, (uint8_t)readable,
                                     (uint8_t)writable,
                                     (flags & O_APPEND) != 0);
-    if (!file) return -1;
+    if (!file) return KERR(ENOMEM);
     me->fds[fd] = file;
     serial_puts("[FD] open ");
     serial_puts(path);
@@ -154,8 +156,9 @@ static int sys_open(task_t* me, const char* user_path, uint32_t flags) {
 
 static int sys_read(task_t* me, int fd, void* user_buf, uint32_t count) {
     task_file_t* f = sys_fd(me, fd);
-    if (!f || !user_buf ||
-        !vm_user_range_ok(me, (uint32_t)user_buf, count)) return -1;
+    if (!f) return KERR(EBADF);
+    if (!user_buf || !vm_user_range_ok(me, (uint32_t)user_buf, count))
+        return KERR(EFAULT);
     if (!count) return 0;
 
     if (f == fd_stdin()) {
@@ -167,22 +170,22 @@ static int sys_read(task_t* me, int fd, void* user_buf, uint32_t count) {
             if (c < 0) {
                 if (!got)
                     return proc_signal_restart_current() ?
-                           (int)SYS_RESTART : -1;
+                           (int)SYS_RESTART : KERR(EINTR);
                 break;
             }
             tmp[got++] = (uint8_t)c;
             if (c == '\n') break;
         }
         if (got && vm_write_user(me, (uint32_t)user_buf, tmp, got) < 0)
-            return -1;
+            return KERR(EFAULT);
         return (int)got;
     }
-    if (f == fd_stdout()) return -1;
+    if (f == fd_stdout()) return KERR(EBADF);
     int total = fd_is_pipe(f) ?
         fd_pipe_read(f, user_buf, count) :
         fd_file_read(f, user_buf, count);
     if ((uint32_t)total == SYS_RESTART) return total;
-    if (total < 0) return -1;
+    if (total < 0) return total < -1 ? total : KERR(EIO);
     serial_puts("[FD] read fd=");
     serial_put_hex((uint32_t)fd);
     serial_puts(" bytes=");
@@ -193,8 +196,9 @@ static int sys_read(task_t* me, int fd, void* user_buf, uint32_t count) {
 
 static int sys_write(task_t* me, int fd, const void* user_buf, uint32_t count) {
     task_file_t* f = sys_fd(me, fd);
-    if (!f || !user_buf ||
-        !vm_user_range_ok(me, (uint32_t)user_buf, count)) return -1;
+    if (!f) return KERR(EBADF);
+    if (!user_buf || !vm_user_range_ok(me, (uint32_t)user_buf, count))
+        return KERR(EFAULT);
     if (!count) return 0;
 
     if (f == fd_stdout()) {
@@ -205,12 +209,12 @@ static int sys_write(task_t* me, int fd, const void* user_buf, uint32_t count) {
         }
         return (int)count;
     }
-    if (f == fd_stdin()) return -1;
+    if (f == fd_stdin()) return KERR(EBADF);
     int wrote = fd_is_pipe(f) ?
         fd_pipe_write(f, user_buf, count) :
         fd_file_write(f, user_buf, count);
     if ((uint32_t)wrote == SYS_RESTART) return wrote;
-    if (wrote < 0) return -1;
+    if (wrote < 0) return wrote < -1 ? wrote : KERR(EIO);
     serial_puts("[FD] write fd=");
     serial_put_hex((uint32_t)fd);
     serial_puts(" bytes=");
@@ -225,7 +229,7 @@ static int sys_lseek(task_t* me, int fd, int offset, int whence) {
 
 static int sys_close(task_t* me, int fd) {
     task_file_t* f = sys_fd(me, fd);
-    if (!f) return -1;
+    if (!f) return KERR(EBADF);
     me->fds[fd] = 0;
     fd_release(f);
     return fs_flush();
@@ -234,25 +238,25 @@ static int sys_close(task_t* me, int fd) {
 static int sys_pipe(task_t* me, int* user_fds) {
     if (!user_fds || !vm_user_range_ok(me, (uint32_t)user_fds,
                                        sizeof(int) * 2))
-        return -1;
+        return KERR(EFAULT);
 
     int fd_in = sys_fd_alloc(me);
-    if (fd_in < 0) return -1;
+    if (fd_in < 0) return KERR(EMFILE);
     me->fds[fd_in] = (task_file_t*)1;   // 占位，确保两个端点拿到不同槽位
     int fd_out = sys_fd_alloc(me);
     me->fds[fd_in] = 0;
-    if (fd_out < 0) return -1;
+    if (fd_out < 0) return KERR(EMFILE);
 
     task_file_t* reader = 0;
     task_file_t* writer = 0;
-    if (fd_pipe_pair(&reader, &writer) < 0) return -1;
+    if (fd_pipe_pair(&reader, &writer) < 0) return KERR(ENOMEM);
     me->fds[fd_in] = reader;
     me->fds[fd_out] = writer;
     int pair[2] = { fd_in, fd_out };
     if (vm_write_user(me, (uint32_t)user_fds, pair, sizeof(pair)) < 0) {
         sys_close(me, fd_in);
         sys_close(me, fd_out);
-        return -1;
+        return KERR(EFAULT);
     }
     serial_puts("[FD] pipe read=");
     serial_put_hex((uint32_t)fd_in);
@@ -265,7 +269,8 @@ static int sys_pipe(task_t* me, int* user_fds) {
 static int sys_dup(task_t* me, int fd) {
     task_file_t* file = sys_fd(me, fd);
     int fresh = sys_fd_alloc(me);
-    if (!file || fresh < 0) return -1;
+    if (!file) return KERR(EBADF);
+    if (fresh < 0) return KERR(EMFILE);
     fd_retain(file);
     me->fds[fresh] = file;
     return fresh;
@@ -273,7 +278,8 @@ static int sys_dup(task_t* me, int fd) {
 
 static int sys_dup2(task_t* me, int oldfd, int newfd) {
     task_file_t* file = sys_fd(me, oldfd);
-    if (!file || newfd < 0 || newfd >= TASK_FD_MAX) return -1;
+    if (!file) return KERR(EBADF);
+    if (newfd < 0 || newfd >= TASK_FD_MAX) return KERR(EBADF);
     if (oldfd == newfd) return newfd;
     fd_retain(file);
     task_file_t* old = me->fds[newfd];
@@ -284,8 +290,10 @@ static int sys_dup2(task_t* me, int oldfd, int newfd) {
 
 static int sys_remove(task_t* me, const char* user_path) {
     char path[FS_PATH_MAX];
-    if (copy_user_path(path, sizeof(path), user_path) < 0) return -1;
-    return fs_remove(path);
+    if (copy_user_path(path, sizeof(path), user_path) < 0)
+        return KERR(EFAULT);
+    if (fs_lookup(path) < 0) return KERR(ENOENT);
+    return fs_remove(path) < 0 ? KERR(ENOTEMPTY) : 0;
 }
 
 static int sys_readdir(task_t* me, const char* user_path, uint32_t index,
@@ -297,11 +305,13 @@ static int sys_readdir(task_t* me, const char* user_path, uint32_t index,
     if (!user_entry ||
         !vm_user_range_ok(me, (uint32_t)user_entry, sizeof(entry)) ||
         copy_user_path(path, sizeof(path), user_path) < 0)
-        return -1;
+        return KERR(EFAULT);
     int dir = fs_lookup(path);
-    if (dir < 0) return -1;
+    if (dir < 0) return KERR(ENOENT);
+    if (fs_inode_type((uint32_t)dir) != FS_DIR) return KERR(ENOTDIR);
     int got = fs_readdir((uint32_t)dir, index, name, &inum, &type, &size);
-    if (got <= 0) return got;
+    if (got < 0) return KERR(EIO);
+    if (!got) return 0;
     k_memset(&entry, 0, sizeof(entry));
     entry.inum = inum;
     entry.type = type;
@@ -309,32 +319,40 @@ static int sys_readdir(task_t* me, const char* user_path, uint32_t index,
     for (int i = 0; i < (int)sizeof(entry.name) - 1 && name[i]; ++i)
         entry.name[i] = name[i];
     if (vm_write_user(me, (uint32_t)user_entry, &entry, sizeof(entry)) < 0)
-        return -1;
+        return KERR(EFAULT);
     return 1;
 }
 
 static int sys_chdir(task_t* me, const char* user_path) {
     (void)me;
     char path[FS_PATH_MAX];
-    if (copy_user_path(path, sizeof(path), user_path) < 0) return -1;
-    return fs_chdir(path);
+    if (copy_user_path(path, sizeof(path), user_path) < 0)
+        return KERR(EFAULT);
+    int inum = fs_lookup(path);
+    if (inum < 0) return KERR(ENOENT);
+    if (fs_inode_type((uint32_t)inum) != FS_DIR) return KERR(ENOTDIR);
+    return fs_chdir(path) < 0 ? KERR(EIO) : 0;
 }
 
 static int sys_getcwd(task_t* me, char* user_buf, uint32_t size) {
     if (!user_buf || size == 0 ||
-        !vm_user_range_ok(me, (uint32_t)user_buf, size)) return -1;
+        !vm_user_range_ok(me, (uint32_t)user_buf, size))
+        return KERR(EFAULT);
     char path[FS_PATH_MAX];
     fs_pwd(path);
     uint32_t len = k_strlen(path) + 1;
-    if (len > size) return -1;
-    return vm_write_user(me, (uint32_t)user_buf, path, len);
+    if (len > size) return KERR(ERANGE);
+    return vm_write_user(me, (uint32_t)user_buf, path, len) < 0 ?
+           KERR(EFAULT) : 0;
 }
 
 static int sys_mkdir(task_t* me, const char* user_path) {
     (void)me;
     char path[FS_PATH_MAX];
-    if (copy_user_path(path, sizeof(path), user_path) < 0) return -1;
-    return fs_create(path, FS_DIR) < 0 ? -1 : 0;
+    if (copy_user_path(path, sizeof(path), user_path) < 0)
+        return KERR(EFAULT);
+    if (fs_lookup(path) >= 0) return KERR(EEXIST);
+    return fs_create(path, FS_DIR) < 0 ? KERR(ENOENT) : 0;
 }
 
 static int sys_rename(task_t* me, const char* user_old, const char* user_new) {
@@ -343,8 +361,9 @@ static int sys_rename(task_t* me, const char* user_old, const char* user_new) {
     char newpath[FS_PATH_MAX];
     if (copy_user_path(oldpath, sizeof(oldpath), user_old) < 0 ||
         copy_user_path(newpath, sizeof(newpath), user_new) < 0)
-        return -1;
-    return fs_rename(oldpath, newpath);
+        return KERR(EFAULT);
+    if (fs_lookup(oldpath) < 0) return KERR(ENOENT);
+    return fs_rename(oldpath, newpath) < 0 ? KERR(EIO) : 0;
 }
 
 static int sys_link(task_t* me, const char* user_old, const char* user_new) {
@@ -353,17 +372,22 @@ static int sys_link(task_t* me, const char* user_old, const char* user_new) {
     char newpath[FS_PATH_MAX];
     if (copy_user_path(oldpath, sizeof(oldpath), user_old) < 0 ||
         copy_user_path(newpath, sizeof(newpath), user_new) < 0)
-        return -1;
-    return fs_link(oldpath, newpath);
+        return KERR(EFAULT);
+    if (fs_lookup(oldpath) < 0) return KERR(ENOENT);
+    if (fs_lookup(newpath) >= 0) return KERR(EEXIST);
+    return fs_link(oldpath, newpath) < 0 ? KERR(EIO) : 0;
 }
 
 static int sys_truncate(task_t* me, const char* user_path, uint32_t size) {
     (void)me;
     char path[FS_PATH_MAX];
-    if (copy_user_path(path, sizeof(path), user_path) < 0) return -1;
+    if (copy_user_path(path, sizeof(path), user_path) < 0)
+        return KERR(EFAULT);
     int inum = fs_lookup(path);
-    if (inum < 0 || fs_truncate_size((uint32_t)inum, size) < 0) return -1;
-    return fs_flush();
+    if (inum < 0) return KERR(ENOENT);
+    if (fs_inode_type((uint32_t)inum) == FS_DIR) return KERR(EISDIR);
+    if (fs_truncate_size((uint32_t)inum, size) < 0) return KERR(EIO);
+    return fs_flush() < 0 ? KERR(EIO) : 0;
 }
 
 static int sys_stat(task_t* me, const char* user_path, user_stat_t* user_stat) {
@@ -371,15 +395,16 @@ static int sys_stat(task_t* me, const char* user_path, user_stat_t* user_stat) {
     if (!user_stat ||
         !vm_user_range_ok(me, (uint32_t)user_stat, sizeof(*user_stat)) ||
         copy_user_path(path, sizeof(path), user_path) < 0)
-        return -1;
+        return KERR(EFAULT);
     fs_attr_t attr;
-    if (fs_getattr(path, &attr) < 0) return -1;
+    if (fs_getattr(path, &attr) < 0) return KERR(ENOENT);
     user_stat_t result;
     result.inum = attr.inum;
     result.type = attr.type;
     result.size = attr.size;
     result.nlink = attr.nlink;
-    return vm_write_user(me, (uint32_t)user_stat, &result, sizeof(result));
+    return vm_write_user(me, (uint32_t)user_stat, &result, sizeof(result)) < 0 ?
+           KERR(EFAULT) : 0;
 }
 
 static int copy_user_vector(const char* const* source, const char* out[],
@@ -427,6 +452,10 @@ static exec_args_t* copy_exec_args(const char* const* user_argv,
     return args;
 }
 
+static uint32_t sys_encoded(int result, int fallback) {
+    return result == -1 ? (uint32_t)KERR(fallback) : (uint32_t)result;
+}
+
 // ---------- int 0x80 分发 ----------
 void syscall_dispatch(user_frame_t* f) {
     switch (f->eax) {
@@ -436,16 +465,16 @@ void syscall_dispatch(user_frame_t* f) {
         f->eax = (uint32_t)sys_putc((char)f->ebx);
         break;
     case SYS_PUTS:
-        f->eax = (uint32_t)sys_puts((const char*)f->ebx);
+        f->eax = sys_encoded(sys_puts((const char*)f->ebx), EFAULT);
         break;
     case SYS_GETKEY:
-        f->eax = (uint32_t)sys_getkey();
+        f->eax = sys_encoded(sys_getkey(), EINTR);
         break;
     case SYS_GETTICKS:
         f->eax = sys_getticks();
         break;
     case SYS_FORK:
-        f->eax = (uint32_t)proc_fork(f);   // 父进程得子 pid, 子进程 (新任务) 得 0
+        f->eax = sys_encoded(proc_fork(f), EAGAIN);
         break;
     case SYS_GETPID:
         f->eax = (uint32_t)task_current()->pid;
@@ -456,25 +485,30 @@ void syscall_dispatch(user_frame_t* f) {
         break;
     case SYS_BRK:
         f->eax = vm_brk(task_current(), f->ebx);
+        if (f->eax == 0xFFFFFFFFu) f->eax = (uint32_t)KERR(ENOMEM);
         break;
     case SYS_MMAP:
         f->eax = vm_mmap(task_current(), f->ebx);
+        if (f->eax == 0xFFFFFFFFu) f->eax = (uint32_t)KERR(ENOMEM);
         break;
     case SYS_EXEC: {
         char path[FS_PATH_MAX];
         if (copy_user_path(path, sizeof(path), (const char*)f->ebx) < 0) {
             serial_puts("[SYS] exec: rejected path pointer\n\r");
-            f->eax = 0xFFFFFFFF;
+            f->eax = (uint32_t)KERR(EFAULT);
             break;
         }
         exec_args_t* args = copy_exec_args(
             (const char* const*)f->ecx, (const char* const*)f->edx);
         if (!args) {
-            f->eax = 0xFFFFFFFFu;
+            f->eax = (uint32_t)KERR(EFAULT);
             break;
         }
         f->eax = (uint32_t)exec_replace_current(f, path, args);
         if (f->eax == 0) proc_reset_signals();
+        else if (f->eax == 0xFFFFFFFFu)
+            f->eax = fs_lookup(path) < 0 ?
+                     (uint32_t)KERR(ENOENT) : (uint32_t)KERR(ENOEXEC);
         kfree(args);
         break;
     }
@@ -483,100 +517,115 @@ void syscall_dispatch(user_frame_t* f) {
         task_t* me = task_current();
         if (status && !vm_user_range_ok(me, (uint32_t)status, sizeof(int))) {
             serial_puts("[SYS] waitpid: rejected status pointer\n\r");
-            f->eax = 0xFFFFFFFFu;
+            f->eax = (uint32_t)KERR(EFAULT);
             break;
         }
-        f->eax = (uint32_t)proc_waitpid((int)f->ebx, status, (int)f->edx);
+        if ((int)f->ebx == 0 || (int)f->ebx < -1) {
+            f->eax = (uint32_t)KERR(EINVAL);
+            break;
+        }
+        f->eax = sys_encoded(proc_waitpid((int)f->ebx, status,
+                                          (int)f->edx), ECHILD);
         break;
     }
     case SYS_OPEN:
-        f->eax = (uint32_t)sys_open(task_current(),
-                                    (const char*)f->ebx, f->ecx);
+        f->eax = sys_encoded(sys_open(task_current(),
+                                      (const char*)f->ebx, f->ecx), EIO);
         break;
     case SYS_READ:
-        f->eax = (uint32_t)sys_read(task_current(), (int)f->ebx,
-                                    (void*)f->ecx, f->edx);
+        f->eax = sys_encoded(sys_read(task_current(), (int)f->ebx,
+                                      (void*)f->ecx, f->edx), EIO);
         break;
     case SYS_WRITE:
-        f->eax = (uint32_t)sys_write(task_current(), (int)f->ebx,
-                                     (const void*)f->ecx, f->edx);
+        f->eax = sys_encoded(sys_write(task_current(), (int)f->ebx,
+                                       (const void*)f->ecx, f->edx), EIO);
         break;
     case SYS_CLOSE:
-        f->eax = (uint32_t)sys_close(task_current(), (int)f->ebx);
+        f->eax = sys_encoded(sys_close(task_current(), (int)f->ebx), EBADF);
         break;
     case SYS_LSEEK:
-        f->eax = (uint32_t)sys_lseek(task_current(), (int)f->ebx,
-                                     (int)f->ecx, (int)f->edx);
+        f->eax = sys_encoded(sys_lseek(task_current(), (int)f->ebx,
+                                       (int)f->ecx, (int)f->edx), EINVAL);
         break;
     case SYS_CHDIR:
-        f->eax = (uint32_t)sys_chdir(task_current(), (const char*)f->ebx);
+        f->eax = sys_encoded(sys_chdir(task_current(),
+                                       (const char*)f->ebx), ENOENT);
         break;
     case SYS_GETCWD:
-        f->eax = (uint32_t)sys_getcwd(task_current(), (char*)f->ebx, f->ecx);
+        f->eax = sys_encoded(sys_getcwd(task_current(), (char*)f->ebx,
+                                        f->ecx), EFAULT);
         break;
     case SYS_MKDIR:
-        f->eax = (uint32_t)sys_mkdir(task_current(), (const char*)f->ebx);
+        f->eax = sys_encoded(sys_mkdir(task_current(),
+                                       (const char*)f->ebx), EIO);
         break;
     case SYS_PIPE:
-        f->eax = (uint32_t)sys_pipe(task_current(), (int*)f->ebx);
+        f->eax = sys_encoded(sys_pipe(task_current(), (int*)f->ebx), EFAULT);
         break;
     case SYS_DUP:
-        f->eax = (uint32_t)sys_dup(task_current(), (int)f->ebx);
+        f->eax = sys_encoded(sys_dup(task_current(), (int)f->ebx), EBADF);
         break;
     case SYS_DUP2:
-        f->eax = (uint32_t)sys_dup2(task_current(), (int)f->ebx, (int)f->ecx);
+        f->eax = sys_encoded(sys_dup2(task_current(), (int)f->ebx,
+                                      (int)f->ecx), EBADF);
         break;
     case SYS_REMOVE:
-        f->eax = (uint32_t)sys_remove(task_current(), (const char*)f->ebx);
+        f->eax = sys_encoded(sys_remove(task_current(),
+                                        (const char*)f->ebx), ENOENT);
         break;
     case SYS_READDIR:
-        f->eax = (uint32_t)sys_readdir(task_current(),
-                                       (const char*)f->ebx, f->ecx,
-                                       (user_dirent_t*)f->edx);
+        f->eax = sys_encoded(sys_readdir(task_current(),
+                                         (const char*)f->ebx, f->ecx,
+                                         (user_dirent_t*)f->edx), EIO);
         break;
     case SYS_RENAME:
-        f->eax = (uint32_t)sys_rename(task_current(), (const char*)f->ebx,
-                                      (const char*)f->ecx);
+        f->eax = sys_encoded(sys_rename(task_current(),
+                                        (const char*)f->ebx,
+                                        (const char*)f->ecx), EIO);
         break;
     case SYS_STAT:
-        f->eax = (uint32_t)sys_stat(task_current(), (const char*)f->ebx,
-                                    (user_stat_t*)f->ecx);
+        f->eax = sys_encoded(sys_stat(task_current(), (const char*)f->ebx,
+                                      (user_stat_t*)f->ecx), ENOENT);
         break;
     case SYS_LINK:
-        f->eax = (uint32_t)sys_link(task_current(), (const char*)f->ebx,
-                                    (const char*)f->ecx);
+        f->eax = sys_encoded(sys_link(task_current(), (const char*)f->ebx,
+                                      (const char*)f->ecx), ENOENT);
         break;
     case SYS_TRUNCATE:
-        f->eax = (uint32_t)sys_truncate(task_current(),
-                                        (const char*)f->ebx, f->ecx);
+        f->eax = sys_encoded(sys_truncate(task_current(),
+                                          (const char*)f->ebx, f->ecx),
+                             ENOENT);
         break;
     case SYS_SIGACTION:
-        f->eax = (uint32_t)proc_sigaction((int)f->ebx, f->ecx, f->edx);
+        f->eax = sys_encoded(proc_sigaction((int)f->ebx, f->ecx, f->edx),
+                             EINVAL);
         break;
     case SYS_SIGACTION_FLAGS:
-        f->eax = (uint32_t)proc_sigaction_flags((int)f->ebx, f->ecx);
+        f->eax = sys_encoded(proc_sigaction_flags((int)f->ebx, f->ecx),
+                             EINVAL);
         break;
     case SYS_SIGPROCMASK:
-        f->eax = (uint32_t)proc_sigprocmask((int)f->ebx, f->ecx,
-                                            (uint32_t*)f->edx);
+        f->eax = sys_encoded(proc_sigprocmask((int)f->ebx, f->ecx,
+                                              (uint32_t*)f->edx), EINVAL);
         break;
     case SYS_SIGRETURN:
-        if (proc_sigreturn(f) < 0) f->eax = 0xFFFFFFFFu;
+        if (proc_sigreturn(f) < 0) f->eax = (uint32_t)KERR(EINVAL);
         break;
     case SYS_SETPGID:
-        f->eax = (uint32_t)proc_setpgid((int)f->ebx, (int)f->ecx);
+        f->eax = sys_encoded(proc_setpgid((int)f->ebx, (int)f->ecx),
+                             ESRCH);
         break;
     case SYS_TCSETPGRP:
-        f->eax = (uint32_t)proc_set_foreground((int)f->ebx);
+        f->eax = sys_encoded(proc_set_foreground((int)f->ebx), EINVAL);
         break;
     case SYS_KILL:
-        f->eax = (uint32_t)proc_signal((int)f->ebx, (int)f->ecx);
+        f->eax = sys_encoded(proc_signal((int)f->ebx, (int)f->ecx), ESRCH);
         break;
     default:
         serial_puts("[SYS] unknown syscall #");
         serial_put_hex(f->eax);
         serial_puts("\n\r");
-        f->eax = 0xFFFFFFFF;
+        f->eax = (uint32_t)KERR(ENOSYS);
         break;
     }
     proc_deliver_signal(f);
