@@ -134,6 +134,7 @@ static void redraw_input_line() {
 
 // 1. help 命令
 static void cmd_help() {
+    serial_puts("[SH] help\n\r");
     vga_puts("\n\rAvailable commands:\n\r");
     vga_puts("  help clear version date reboot\n\r");
     vga_puts("  meminfo memmap heap [blocks] heaptest\n\r");
@@ -795,6 +796,7 @@ static void execute_command() {
         fs_crashpoint();       // QEMU 故障注入; 正常用户不会调用
     } else if (k_strcmp(argv[0], "cc") == 0) {
         if (argc < 2) {
+            serial_puts("[SH] cc usage\n\r");
             vga_puts("\n\rUsage: cc <source.c> [args...]\n\r");
         } else {
             // 编译并运行 C 程序 (argv[0] = 源文件, 其余传给 main)

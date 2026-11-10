@@ -77,6 +77,7 @@ KEYS = {
     "$": "shift-4", ";": "semicolon", "\\": "backslash",
     "?": "shift-slash", "*": "shift-8",
     "(": "shift-9", ")": "shift-0",
+    "[": "bracket_left", "]": "bracket_right",
 }
 KEYS.update({chr(c): f"shift-{chr(c + 32)}" for c in range(ord("A"), ord("Z") + 1)})
 KEYS["="] = "equal"
@@ -161,6 +162,87 @@ try:
     run("echo second line >> a.txt", "sh:/shdir>", name="append redirect")
     run("cat a.txt", "sh:/shdir>", "hello world\nsecond line\n",
         name="cat file")
+    run("touch /shdir/touched.txt", "sh:/shdir>", name="touch utility")
+    run("test -f /shdir/touched.txt; echo touch-status=$?", "sh:/shdir>",
+        "touch-status=0\n", name="test file predicate")
+    run("cp a.txt copy.txt", "sh:/shdir>", name="cp utility")
+    run("cat copy.txt", "sh:/shdir>", "hello world\nsecond line\n",
+        name="cp preserves content")
+    run("head -n 1 a.txt", "sh:/shdir>", "hello world\n",
+        name="head first line")
+    run("tail -n 1 a.txt", "sh:/shdir>", "second line\n",
+        name="tail last line")
+    run("tail -n 0 a.txt | wc -c", "sh:/shdir>", "0\n",
+        name="tail zero lines")
+    run("wc -l a.txt", "sh:/shdir>", "2 a.txt\n",
+        name="wc line count")
+    run("cat a.txt | wc -w", "sh:/shdir>", "4 \n",
+        name="wc word count pipeline")
+    run("grep -n line a.txt", "sh:/shdir>", "2:second line\n",
+        name="grep line numbers")
+    run("cat a.txt | grep second", "sh:/shdir>", "second line\n",
+        name="grep pipeline")
+    run("printf 'Y=%d S=%s H=%x\\n' 42 ok 15", "sh:/shdir>",
+        "Y=42 S=ok H=0000000F\n", name="printf formats")
+    run("test 5 -gt 3; echo integer-test=$?", "sh:/shdir>",
+        "integer-test=0\n", name="test integer comparison")
+    run("[ -d /shdir ]; echo bracket-test=$?", "sh:/shdir>",
+        "bracket-test=0\n", name="test bracket alias")
+    run("mkdir -p /tree/one/two", "sh:/shdir>", name="mkdir parents")
+    run("echo nested > /tree/one/two/nested.txt", "sh:/shdir>",
+        name="nested tree setup")
+    run("cp -r /tree/one /tree-copy", "sh:/shdir>",
+        name="cp recursive")
+    run("cat /tree-copy/two/nested.txt", "sh:/shdir>", "nested\n",
+        name="recursive copy content")
+    run("ls -a", "sh:/shdir>", "./\n../\n", name="ls show all")
+    run("echo 'SRC=loaded' > /source.sh", "sh:/shdir>",
+        name="write source script variable")
+    run("echo 'touch /source-created' >> /source.sh", "sh:/shdir>",
+        name="write source script command")
+    run("source /source.sh", "sh:/shdir>", name="source script")
+    run("echo source=$SRC", "sh:/shdir>", "source=loaded\n",
+        name="source preserves variable")
+    run("test -f /source-created; echo sourced-file=$?", "sh:/shdir>",
+        "sourced-file=0\n", name="source preserves shell execution")
+    run("which cp", "sh:/shdir>", "cp\n", name="which builtin")
+    run("which hello", "sh:/shdir>", "/bin/hello\n", name="which external")
+    run("type test", "sh:/shdir>", "test: shell builtin\n",
+        name="type identifies builtin")
+    run("uptime", "sh:/shdir>", "uptime: ", name="uptime utility")
+    run("hexdump a.txt", "sh:/shdir>", "00000000  ", name="hexdump utility")
+    run("sleep 0", "sh:/shdir>", name="sleep utility")
+
+    mark()
+    type_text("read ANSWER\n")
+    time.sleep(0.3)
+    type_text("forty-two\n")
+    run("echo read=$ANSWER", "sh:/shdir>", "read=forty-two\n",
+        name="read captures input")
+    run("echo file-input > /read.txt", "sh:/shdir>",
+        name="read file setup")
+    run("read FILEVAR < /read.txt", "sh:/shdir>", name="read file")
+    run("echo file-read=$FILEVAR", "sh:/shdir>", "file-read=file-input\n",
+        name="read file captures input")
+
+    run("clear", "sh:/shdir>", name="user clear syscall")
+    check("clear serial marker", wait_since("[SH] clear", 5, "clear-marker"))
+    run("echo history-clear-sentinel", "sh:/shdir>",
+        "history-clear-sentinel\n", name="history clear setup")
+    run("history -c", "sh:/shdir>", name="history clear")
+    mark()
+    type_text("history 4\n")
+    check("history clear drops old entries",
+          wait_since("sh:/shdir> ", 10, "history-clear-prompt") and
+          "history-clear-sentinel" not in since())
+    run("rm -rf /tree-copy /tree /source.sh /source-created "
+        "/read.txt /shdir/copy.txt /shdir/touched.txt",
+        "sh:/shdir>", name="recursive rm")
+    run("test -e /tree-copy; echo recursive-removed=$?", "sh:/shdir>",
+        "recursive-removed=1\n", name="recursive rm verified")
+    run("cd /", "sh:/>", name="cd root before previous")
+    run("cd -", "sh:/shdir>", "/shdir\n", name="cd previous directory")
+
     run("cat < a.txt | cat", "sh:/shdir>", "hello world\nsecond line\n",
         name="input redirect + pipe")
     run("echo pipe-ok | cat", "sh:/shdir>", "pipe-ok\n", name="pipe")

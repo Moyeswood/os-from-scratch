@@ -473,6 +473,11 @@ void syscall_dispatch(user_frame_t* f) {
     case SYS_GETTICKS:
         f->eax = sys_getticks();
         break;
+    case SYS_CLEAR:
+        vga_clear();
+        serial_puts("[SH] clear\n\r");
+        f->eax = 0;
+        break;
     case SYS_FORK:
         f->eax = sys_encoded(proc_fork(f), EAGAIN);
         break;

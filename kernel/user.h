@@ -77,6 +77,7 @@ typedef struct {
 #define SYS_SIGPROCMASK 33 // 里程碑 26: 修改信号屏蔽字
 #define SYS_SIGRETURN 34 // 里程碑 26: 从 handler 返回原用户上下文
 #define SYS_SIGACTION_FLAGS 35 // 里程碑 27b: 为已安装的 action 设置标志
+#define SYS_CLEAR    36  // 用户态清屏
 
 #define SIGINT   2
 #define SIGKILL  9

@@ -16,6 +16,8 @@
 #define ENV_NAME_MAX 48
 #define SUBST_MAX 1024
 #define SUBST_LITERAL '\x1e'
+#define COPY_DEPTH_MAX 12
+#define TAIL_RING_MAX 16
 
 typedef struct {
     char* argv[ARGS_MAX];
@@ -55,9 +57,21 @@ static int continuation_prompt;
 static char default_home[] = "HOME=/";
 static char default_path[] = "PATH=/bin";
 static char default_newos[] = "NEWOS=1";
+static char previous_cwd[LINE_MAX] = "/";
 
 static void shell_prompt(void);
 static int execute_line(char* line);
+static int execute_script_file(const char* path);
+static void swrite_dec(int fd, uint32_t value);
+
+static const char* shell_builtin_names[] = {
+    "[", "bg", "cat", "cd", "clear", "cp", "echo", "env", "exit",
+    "export", "false", "fg", "grep", "head", "help", "hexdump",
+    "history", "jobs", "kill", "ln", "ls", "mkdir", "mv", "printf",
+    "pwd", "read", "rm", "set", "sleep", "source", "stat", "tail",
+    "test", "touch", "truncate", "true", "type", "unset", "uptime",
+    "wait", "wc", "which", 0
+};
 
 static int slen(const char* s) {
     int n = 0;
@@ -672,9 +686,9 @@ static int utility_pwd(void) {
 
 static void print_stat_entry(const char* name, const user_stat_t* info) {
     swrite(1, info->type == 2 ? "d " : "- ");
-    putdec(info->nlink);
+    swrite_dec(1, info->nlink);
     swrite(1, " ");
-    putdec(info->size);
+    swrite_dec(1, info->size);
     swrite(1, " ");
     swrite(1, name);
     if (info->type == 2) swrite(1, "/");
@@ -684,8 +698,17 @@ static void print_stat_entry(const char* name, const user_stat_t* info) {
 static int utility_ls(const command_t* cmd) {
     int arg = 1;
     int long_format = 0;
-    if (arg < cmd->argc && scmp(cmd->argv[arg], "-l") == 0) {
-        long_format = 1;
+    int show_all = 0;
+    while (arg < cmd->argc && cmd->argv[arg][0] == '-' &&
+           cmd->argv[arg][1]) {
+        for (int i = 1; cmd->argv[arg][i]; ++i) {
+            if (cmd->argv[arg][i] == 'l') long_format = 1;
+            else if (cmd->argv[arg][i] == 'a') show_all = 1;
+            else {
+                swrite(2, "ls: usage: ls [-la] [path]\n");
+                return 2;
+            }
+        }
         ++arg;
     }
     const char* path = arg < cmd->argc ? cmd->argv[arg] : ".";
@@ -714,8 +737,10 @@ static int utility_ls(const command_t* cmd) {
             }
             break;
         }
-        if (!entry.inum || scmp(entry.name, ".") == 0 ||
-            scmp(entry.name, "..") == 0) continue;
+        if (!entry.inum) continue;
+        if (!show_all && (scmp(entry.name, ".") == 0 ||
+                          scmp(entry.name, "..") == 0))
+            continue;
         entries++;
         if (long_format) {
             char child[256];
@@ -769,25 +794,830 @@ static int utility_cat(const command_t* cmd) {
     return status;
 }
 
-static int utility_mkdir(const command_t* cmd) {
+static void swrite_char(int fd, char c) {
+    write(fd, &c, 1);
+}
+
+static void swrite_dec(int fd, uint32_t value) {
+    char tmp[12];
+    int pos = 0;
+    if (!value) {
+        swrite_char(fd, '0');
+        return;
+    }
+    while (value) {
+        tmp[pos++] = (char)('0' + value % 10);
+        value /= 10;
+    }
+    while (pos) swrite_char(fd, tmp[--pos]);
+}
+
+static void swrite_hex(int fd, uint32_t value, int digits) {
+    static const char hex[] = "0123456789ABCDEF";
+    for (int shift = (digits - 1) * 4; shift >= 0; shift -= 4)
+        swrite_char(fd, hex[(value >> shift) & 0xF]);
+}
+
+static int parse_signed_number(const char* text, int* value) {
+    if (!text || !*text) return -1;
+    int negative = 0;
+    if (*text == '-') {
+        negative = 1;
+        ++text;
+    } else if (*text == '+') {
+        ++text;
+    }
+    int parsed;
+    if (parse_number(text, &parsed) < 0) return -1;
+    *value = negative ? -parsed : parsed;
+    return 0;
+}
+
+static int read_line_fd(int fd, char* line, int cap) {
+    int len = 0;
+    int any = 0;
+    for (;;) {
+        char c;
+        int n = read_byte(fd, &c);
+        if (n <= 0) return any ? 1 : 0;
+        any = 1;
+        if (c == '\n') {
+            line[len] = '\0';
+            return 1;
+        }
+        if (c != '\r' && len < cap - 1)
+            line[len++] = c;
+    }
+}
+
+static int utility_touch(const command_t* cmd) {
     if (cmd->argc < 2) {
+        swrite(2, "touch: missing operand\n");
+        return 1;
+    }
+    int status = 0;
+    for (int i = 1; i < cmd->argc; ++i) {
+        user_stat_t info;
+        if (stat(cmd->argv[i], &info) == 0) {
+            if (info.type != 1) status = 1;
+            continue;
+        }
+        int fd = open(cmd->argv[i], O_CREAT | O_WRONLY);
+        if (fd < 0) {
+            status = 1;
+            continue;
+        }
+        close(fd);
+    }
+    if (status) swrite(2, "touch: cannot create file\n");
+    return status;
+}
+
+static int copy_file_path(const char* source, const char* target) {
+    user_stat_t source_info;
+    user_stat_t target_info;
+    if (stat(source, &source_info) < 0 || source_info.type != 1) return -1;
+    if (stat(target, &target_info) == 0 && target_info.inum == source_info.inum)
+        return -1;
+
+    int input = open(source, O_RDONLY);
+    if (input < 0) return -1;
+    int output = open(target, O_CREAT | O_WRONLY | O_TRUNC);
+    if (output < 0) {
+        close(input);
+        return -1;
+    }
+    uint8_t buffer[256];
+    int result = 0;
+    for (;;) {
+        int n = read(input, buffer, sizeof(buffer));
+        if (n == 0) break;
+        if (n < 0 || write_all(output, buffer, (uint32_t)n) < 0) {
+            result = -1;
+            break;
+        }
+    }
+    close(input);
+    close(output);
+    return result;
+}
+
+static int copy_tree(const char* source, const char* target, int depth) {
+    if (depth > COPY_DEPTH_MAX) return -1;
+    user_stat_t source_info;
+    if (stat(source, &source_info) < 0) return -1;
+    if (source_info.type != 2) return copy_file_path(source, target);
+
+    user_stat_t target_info;
+    if (stat(target, &target_info) < 0) {
+        if (mkdir(target) < 0) return -1;
+    } else if (target_info.type != 2) {
+        return -1;
+    }
+
+    user_dirent_t entry;
+    for (uint32_t index = 0; ; ++index) {
+        int got = readdir(source, index, &entry);
+        if (got == 0) break;
+        if (got < 0) return -1;
+        if (!entry.inum || scmp(entry.name, ".") == 0 ||
+            scmp(entry.name, "..") == 0) continue;
+        char source_child[LINE_MAX];
+        char target_child[LINE_MAX];
+        if (join_path(source_child, sizeof(source_child),
+                      source, entry.name) < 0 ||
+            join_path(target_child, sizeof(target_child),
+                      target, entry.name) < 0 ||
+            copy_tree(source_child, target_child, depth + 1) < 0)
+            return -1;
+    }
+    return 0;
+}
+
+static int utility_cp(const command_t* cmd) {
+    int recursive = 0;
+    int arg = 1;
+    while (arg < cmd->argc && cmd->argv[arg][0] == '-' &&
+           cmd->argv[arg][1]) {
+        for (int i = 1; cmd->argv[arg][i]; ++i) {
+            if (cmd->argv[arg][i] == 'r' || cmd->argv[arg][i] == 'R')
+                recursive = 1;
+            else {
+                swrite(2, "cp: usage: cp [-r] source target\n");
+                return 1;
+            }
+        }
+        ++arg;
+    }
+    if (cmd->argc - arg != 2) {
+        swrite(2, "cp: usage: cp [-r] source target\n");
+        return 1;
+    }
+    const char* source = cmd->argv[arg];
+    const char* target_arg = cmd->argv[arg + 1];
+    user_stat_t source_info;
+    if (stat(source, &source_info) < 0) {
+        swrite(2, "cp: source not found\n");
+        return 1;
+    }
+    if (source_info.type == 2 && !recursive) {
+        swrite(2, "cp: source is a directory (use -r)\n");
+        return 1;
+    }
+
+    char target[LINE_MAX];
+    user_stat_t target_info;
+    if (stat(target_arg, &target_info) == 0 && target_info.type == 2) {
+        if (join_path(target, sizeof(target), target_arg,
+                      basename(source)) < 0) {
+            swrite(2, "cp: path too long\n");
+            return 1;
+        }
+    } else {
+        scopy(target, target_arg, sizeof(target));
+    }
+    if (copy_tree(source, target, 0) < 0) {
+        swrite(2, "cp: copy failed\n");
+        return 1;
+    }
+    return 0;
+}
+
+static int utility_head(const command_t* cmd) {
+    int count = 10;
+    int arg = 1;
+    if (arg < cmd->argc && scmp(cmd->argv[arg], "-n") == 0) {
+        if (arg + 1 >= cmd->argc ||
+            parse_number(cmd->argv[arg + 1], &count) < 0 || count < 0) {
+            swrite(2, "head: usage: head [-n N] [file...]\n");
+            return 1;
+        }
+        arg += 2;
+    } else if (arg < cmd->argc && cmd->argv[arg][0] == '-' &&
+               cmd->argv[arg][1] >= '0' && cmd->argv[arg][1] <= '9') {
+        if (parse_number(cmd->argv[arg] + 1, &count) < 0) return 1;
+        ++arg;
+    }
+
+    int files = cmd->argc - arg;
+    if (!files) {
+        char line[LINE_MAX];
+        for (int i = 0; i < count && read_line_fd(0, line, sizeof(line));
+             ++i) {
+            swrite(1, line);
+            swrite(1, "\n");
+        }
+        return 0;
+    }
+
+    int status = 0;
+    for (int file = arg; file < cmd->argc; ++file) {
+        int fd = open(cmd->argv[file], O_RDONLY);
+        if (fd < 0) {
+            status = 1;
+            continue;
+        }
+        if (files > 1) {
+            swrite(1, "==> ");
+            swrite(1, cmd->argv[file]);
+            swrite(1, " <==\n");
+        }
+        char line[LINE_MAX];
+        for (int i = 0; i < count && read_line_fd(fd, line, sizeof(line));
+             ++i) {
+            swrite(1, line);
+            swrite(1, "\n");
+        }
+        close(fd);
+    }
+    return status;
+}
+
+static int copy_fd_range(int fd, int start, int end) {
+    if (lseek(fd, start, SEEK_SET) < 0) return 1;
+    uint8_t buffer[256];
+    int left = end - start;
+    while (left > 0) {
+        uint32_t want = left > (int)sizeof(buffer) ?
+                        sizeof(buffer) : (uint32_t)left;
+        int n = read(fd, buffer, want);
+        if (n <= 0 || write_all(1, buffer, (uint32_t)n) < 0) return 1;
+        left -= n;
+    }
+    return 0;
+}
+
+static int tail_seekable(int fd, int count) {
+    int end = lseek(fd, 0, SEEK_END);
+    if (end < 0) return -1;
+    if (count == 0) return 0;
+    int start = 0;
+    int lines = 0;
+    for (int pos = end - 1; pos >= 0; --pos) {
+        char c;
+        if (lseek(fd, pos, SEEK_SET) < 0 || read(fd, &c, 1) != 1)
+            return 1;
+        if (c == '\n' && pos != end - 1) {
+            ++lines;
+            start = pos + 1;
+            if (lines >= count) break;
+        }
+    }
+    if (lines < count) start = 0;
+    return copy_fd_range(fd, start, end);
+}
+
+static int tail_streaming(int fd, int count) {
+    if (count == 0) return 0;
+    static char ring[TAIL_RING_MAX][LINE_MAX];
+    int used = 0;
+    int next = 0;
+    if (count > TAIL_RING_MAX) count = TAIL_RING_MAX;
+    char line[LINE_MAX];
+    while (read_line_fd(fd, line, sizeof(line))) {
+        scopy(ring[next], line, LINE_MAX);
+        next = (next + 1) % TAIL_RING_MAX;
+        if (used < TAIL_RING_MAX) ++used;
+    }
+    int start = used == TAIL_RING_MAX ? next : 0;
+    for (int i = 0; i < used; ++i) {
+        int index = (start + i) % TAIL_RING_MAX;
+        swrite(1, ring[index]);
+        swrite(1, "\n");
+    }
+    return 0;
+}
+
+static int utility_tail(const command_t* cmd) {
+    int count = 10;
+    int arg = 1;
+    if (arg < cmd->argc && scmp(cmd->argv[arg], "-n") == 0) {
+        if (arg + 1 >= cmd->argc ||
+            parse_number(cmd->argv[arg + 1], &count) < 0 || count < 0) {
+            swrite(2, "tail: usage: tail [-n N] [file...]\n");
+            return 1;
+        }
+        arg += 2;
+    } else if (arg < cmd->argc && cmd->argv[arg][0] == '-' &&
+               cmd->argv[arg][1] >= '0' && cmd->argv[arg][1] <= '9') {
+        if (parse_number(cmd->argv[arg] + 1, &count) < 0) return 1;
+        ++arg;
+    }
+
+    if (arg == cmd->argc) {
+        int result = tail_seekable(0, count);
+        return result < 0 ? tail_streaming(0, count) : result;
+    }
+    int status = 0;
+    for (int file = arg; file < cmd->argc; ++file) {
+        int fd = open(cmd->argv[file], O_RDONLY);
+        if (fd < 0) {
+            status = 1;
+            continue;
+        }
+        if (tail_seekable(fd, count) != 0) status = 1;
+        close(fd);
+    }
+    return status;
+}
+
+static int word_count_fd(int fd, uint32_t* lines, uint32_t* words,
+                         uint32_t* bytes) {
+    uint8_t buffer[256];
+    int in_word = 0;
+    for (;;) {
+        int n = read(fd, buffer, sizeof(buffer));
+        if (n == 0) break;
+        if (n < 0) return -1;
+        *bytes += (uint32_t)n;
+        for (int i = 0; i < n; ++i) {
+            char c = (char)buffer[i];
+            if (c == '\n') ++*lines;
+            if (is_space(c)) {
+                in_word = 0;
+            } else if (!in_word) {
+                ++*words;
+                in_word = 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int utility_wc(const command_t* cmd) {
+    int show_lines = 0;
+    int show_words = 0;
+    int show_bytes = 0;
+    int arg = 1;
+    while (arg < cmd->argc && cmd->argv[arg][0] == '-' &&
+           cmd->argv[arg][1]) {
+        for (int i = 1; cmd->argv[arg][i]; ++i) {
+            if (cmd->argv[arg][i] == 'l') show_lines = 1;
+            else if (cmd->argv[arg][i] == 'w') show_words = 1;
+            else if (cmd->argv[arg][i] == 'c') show_bytes = 1;
+            else {
+                swrite(2, "wc: usage: wc [-lwc] [file...]\n");
+                return 1;
+            }
+        }
+        ++arg;
+    }
+    if (!show_lines && !show_words && !show_bytes)
+        show_lines = show_words = show_bytes = 1;
+
+    int files = cmd->argc - arg;
+    uint32_t total_lines = 0;
+    uint32_t total_words = 0;
+    uint32_t total_bytes = 0;
+    int status = 0;
+    int processed = 0;
+    for (int file = arg; file < (files ? cmd->argc : 0); ++file) {
+        int fd = open(cmd->argv[file], O_RDONLY);
+        if (fd < 0) {
+            status = 1;
+            continue;
+        }
+        uint32_t lines = 0, words = 0, bytes = 0;
+        if (word_count_fd(fd, &lines, &words, &bytes) < 0) status = 1;
+        close(fd);
+        total_lines += lines;
+        total_words += words;
+        total_bytes += bytes;
+        if (show_lines) { swrite_dec(1, lines); swrite(1, " "); }
+        if (show_words) { swrite_dec(1, words); swrite(1, " "); }
+        if (show_bytes) { swrite_dec(1, bytes); swrite(1, " "); }
+        swrite(1, cmd->argv[file]);
+        swrite(1, "\n");
+        ++processed;
+    }
+    if (!files) {
+        if (word_count_fd(0, &total_lines, &total_words, &total_bytes) < 0)
+            return 1;
+        processed = 1;
+    }
+    if (files > 1 && processed > 1) {
+        if (show_lines) { swrite_dec(1, total_lines); swrite(1, " "); }
+        if (show_words) { swrite_dec(1, total_words); swrite(1, " "); }
+        if (show_bytes) { swrite_dec(1, total_bytes); swrite(1, " "); }
+        swrite(1, "total\n");
+    } else if (!files) {
+        if (show_lines) { swrite_dec(1, total_lines); swrite(1, " "); }
+        if (show_words) { swrite_dec(1, total_words); swrite(1, " "); }
+        if (show_bytes) { swrite_dec(1, total_bytes); }
+        swrite(1, "\n");
+    }
+    return status;
+}
+
+static char lower_char(char c) {
+    return c >= 'A' && c <= 'Z' ? (char)(c + ('a' - 'A')) : c;
+}
+
+static int contains_text(const char* text, const char* needle, int ignore_case) {
+    if (!*needle) return 1;
+    for (int i = 0; text[i]; ++i) {
+        int j = 0;
+        while (needle[j]) {
+            char a = text[i + j];
+            char b = needle[j];
+            if (ignore_case) {
+                a = lower_char(a);
+                b = lower_char(b);
+            }
+            if (!a || a != b) break;
+            ++j;
+        }
+        if (!needle[j]) return 1;
+    }
+    return 0;
+}
+
+static int grep_fd(int fd, const char* pattern, const char* label,
+                   int show_line_numbers, int ignore_case, int* matched) {
+    char line[LINE_MAX];
+    int line_number = 0;
+    while (read_line_fd(fd, line, sizeof(line))) {
+        ++line_number;
+        if (!contains_text(line, pattern, ignore_case)) continue;
+        *matched = 1;
+        if (label) {
+            swrite(1, label);
+            swrite(1, ":");
+        }
+        if (show_line_numbers) {
+            swrite_dec(1, (uint32_t)line_number);
+            swrite(1, ":");
+        }
+        swrite(1, line);
+        swrite(1, "\n");
+    }
+    return 0;
+}
+
+static int utility_grep(const command_t* cmd) {
+    int show_line_numbers = 0;
+    int ignore_case = 0;
+    int arg = 1;
+    while (arg < cmd->argc && cmd->argv[arg][0] == '-' &&
+           cmd->argv[arg][1]) {
+        for (int i = 1; cmd->argv[arg][i]; ++i) {
+            if (cmd->argv[arg][i] == 'n') show_line_numbers = 1;
+            else if (cmd->argv[arg][i] == 'i') ignore_case = 1;
+            else {
+                swrite(2, "grep: usage: grep [-in] pattern [file...]\n");
+                return 2;
+            }
+        }
+        ++arg;
+    }
+    if (arg >= cmd->argc) {
+        swrite(2, "grep: missing pattern\n");
+        return 2;
+    }
+    const char* pattern = cmd->argv[arg++];
+    int matched = 0;
+    int files = cmd->argc - arg;
+    if (!files) {
+        grep_fd(0, pattern, 0, show_line_numbers, ignore_case, &matched);
+        return matched ? 0 : 1;
+    }
+    int status = 0;
+    for (; arg < cmd->argc; ++arg) {
+        int fd = open(cmd->argv[arg], O_RDONLY);
+        if (fd < 0) {
+            status = 2;
+            continue;
+        }
+        grep_fd(fd, pattern, files > 1 ? cmd->argv[arg] : 0,
+                show_line_numbers, ignore_case, &matched);
+        close(fd);
+    }
+    if (status) return status;
+    return matched ? 0 : 1;
+}
+
+static int utility_printf(const command_t* cmd) {
+    if (cmd->argc < 2) {
+        swrite(2, "printf: missing format\n");
+        return 1;
+    }
+    const char* format = cmd->argv[1];
+    int argument = 2;
+    for (int i = 0; format[i]; ++i) {
+        char c = format[i];
+        if (c == '\\' && format[i + 1]) {
+            c = format[++i];
+            if (c == 'n') swrite_char(1, '\n');
+            else if (c == 'r') swrite_char(1, '\r');
+            else if (c == 't') swrite_char(1, '\t');
+            else if (c == '0') swrite_char(1, '\0');
+            else swrite_char(1, c);
+            continue;
+        }
+        if (c != '%' || !format[i + 1]) {
+            swrite_char(1, c);
+            continue;
+        }
+        c = format[++i];
+        if (c == '%') {
+            swrite_char(1, '%');
+            continue;
+        }
+        const char* value = argument < cmd->argc ?
+                            cmd->argv[argument] : "";
+        if (argument < cmd->argc) ++argument;
+        if (c == 's') {
+            swrite(1, value);
+        } else if (c == 'c') {
+            swrite_char(1, value[0]);
+        } else if (c == 'd' || c == 'u') {
+            int number = 0;
+            parse_signed_number(value, &number);
+            if (c == 'd' && number < 0) {
+                swrite_char(1, '-');
+                number = -number;
+            }
+            swrite_dec(1, (uint32_t)number);
+        } else if (c == 'x') {
+            int number = 0;
+            parse_signed_number(value, &number);
+            swrite_hex(1, (uint32_t)number, 8);
+        } else {
+            swrite_char(1, '%');
+            swrite_char(1, c);
+        }
+    }
+    return 0;
+}
+
+static int test_expression(char* const* argv, int count) {
+    if (count > 0 && scmp(argv[0], "!") == 0) {
+        int result = test_expression(argv + 1, count - 1);
+        return result == 0 ? 1 : result == 1 ? 0 : 2;
+    }
+    if (count == 0) return 1;
+    if (count == 1) return argv[0][0] ? 0 : 1;
+    if (count == 2) {
+        user_stat_t info;
+        if (scmp(argv[0], "-e") == 0) return stat(argv[1], &info) < 0;
+        if (scmp(argv[0], "-f") == 0)
+            return stat(argv[1], &info) < 0 || info.type != 1;
+        if (scmp(argv[0], "-d") == 0)
+            return stat(argv[1], &info) < 0 || info.type != 2;
+        if (scmp(argv[0], "-z") == 0) return argv[1][0] ? 1 : 0;
+        if (scmp(argv[0], "-n") == 0) return argv[1][0] ? 0 : 1;
+        return 2;
+    }
+    if (count != 3) return 2;
+    if (scmp(argv[1], "=") == 0) return scmp(argv[0], argv[2]) ? 1 : 0;
+    if (scmp(argv[1], "!=") == 0) return scmp(argv[0], argv[2]) ? 0 : 1;
+    int left, right;
+    if (parse_signed_number(argv[0], &left) < 0 ||
+        parse_signed_number(argv[2], &right) < 0)
+        return 2;
+    if (scmp(argv[1], "-eq") == 0) return left == right ? 0 : 1;
+    if (scmp(argv[1], "-ne") == 0) return left != right ? 0 : 1;
+    if (scmp(argv[1], "-lt") == 0) return left < right ? 0 : 1;
+    if (scmp(argv[1], "-le") == 0) return left <= right ? 0 : 1;
+    if (scmp(argv[1], "-gt") == 0) return left > right ? 0 : 1;
+    if (scmp(argv[1], "-ge") == 0) return left >= right ? 0 : 1;
+    return 2;
+}
+
+static int utility_test(const command_t* cmd) {
+    int first = 1;
+    int last = cmd->argc;
+    if (scmp(basename(cmd->argv[0]), "[") == 0) {
+        if (last <= first || scmp(cmd->argv[last - 1], "]") != 0) {
+            swrite(2, "[: missing ]\n");
+            return 2;
+        }
+        --last;
+    }
+    return test_expression(&cmd->argv[first], last - first);
+}
+
+static int utility_read(const command_t* cmd) {
+    if (cmd->argc != 2 || !env_valid_name(cmd->argv[1], slen(cmd->argv[1]))) {
+        swrite(2, "read: usage: read NAME\n");
+        return 2;
+    }
+    char value[ENV_TEXT_MAX];
+    int len = 0;
+    int got = 0;
+    int fd = 0;
+    if (cmd->input) {
+        fd = open(cmd->input, O_RDONLY);
+        if (fd < 0) {
+            swrite(2, "read: cannot open input\n");
+            return 1;
+        }
+    }
+    for (;;) {
+        char c;
+        int n = read_byte(fd, &c);
+        if (n <= 0) break;
+        got = 1;
+        if (c == '\n') break;
+        if (c != '\r' && len < (int)sizeof(value) - 1)
+            value[len++] = c;
+    }
+    if (fd != 0) close(fd);
+    value[len] = '\0';
+    swrite(1, "\n");
+    if (!got && !len) return 1;
+    return env_put(cmd->argv[1], slen(cmd->argv[1]), value, 0) < 0 ? 1 : 0;
+}
+
+static int builtin_known(const char* name) {
+    for (int i = 0; shell_builtin_names[i]; ++i)
+        if (scmp(name, shell_builtin_names[i]) == 0) return 1;
+    return 0;
+}
+
+static int utility_which(const command_t* cmd, int verbose) {
+    if (cmd->argc < 2) {
+        swrite(2, "which: missing command\n");
+        return 1;
+    }
+    int status = 0;
+    for (int i = 1; i < cmd->argc; ++i) {
+        const char* name = cmd->argv[i];
+        if (builtin_known(name)) {
+            if (verbose) {
+                swrite(1, name);
+                swrite(1, ": shell builtin\n");
+            } else {
+                swrite(1, name);
+                swrite(1, "\n");
+            }
+            continue;
+        }
+        char path[LINE_MAX];
+        const char* candidate = name;
+        if (name[0] != '/') {
+            if (join_path(path, sizeof(path), "/bin", name) < 0) {
+                status = 1;
+                continue;
+            }
+            candidate = path;
+        }
+        user_stat_t info;
+        if (stat(candidate, &info) == 0 && info.type == 1) {
+            swrite(1, candidate);
+            swrite(1, "\n");
+        } else {
+            status = 1;
+        }
+    }
+    return status;
+}
+
+static int utility_sleep(const command_t* cmd) {
+    int seconds;
+    if (cmd->argc != 2 || parse_number(cmd->argv[1], &seconds) < 0) {
+        swrite(2, "sleep: usage: sleep SECONDS\n");
+        return 1;
+    }
+    sleep((uint32_t)seconds * 18u);
+    return 0;
+}
+
+static int utility_uptime(void) {
+    uint32_t tick_count = ticks();
+    swrite(1, "uptime: ");
+    swrite_dec(1, tick_count / 18u);
+    swrite(1, "s (");
+    swrite_dec(1, tick_count);
+    swrite(1, " ticks)\n");
+    return 0;
+}
+
+static int hexdump_one(const char* path) {
+    int fd = path ? open(path, O_RDONLY) : 0;
+    if (fd < 0) return 1;
+    uint8_t buffer[16];
+    uint32_t offset = 0;
+    for (;;) {
+        int n = read(fd, buffer, sizeof(buffer));
+        if (n <= 0) break;
+        swrite_hex(1, offset, 8);
+        swrite(1, "  ");
+        for (int i = 0; i < 16; ++i) {
+            if (i < n) swrite_hex(1, buffer[i], 2);
+            else swrite(1, "  ");
+            swrite(1, " ");
+        }
+        swrite(1, " |");
+        for (int i = 0; i < n; ++i) {
+            char c = (char)buffer[i];
+            swrite_char(1, c >= 32 && c < 127 ? c : '.');
+        }
+        swrite(1, "|\n");
+        offset += (uint32_t)n;
+    }
+    if (path && fd != 0) close(fd);
+    return 0;
+}
+
+static int utility_hexdump(const command_t* cmd) {
+    if (cmd->argc == 1) return hexdump_one(0);
+    int status = 0;
+    for (int i = 1; i < cmd->argc; ++i)
+        if (hexdump_one(cmd->argv[i])) status = 1;
+    return status;
+}
+
+static int utility_mkdir(const command_t* cmd) {
+    int parents = 0;
+    int arg = 1;
+    if (arg < cmd->argc && scmp(cmd->argv[arg], "-p") == 0) {
+        parents = 1;
+        ++arg;
+    }
+    if (arg >= cmd->argc) {
         swrite(2, "mkdir: missing operand\n");
         return 1;
     }
     int status = 0;
-    for (int i = 1; i < cmd->argc; ++i)
-        if (mkdir(cmd->argv[i]) < 0) status = 1;
+    for (int i = arg; i < cmd->argc; ++i) {
+        if (!parents) {
+            if (mkdir(cmd->argv[i]) < 0) status = 1;
+            continue;
+        }
+        char path[LINE_MAX];
+        scopy(path, cmd->argv[i], sizeof(path));
+        int len = slen(path);
+        while (len > 1 && path[len - 1] == '/') path[--len] = '\0';
+        for (int j = 1; j < len; ++j) {
+            if (path[j] != '/') continue;
+            path[j] = '\0';
+            mkdir(path);
+            path[j] = '/';
+        }
+        user_stat_t info;
+        if (stat(path, &info) == 0) {
+            if (info.type != 2) status = 1;
+        } else if (mkdir(path) < 0) {
+            status = 1;
+        }
+    }
     return status;
 }
 
+static int remove_tree(const char* path, int recursive, int force) {
+    user_stat_t info;
+    if (stat(path, &info) < 0) return force ? 0 : 1;
+    if (info.type != 2 || !recursive) return remove(path) < 0 ? 1 : 0;
+    if (scmp(path, "/") == 0 || scmp(path, ".") == 0 ||
+        scmp(path, "..") == 0) {
+        swrite(2, "rm: refusing to remove root or current directory\n");
+        return 1;
+    }
+    for (;;) {
+        user_dirent_t entry;
+        int found = 0;
+        for (uint32_t index = 0; ; ++index) {
+            int got = readdir(path, index, &entry);
+            if (got <= 0) break;
+            if (!entry.inum || scmp(entry.name, ".") == 0 ||
+                scmp(entry.name, "..") == 0) continue;
+            found = 1;
+            break;
+        }
+        if (!found) break;
+        char child[LINE_MAX];
+        if (join_path(child, sizeof(child), path, entry.name) < 0 ||
+            remove_tree(child, 1, force))
+            return 1;
+    }
+    return remove(path) < 0 ? 1 : 0;
+}
+
 static int utility_rm(const command_t* cmd) {
-    if (cmd->argc < 2) {
+    int recursive = 0;
+    int force = 0;
+    int arg = 1;
+    while (arg < cmd->argc && cmd->argv[arg][0] == '-' &&
+           cmd->argv[arg][1]) {
+        for (int i = 1; cmd->argv[arg][i]; ++i) {
+            if (cmd->argv[arg][i] == 'r' || cmd->argv[arg][i] == 'R')
+                recursive = 1;
+            else if (cmd->argv[arg][i] == 'f') force = 1;
+            else {
+                swrite(2, "rm: usage: rm [-rf] path...\n");
+                return 2;
+            }
+        }
+        ++arg;
+    }
+    if (arg >= cmd->argc) {
         swrite(2, "rm: missing operand\n");
         return 1;
     }
     int status = 0;
-    for (int i = 1; i < cmd->argc; ++i)
-        if (remove(cmd->argv[i]) < 0) status = 1;
+    for (int i = arg; i < cmd->argc; ++i)
+        if (remove_tree(cmd->argv[i], recursive, force)) status = 1;
     return status;
 }
 
@@ -840,11 +1670,11 @@ static int utility_stat(const command_t* cmd) {
     }
     swrite(1, info.type == 2 ? "type=directory" : "type=file");
     swrite(1, " size=");
-    putdec(info.size);
+    swrite_dec(1, info.size);
     swrite(1, " nlink=");
-    putdec(info.nlink);
+    swrite_dec(1, info.nlink);
     swrite(1, " inode=");
-    putdec(info.inum);
+    swrite_dec(1, info.inum);
     swrite(1, "\n");
     return 0;
 }
@@ -855,6 +1685,32 @@ static int execute_builtin(const command_t* cmd) {
     if (scmp(name, "pwd") == 0) return utility_pwd();
     if (scmp(name, "ls") == 0) return utility_ls(cmd);
     if (scmp(name, "cat") == 0) return utility_cat(cmd);
+    if (scmp(name, "touch") == 0) return utility_touch(cmd);
+    if (scmp(name, "cp") == 0) return utility_cp(cmd);
+    if (scmp(name, "head") == 0) return utility_head(cmd);
+    if (scmp(name, "tail") == 0) return utility_tail(cmd);
+    if (scmp(name, "wc") == 0) return utility_wc(cmd);
+    if (scmp(name, "grep") == 0) return utility_grep(cmd);
+    if (scmp(name, "printf") == 0) return utility_printf(cmd);
+    if (scmp(name, "test") == 0) return utility_test(cmd);
+    if (scmp(name, "[") == 0) return utility_test(cmd);
+    if (scmp(name, "read") == 0) return utility_read(cmd);
+    if (scmp(name, "sleep") == 0) return utility_sleep(cmd);
+    if (scmp(name, "uptime") == 0) return utility_uptime();
+    if (scmp(name, "hexdump") == 0) return utility_hexdump(cmd);
+    if (scmp(name, "which") == 0) return utility_which(cmd, 0);
+    if (scmp(name, "type") == 0) return utility_which(cmd, 1);
+    if (scmp(name, "clear") == 0) {
+        clear_screen();
+        return 0;
+    }
+    if (scmp(name, "source") == 0 || scmp(name, ".") == 0) {
+        if (cmd->argc != 2) {
+            swrite(2, "source: usage: source FILE\n");
+            return 2;
+        }
+        return execute_script_file(cmd->argv[1]);
+    }
     if (scmp(name, "mkdir") == 0) return utility_mkdir(cmd);
     if (scmp(name, "rm") == 0) return utility_rm(cmd);
     if (scmp(name, "mv") == 0) return utility_mv(cmd);
@@ -904,6 +1760,14 @@ static int execute_builtin(const command_t* cmd) {
     if (scmp(name, "true") == 0) return 0;
     if (scmp(name, "false") == 0) return 1;
     if (scmp(name, "history") == 0) {
+        if (cmd->argc == 2 && scmp(cmd->argv[1], "-c") == 0) {
+            history_count = 0;
+            history_index = 0;
+            int fd = open(HISTORY_FILE, O_CREAT | O_WRONLY | O_TRUNC);
+            if (fd < 0) return 1;
+            close(fd);
+            return 0;
+        }
         int start = 0;
         if (cmd->argc > 1) {
             int recent;
@@ -921,16 +1785,32 @@ static int execute_builtin(const command_t* cmd) {
         return 0;
     }
     if (scmp(name, "cd") == 0) {
+        char current[LINE_MAX];
+        if (!getcwd(current, sizeof(current))) current[0] = '\0';
         const char* path = cmd->argc > 1 ? cmd->argv[1] : "/";
-        if (chdir(path) < 0) {
+        int show_path = 0;
+        if (scmp(path, "-") == 0) {
+            path = previous_cwd;
+            show_path = 1;
+        }
+        char target[LINE_MAX];
+        scopy(target, path, sizeof(target));
+        if (chdir(target) < 0) {
             swrite(2, "cd: no such directory\n");
             return 1;
+        }
+        if (current[0]) scopy(previous_cwd, current, sizeof(previous_cwd));
+        if (show_path) {
+            swrite(1, target);
+            swrite(1, "\n");
         }
         return 0;
     }
     if (scmp(name, "help") == 0) {
-        swrite(1, "builtins: cd exit jobs fg bg kill wait history export unset set help\n");
-        swrite(1, "tools: echo cat ls pwd mkdir rm mv ln truncate stat env\n");
+        swrite(1, "shell: cd exit jobs fg bg kill wait history read source export unset set help\n");
+        swrite(1, "files: echo pwd ls cat touch cp mkdir rm mv ln truncate stat hexdump\n");
+        swrite(1, "text: head tail wc grep printf test [ which type clear sleep uptime env\n");
+        swrite(1, "kernel: exit -> OS shell; then cc edit vi asm debug tetris mario font\n");
         swrite(1, "syntax: 'quotes' \"$VAR\" a\\ b; cmd [> out] [2> err] [2>&1] [| cmd] [&]\n");
         return 0;
     }
@@ -979,7 +1859,9 @@ static int is_parent_builtin(const command_t* cmd) {
            scmp(name, "jobs") == 0 || scmp(name, "fg") == 0 ||
            scmp(name, "bg") == 0 || scmp(name, "kill") == 0 ||
            scmp(name, "wait") == 0 || scmp(name, "export") == 0 ||
-           scmp(name, "unset") == 0 || scmp(name, "set") == 0;
+           scmp(name, "unset") == 0 || scmp(name, "set") == 0 ||
+           scmp(name, "history") == 0 || scmp(name, "read") == 0 ||
+           scmp(name, "source") == 0 || scmp(name, ".") == 0;
 }
 
 static int job_pid_count(const job_t* job) {
@@ -1456,11 +2338,6 @@ static int search_redraw(const char* line, const char* query,
     return shown;
 }
 
-static const char* completion_commands[] = {
-    "bg", "cat", "cd", "echo", "env", "exit", "export", "false", "fg",
-    "help", "history", "jobs", "kill", "ln", "ls", "mkdir", "mv", "pwd",
-    "rm", "set", "stat", "truncate", "true", "unset", "wait", 0
-};
 static char completion_storage[2048];
 static char* completion_names[WORD_MAX];
 static unsigned char completion_dirs[WORD_MAX];
@@ -1548,8 +2425,8 @@ static void complete_line(char* line, int* len, int* cursor) {
     completion_pos = 0;
     int command_position = start == 0;
     if (command_position && slash < 0) {
-        for (int i = 0; completion_commands[i]; ++i)
-            completion_add(completion_commands[i], base, 0);
+        for (int i = 0; shell_builtin_names[i]; ++i)
+            completion_add(shell_builtin_names[i], base, 0);
         completion_add_dir("/bin", base, 0);
     } else if (!command_position || slash >= 0) {
         completion_add_dir(dir, base, 0);

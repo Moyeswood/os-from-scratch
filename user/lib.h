@@ -69,6 +69,7 @@ static inline int syscall_status(uint32_t result) {
 #define SYS_SIGPROCMASK 33
 #define SYS_SIGRETURN 34
 #define SYS_SIGACTION_FLAGS 35
+#define SYS_CLEAR    36
 
 #define SIGINT   2
 #define SIGKILL  9
@@ -215,6 +216,7 @@ static inline int  getkey(void) {
     return syscall_status(result);
 }
 static inline uint32_t ticks(void) { return syscall0(SYS_GETTICKS); }
+static inline void clear_screen(void) { syscall0(SYS_CLEAR); }
 static inline int  fork(void) { return syscall_status(syscall0(SYS_FORK)); }
 static inline int  getpid(void) { return (int)syscall0(SYS_GETPID); }
 static inline void sleep(uint32_t n) { syscall1(SYS_SLEEP, n); }

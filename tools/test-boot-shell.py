@@ -9,6 +9,8 @@ import time
 
 results = []
 KEYMAP = {" ": "spc", "\n": "ret"}
+NORMAL_IMG = os.environ.get("NEWOS_NORMAL_IMG", "build/os.img")
+RECOVERY_IMG = os.environ.get("NEWOS_RECOVERY_IMG", "build/os-kernel.img")
 
 
 def check(name, ok, detail=""):
@@ -94,7 +96,7 @@ class Guest:
             self.sock.close()
 
 
-normal = Guest("build/os.img", "normal")
+normal = Guest(NORMAL_IMG, "normal")
 try:
     check("default boot: splash", normal.wait_for("[SP] done", 30, "splash"))
     check("default boot: Ring 3 shell prompt",
@@ -107,10 +109,26 @@ try:
     normal.type_text("pwd\n")
     check("default boot: recovery kernel shell",
           normal.wait_for("[SH] pwd: /", 12, "recovery"))
+    normal.type_text("help\n")
+    check("default boot: recovery help",
+          normal.wait_for("[SH] help", 10, "recovery-help"))
+    normal.type_text("cc\n")
+    check("default boot: recovery cc dispatches",
+          normal.wait_for("[SH] cc usage", 10, "recovery-cc"))
+    normal.type_text("tetris\n")
+    check("default boot: recovery game dispatches",
+          normal.wait_for("[GAME] Mode 13h set, starting tetris", 10,
+                          "recovery-game"))
+    time.sleep(1.5)
+    normal.send("sendkey spc", wait=0.4)
+    time.sleep(0.8)
+    normal.send("sendkey esc", wait=0.4)
+    check("default boot: recovery game exits",
+          normal.wait_for("[GAME] Tetris exited", 10, "recovery-game-exit"))
 finally:
     normal.stop()
 
-recovery = Guest("build/os-kernel.img", "recovery")
+recovery = Guest(RECOVERY_IMG, "recovery")
 try:
     check("recovery image: splash",
           recovery.wait_for("[SP] done", 30, "recovery-splash"))

@@ -125,7 +125,7 @@ $(ELF_DEMO): user/elfdemo.c user/lib.h user/elf_linker.ld
 $(KERNEL_DIR)/%.o: $(KERNEL_DIR)/%.c $(wildcard $(KERNEL_DIR)/*.h)
 	$(CC) $(CFLAGS32) -g -c $< -o $@
 
-$(KERNEL_ELF): $(KERNEL_OBJS)
+$(KERNEL_ELF): $(KERNEL_OBJS) | $(KERNEL_DIR)/linker.ld
 	$(LD) -m elf_i386 -T $(KERNEL_DIR)/linker.ld $^ -o $@
 
 $(KERNEL_BIN): $(KERNEL_ELF)
@@ -158,10 +158,13 @@ debug: $(OS_IMG) $(DISK_IMG)
 		-drive file=$(DISK_IMG),format=raw,if=ide,index=0 \
 		-serial stdio -s -S
 
+docs:
+	python3 tools/generate-source-docs.py
+
 clean:
 	rm -rf $(BUILD_DIR) $(KERNEL_DIR)/*.o
 
-.PHONY: all run debug clean test-memory test-vm test-exec test-process test-fd test-shell test-disk test-fs2 test-fs-journal test-signals test-boot-shell test-edit test-vi test-asm test-attached test-suite test-all
+.PHONY: all run debug docs clean test-memory test-vm test-exec test-process test-fd test-shell test-disk test-fs2 test-fs-journal test-signals test-boot-shell test-edit test-vi test-asm test-attached test-suite test-all
 
 test-memory: $(OS_KERNEL_IMG)
 	python3 tools/test-memory.py
