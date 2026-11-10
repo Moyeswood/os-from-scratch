@@ -4,6 +4,7 @@
 #include "proc.h"
 #include "task.h"
 #include "vm.h"
+#include "debugger.h"
 
 // ============================================================
 //  异常处理 (里程碑 10: Ring 3 用户态; 里程碑 11b: 杀进程走调度器)
@@ -61,6 +62,11 @@ void exc_dispatch(uint32_t* f) {
     // 返回异常桩，iret 重试原指令；其余情况才打印现场并杀进程。
     if (vec == 14 && (cs & 3) &&
         vm_handle_page_fault(task_current(), cr2, err))
+        return;
+
+    // 调试目标的 #DB/#BP 是控制事件，不按故障杀进程。
+    if ((cs & 3) && (vec == 1 || vec == 3) &&
+        debugger_exception(f))
         return;
 
     print_both("\n\r[EXC] #");

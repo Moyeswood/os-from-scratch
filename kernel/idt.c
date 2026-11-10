@@ -23,6 +23,9 @@ void idt_init() {
     for (int i = 0; i < 32; i++) {
         idt_set_gate(i, exc_stubs[i], 0x08, 0x8E);
     }
+    // INT3 是用户态软件断点入口。软件中断会检查门 DPL，
+    // 若不开放到 Ring 3，断点字节会先触发 #GP 而不是 #BP。
+    idt_set_gate(3, exc_stubs[3], 0x08, 0xEE);
 
     // 设置 IRQ0 (定时器) 和 IRQ1 (键盘) 的中断门
     idt_set_gate(32, (uint32_t)irq0_handler, 0x08, 0x8E);

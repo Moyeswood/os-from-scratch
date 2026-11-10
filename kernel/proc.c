@@ -89,7 +89,8 @@ static void build_user_frame(task_t* t, uint32_t entry, uint32_t user_esp) {
 // ---------- 建进程 ----------
 static int build_process(const char* name, const uint8_t* image,
                          uint32_t image_size, int argc, char* const* argv,
-                         int envc, char* const* envp, int detached) {
+                         int envc, char* const* envp, int detached,
+                         int paused) {
     sweep_zombies();   // 顺手回收孤儿僵尸的槽位和内存
 
     if (!image || image_size == 0) {
@@ -138,7 +139,7 @@ static int build_process(const char* name, const uint8_t* image,
         return -1;
     }
     build_user_frame(t, entry, initial_esp);
-    t->state = TASK_READY;
+    t->state = paused ? TASK_STOPPED : TASK_READY;
 
     serial_puts("[PROC] spawn ");
     serial_puts(name);
@@ -161,7 +162,7 @@ int proc_spawn_args(const char* name, int argc, char* const* argv,
     const user_prog_t* p = prog_lookup(name);
     if (!p) return -1;
     return build_process(name, p->data, p->size, argc, argv, envc, envp,
-                         detached);
+                         detached, 0);
 }
 
 int proc_spawn_file(const char* path) {
@@ -178,7 +179,20 @@ int proc_spawn_file_args(const char* path, int argc, char* const* argv,
     char name[16];
     exec_basename(name, sizeof(name), path);
     int pid = build_process(name, image, size, argc, argv, envc, envp,
-                            detached);
+                            detached, 0);
+    kfree(image);
+    return pid;
+}
+
+int proc_spawn_file_paused(const char* path) {
+    uint8_t* image = 0;
+    uint32_t size = 0;
+    if (exec_load_file(path, &image, &size) < 0) return -1;
+
+    char name[16];
+    char* argv[1] = { (char*)path };
+    exec_basename(name, sizeof(name), path);
+    int pid = build_process(name, image, size, 1, argv, 0, 0, 0, 1);
     kfree(image);
     return pid;
 }

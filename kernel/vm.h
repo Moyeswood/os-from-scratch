@@ -48,6 +48,10 @@ uint32_t vm_mmap(task_t* t, uint32_t length);
 // 系统调用读用户指针前的逐页映射检查，防止内核对未映射页取数。
 int vm_user_range_ok(task_t* t, uint32_t addr, uint32_t length);
 
+// 内核只读用户内存，按目标页目录翻译物理页，不切换当前 CR3。
+int vm_read_user(task_t* t, uint32_t addr, void* destination,
+                 uint32_t length);
+
 // 内核写用户内存。与普通 memcpy 不同，遇到 COW 页时先私有化，
 // 避免 Ring 0 写只读 PTE 时绕过 fork 隔离。
 int vm_write_user(task_t* t, uint32_t addr, const void* source,

@@ -143,7 +143,7 @@ static void cmd_help() {
     vga_puts("  edit FILE (^S save, ^X exit; ^Z/^Y undo/redo)\n\r");
     vga_puts("  vi FILE (i/a/o insert, Esc normal, :w/:q/:wq)\n\r");
     vga_puts("  asm SRC -o DEST (32-bit Intel syntax -> flat program)\n\r");
-    vga_puts("  debug FILE (r/d/u/e/w/g/q flat-program monitor)\n\r");
+    vga_puts("  debug FILE (t/p step, bp/bl/bc, r/d/u/e/w/g/q)\n\r");
     vga_puts("  cc f.c [ARGS]\n\r");
     vga_puts("  font [style] [N]; font list\n\r");
     vga_puts("  tetris mario testmode splash (ESC exits games)\n\r");

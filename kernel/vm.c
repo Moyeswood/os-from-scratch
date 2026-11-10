@@ -534,6 +534,26 @@ int vm_user_range_ok(task_t* t, uint32_t addr, uint32_t length) {
     return 1;
 }
 
+int vm_read_user(task_t* t, uint32_t addr, void* destination,
+                 uint32_t length) {
+    if (!t || !t->is_user || (!destination && length)) return -1;
+    uint8_t* output = (uint8_t*)destination;
+
+    while (length) {
+        uint32_t page_addr = align_down(addr);
+        uint32_t phys = paging_translate(t->cr3, page_addr);
+        if (!phys) return -1;
+        uint32_t offset = addr - page_addr;
+        uint32_t chunk = PAGE_SIZE - offset;
+        if (chunk > length) chunk = length;
+        k_memcpy(output, (const void*)(phys + offset), chunk);
+        addr += chunk;
+        output += chunk;
+        length -= chunk;
+    }
+    return 0;
+}
+
 int vm_write_user(task_t* t, uint32_t addr, const void* source,
                   uint32_t length) {
     if (!t || !t->is_user || (!source && length)) return -1;

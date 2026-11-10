@@ -115,6 +115,7 @@ void task_wake_pid(int pid);  // 唤醒等 WAIT_PROC 的睡眠者 (子进程退�
 void task_wake_pipe(void);    // 管道状态变化时唤醒等待者
 void task_wake_fs(void);      // 文件系统锁释放时唤醒等待者
 void task_zombie_switch_away(int exit_code);  // 当前任务变 ZOMBIE 并切走, 永不返回
+void task_stop_switch_away(void);  // 当前任务变 STOPPED 并切走, 恢复后返回
 int  task_slot_of(task_t* t); // 任务在表里的下标
 void task_fd_reset(task_t* t);
 void task_fd_copy(task_t* dst, const task_t* src);

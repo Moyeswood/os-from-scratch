@@ -386,6 +386,20 @@ void task_zombie_switch_away(int exit_code) {
     while (1) { __asm__ volatile("sti; hlt"); }
 }
 
+// 调试器断点/#DB 使用: 保存当前切换现场后挂起任务。
+// 被唤醒并从 switch_task 返回时继续沿异常处理链 iret 回用户态。
+void task_stop_switch_away(void) {
+    __asm__ volatile("cli");
+    cur->state = TASK_STOPPED;
+    cur->wait_flags = 0;
+    task_wake_pid(cur->pid);
+    task_t* next = pick_next();
+    if (next != cur) {
+        task_t* prev = cur;
+        switch_to(prev, next);
+    }
+}
+
 int task_slot_of(task_t* t) {
     return t - tasks;
 }

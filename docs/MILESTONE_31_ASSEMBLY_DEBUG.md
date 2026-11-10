@@ -77,7 +77,7 @@ d [addr]          8×16 字节十六进制 + ASCII
 u [addr]          反汇编 8 条指令
 e addr b1 b2...   修改镜像字节
 w                 写回原文件
-g                 生成临时 /bin/.debugrun 并运行
+g                 从当前真实用户现场继续
 q                 退出
 ?                 帮助
 ```
@@ -87,7 +87,7 @@ ModR/M、短指令、`int`、相对 `call/jmp` 和 `jcc`。
 
 ## 测试
 
-新增 `tools/test-asm.py`，21 项检查：
+`tools/test-asm.py` 已扩展为 34 项检查：
 
 - 在 OS 内使用编辑器写汇编源；
 - 两遍汇编、标签地址和 flat 文件生成；
@@ -102,7 +102,5 @@ ModR/M、短指令、`int`、相对 `call/jmp` 和 `jcc`。
 - 只支持汇编器列出的指令子集，不是完整 NASM/GAS。
 - 暂不支持 ELF、重定位、宏、包含文件、段和符号对象。
 - 内存寻址暂不支持 SIB index/scale 的寄存器索引形式。
-- Monitor 的 `g` 是整程序运行，尚未实现真实单步 `t`、step-over `p`
-  和 `INT3` 断点。
-- Monitor 寄存器视图在程序运行前显示静态用户上下文，运行后不会自动
-  捕获目标进程现场。
+- 里程碑 32 已把 `g` 改为真实继续，并加入 `t/p/bp`；详见
+  `MILESTONE_32_REAL_DEBUG.md`。

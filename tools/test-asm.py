@@ -146,7 +146,7 @@ def write_editor_file(path, content):
 SOURCE = (
     "start:\n"
     "mov eax, 14\n"
-    "cmp eax, 14\n"
+    "call check\n"
     "jne bad\n"
     "mov ebx, 1\n"
     "mov ecx, message\n"
@@ -161,6 +161,9 @@ SOURCE = (
     "int 0x80\n"
     "message:\n"
     "db \"ASM OK\", 10\n"
+    "check:\n"
+    "cmp eax, 14\n"
+    "ret\n"
 )
 
 try:
@@ -181,7 +184,7 @@ try:
     check("assembler saves flat program",
           wait_since("[ASM] saved: /bin/helloasm", 10, "asm-save"))
     check("assembler flat output",
-          wait_since("bytes=0x0000003E", 5, "asm-size"))
+          wait_since("bytes=0x00000044", 5, "asm-size"))
     time.sleep(0.6)
 
     mark()
@@ -208,15 +211,56 @@ try:
     type_text("debug /bin/helloasm\n")
     check("debug monitor loads image",
           wait_since("[DBG] loaded", 10, "dbg-load"))
+    check("debug creates paused target",
+          wait_since("[DBG] target paused", 10, "dbg-paused"))
     type_text("r\n")
     check("debug registers", wait_since("[DBG] r", 5, "dbg-r"))
+    check("debug registers show real context",
+          wait_since("[DBG] regs eip=0x02000000", 5, "dbg-real-r"))
     type_text("d 0x02000000\n")
     check("debug memory dump", wait_since("[DBG] d", 5, "dbg-d"))
     type_text("u 0x02000000\n")
     check("debug unassemble", wait_since("[DBG] u", 5, "dbg-u"))
+
+    mark()
+    type_text("t\n")
+    check("debug single-step command", wait_since("[DBG] t", 5, "dbg-t"))
+    check("debug TF trap returns to monitor",
+          wait_since("[DBG] stop reason=single-step complete", 8, "dbg-t-stop"))
+    check("debug single-step advances EIP",
+          wait_since("[DBG] stop reason=single-step complete eip=0x02000005",
+                     5, "dbg-t-eip"))
+
+    mark()
+    type_text("p\n")
+    check("debug step-over command", wait_since("[DBG] p", 5, "dbg-p"))
+    check("debug temporary return breakpoint hits",
+          wait_since("[DBG] stop reason=step-over complete",
+                     8, "dbg-p-stop"))
+    check("debug step-over lands after call",
+          wait_since("eip=0x0200000A", 5, "dbg-p-eip"))
+
+    mark()
+    type_text("bp 0x0200000A\n")
+    check("debug installs breakpoint",
+          wait_since("[DBG] bp set", 5, "dbg-bp-set"))
+    type_text("bl\n")
+    check("debug lists breakpoint",
+          wait_since("[DBG] bp list", 5, "dbg-bp-list"))
+
     mark()
     type_text("g\n")
-    check("debug runs image", wait_since("[DBG] g", 5, "dbg-g"))
+    check("debug breakpoint command", wait_since("[DBG] g", 5, "dbg-g"))
+    check("debug INT3 stops at breakpoint",
+          wait_since("[DBG] stop reason=breakpoint hit",
+                     8, "dbg-bp-hit"))
+    check("debug breakpoint reports address",
+          wait_since("[DBG] stop reason=breakpoint hit eip=0x0200000A",
+                     5, "dbg-bp-eip"))
+
+    mark()
+    type_text("g\n")
+    check("debug continues from breakpoint", wait_since("[DBG] g", 5, "dbg-g2"))
     check("debug image output", wait_since("ASM OK\n", 10, "dbg-output"))
     check("debug returns from image",
           wait_since("[DBG] returned", 10, "dbg-return"))

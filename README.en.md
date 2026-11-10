@@ -92,7 +92,10 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 - `asm source.asm -o /bin/program`: two-pass 32-bit Intel-syntax assembler
 - Labels, `db/dd`, register/immediate/memory operands, arithmetic, branches, stack, and `int`
 - Produces flat Ring 3 programs that run directly from `/bin`
-- `debug /bin/program`: `r` registers, `d` memory, `u` disassembly, `e` edit, `w` write, `g` run
+- `debug /bin/program`: pauses a real user process; `t` single-step,
+  `p` step-over, `bp/bl/bc` software breakpoints, and `g` resumes live state
+- `r` shows real GPR/EIP/EFLAGS/CR2/CR3; stops automatically disassemble EIP
+  and display the current stack top
 
 ### 🎮 Fun & Applications
 - **Tetris**: 7-bag randomizer, wall kicks, lock delay, hold piece, line-clear animation, 5 color themes, beep SFX
@@ -137,7 +140,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `vi file` | Open the vi-style editor (Esc returns to Normal; `:wq` saves and exits) |
 | `cc file.c [args...]` | Compile and run a C program (args go to main) |
 | `asm source.asm -o dest` | Assemble a 32-bit Intel-syntax flat user program |
-| `debug file` | DOS DEBUG-style monitor: `r/d/u/e/w/g/q` |
+| `debug file` | DOS DEBUG-style monitor with real `t/p`, `bp/bl/bc`, and resume |
 | `run prog [args] [&]` | Run an embedded or `/bin` executable (`args` enter the initial stack; `&` = detached background) |
 | `run sh` | Re-enter the user shell from recovery mode (the normal image already starts there) |
 | `sh FILE` / `sh -c CMD` | Run a script or command string in a separate user shell |
@@ -220,7 +223,7 @@ python3 tools/test-signals.py  # user handler/mask/pending/sigreturn
 python3 tools/test-boot-shell.py # normal Ring 3 boot / recovery kernel shell
 python3 tools/test-edit.py     # editor/undo/find/caret (67 checks)
 python3 tools/test-vi.py       # vi modes/motions/yank/search/commands (28 checks)
-python3 tools/test-asm.py      # assembler/flat program/DEBUG monitor (21 checks)
+python3 tools/test-asm.py      # assembler/flat program/real stepping & breakpoints (34 checks)
 python3 tools/test-cc.py       # C compiler   (41 checks)
 python3 tools/test-preempt.py  # preemption   (7 checks)
 python3 tools/test-mario.py    # Mario/powerups/UI/two themes (18 checks)
@@ -324,6 +327,7 @@ python3 tools/test-shell.py    # shell/pipelines/env/scripts/jobs (155 checks)
 | 29 | Negative-errno syscall ABI + user errno compatibility + script exit statuses |
 | 30 | vi Normal/Insert/Command modes, line operations, search, and `:w/:q/:wq/:q!` |
 | 31 | Two-pass 32-bit assembler + flat output + DEBUG monitor `r/d/u/e/w/g/q` |
+| 32 | Paused user process + TF/#DB stepping + INT3 breakpoints + call step-over + live context |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 

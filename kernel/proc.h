@@ -33,6 +33,7 @@
 
 int  proc_spawn(const char* name);     // 建用户进程任务, 返回 pid (失败 -1)
 int  proc_spawn_file(const char* path); // 从内存 FS 的 flat 文件创建进程
+int  proc_spawn_file_paused(const char* path); // 建 STOPPED 进程 (DEBUG)
 int  proc_spawn_args(const char* name, int argc, char* const* argv,
                      int envc, char* const* envp, int detached);
 int  proc_spawn_file_args(const char* path, int argc, char* const* argv,

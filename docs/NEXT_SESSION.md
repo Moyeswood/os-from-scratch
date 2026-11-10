@@ -6,8 +6,9 @@
 
 - 项目目录：`/home/mfw/Documents/claude001/NewOS`
 - 分支：`main`
-- 当前进度：里程碑 31（汇编器与 DEBUG Monitor）完成
-- 回归：汇编/DEBUG 21 项、vi 28 项、原 edit 67 项、Shell 155 项通过
+- 当前进度：里程碑 32（真实单步与断点）完成
+- 回归：汇编/DEBUG 34 项、vi 28 项、原 edit 67 项、Shell 155 项通过
+- 完整 `make test-suite` 通过；最终内核镜像 286180 字节
 - 最终内核镜像 279364 字节，低于 448KB（458752 字节）加载上限
 
 ## 今日完成
@@ -47,6 +48,8 @@
     撤销重做和 `:w/:q/:q!/:wq`。
 19. 里程碑 31：两遍 32 位汇编器、标签/数据/内存操作、flat 输出，
     以及 `r/d/u/e/w/g/q` DEBUG Monitor。
+20. 里程碑 32：暂停用户进程加载、TF/#DB 单步、INT3/#BP 断点、
+    call step-over、断点自动重装与真实寄存器/栈/页表现场。
 
 关键文档：
 
@@ -57,6 +60,7 @@
 - `docs/MILESTONE_29_ERRORS.md`（错误码与脚本状态设计）
 - `docs/MILESTONE_30_VI.md`（vi modal 编辑器设计）
 - `docs/MILESTONE_31_ASSEMBLY_DEBUG.md`（汇编器与 Monitor 设计）
+- `docs/MILESTONE_32_REAL_DEBUG.md`（真实调试设计）
 - `docs/MILESTONE_13_VM.md`
 - `docs/MILESTONE_14_EXEC.md`
 - `docs/MILESTONE_15_PROCESS_ELF.md`
@@ -160,13 +164,20 @@ make test-fs-journal
 - `debug FILE` 提供 `r/d/u/e/w/g/q`。
 - 汇编成功程序输出 `ASM OK`，错误报告准确行号。
 
-## 下次建议：里程碑 32（真实单步与断点）
+## 已完成：里程碑 32（真实单步与断点）
 
-1. 将目标程序加载为暂停用户进程并保存初始现场。
-2. 使用 EFLAGS.TF/#DB 实现 `t` 单步。
-3. 使用 `INT3/#BP` 实现断点、恢复原始字节和命中展示。
-4. 实现 `p` step-over call 和 `g` 从断点继续。
-5. Monitor 自动反汇编 EIP、显示实际寄存器和栈。
+- 目标程序以 STOPPED 用户进程创建，`g` 不再复制临时文件重跑。
+- `t` 使用 EFLAGS.TF + #DB；`p` 对 `call` 设置临时返回断点。
+- `bp/bl/bc` 管理 INT3 软件断点，命中后恢复原字节并在继续时自动重装。
+- `r` 与自动停止展示使用真实 GPR/EIP/EFLAGS、用户栈顶和 CR2/CR3。
+- INT3 门开放到 DPL=3，避免 Ring 3 断点先触发 #GP。
+
+## 下次建议：DEBUG 扩展与 Shell 控制流
+
+1. `a addr` 交互式汇编、寄存器写命令与最近指令差异展示。
+2. 多目标/硬件执行断点；当前 `p` 只识别直接 `call rel32`。
+3. Shell `&&`、`||`、`!` 和括号分组。
+4. `if/for/while/case`、`test`、函数和 positional parameters。
 
 ## 后续：Shell 控制流
 
@@ -185,7 +196,7 @@ make test-fs-journal
   赋值字段语义和命令替换 `$?` 仍需完善。
 - errno 当前是单翻译单元静态值；复杂文件系统失败仍常归并为 EIO。
 - 汇编器仅支持自定义指令子集，不兼容完整 NASM/GAS。
-- DEBUG 的 `g` 当前整程序运行；`t/p/bp` 真实单步和断点尚未实现。
+- DEBUG 已有真实 `t/p/bp`；暂无 `a`、寄存器写和硬件断点。
 - argv 上限 16，envp 上限 8，参数文本上限 3KB。
 - 文件系统为 1MB 持久化 FS；结构上已支持一级间接块，实际单文件上限
   受磁盘容量约束。

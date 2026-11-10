@@ -92,7 +92,9 @@ vi 风格的 `vi` 命令复用同一文本缓冲：
 - `asm source.asm -o /bin/program`：两遍扫描的 32 位 Intel 语法汇编器
 - 支持标签、`db/dd`、寄存器/立即数/内存寻址、算术/逻辑、分支、栈和 `int`
 - 输出 flat Ring 3 程序并直接从 `/bin` 运行
-- `debug /bin/program`：`r` 寄存器、`d` 内存、`u` 反汇编、`e` 修改、`w` 写回、`g` 运行
+- `debug /bin/program`：暂停真实用户进程；`t` 单步、`p` step-over、
+  `bp/bl/bc` 管理软件断点、`g` 从当前现场继续
+- `r` 显示真实 GPR/EIP/EFLAGS/CR2/CR3，命中时自动反汇编 EIP 并显示栈顶
 
 ### 🎮 娱乐与应用
 - **俄罗斯方块**：7-bag 随机、wall kick、锁定延迟、暂存、消行动画、5 套主题、蜂鸣音效
@@ -137,7 +139,7 @@ vi 风格的 `vi` 命令复用同一文本缓冲：
 | `vi file` | 打开 vi 风格编辑器（Esc 返回 Normal，`:wq` 保存退出） |
 | `cc file.c [args...]` | 编译并运行 C 程序（参数传给 main） |
 | `asm source.asm -o dest` | 汇编 32 位 Intel 语法 flat 用户程序 |
-| `debug file` | DOS DEBUG 风格 monitor：`r/d/u/e/w/g/q` |
+| `debug file` | DOS DEBUG 风格 monitor：真实 `t/p` 单步、`bp/bl/bc` 断点和继续 |
 | `run prog [args] [&]` | 运行内嵌或 `/bin` 程序；参数进入初始用户栈，& = detached 后台任务 |
 | `run sh` | 从恢复 Shell 再进入用户态 Shell（正式镜像默认已进入） |
 | `sh FILE` / `sh -c CMD` | 在独立用户 Shell 中执行脚本或命令串 |
@@ -225,7 +227,7 @@ python3 tools/test-signals.py  # 用户 handler/屏蔽/pending/sigreturn
 python3 tools/test-boot-shell.py # 正式镜像 Ring 3 / 恢复镜像内核 Shell
 python3 tools/test-edit.py     # 编辑器/撤销/搜索/光标 (67 项)
 python3 tools/test-vi.py       # vi 模式/行操作/搜索/退出命令 (28 项)
-python3 tools/test-asm.py      # 汇编器/flat 程序/DEBUG monitor (21 项)
+python3 tools/test-asm.py      # 汇编器/flat 程序/真实单步与断点 (34 项)
 python3 tools/test-cc.py       # C 编译器 (41 项)
 python3 tools/test-preempt.py  # 抢占调度 (7 项)
 python3 tools/test-mario.py    # 马里奥/道具/界面/双主题 (18 项)
@@ -329,6 +331,7 @@ python3 tools/test-shell.py    # Shell/管道/环境/脚本/作业 (155 项)
 | 29 | 负 errno syscall ABI + 用户 errno 兼容层 + 脚本退出状态 |
 | 30 | vi Normal/Insert/Command、行操作、搜索与 `:w/:q/:wq/:q!` |
 | 31 | 32 位两遍汇编器 + flat 输出 + DEBUG monitor 的 `r/d/u/e/w/g/q` |
+| 32 | 暂停用户进程 + TF/#DB 单步 + INT3 断点 + call step-over + 真实现场 |
 
 每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
 
