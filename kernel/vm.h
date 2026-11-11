@@ -47,6 +47,9 @@ uint32_t vm_mmap(task_t* t, uint32_t length);
 
 // 系统调用读用户指针前的逐页映射检查，防止内核对未映射页取数。
 int vm_user_range_ok(task_t* t, uint32_t addr, uint32_t length);
+/* 按需映射: 内核直接读写用户缓冲前建立缺失页 (copy_to/from_user 语义) */
+int vm_demand_fault(task_t* t, uint32_t addr);
+int vm_fault_user_range(task_t* t, uint32_t addr, uint32_t length);
 
 // 内核只读用户内存，按目标页目录翻译物理页，不切换当前 CR3。
 int vm_read_user(task_t* t, uint32_t addr, void* destination,

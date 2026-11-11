@@ -429,11 +429,11 @@ static int cowed_page(task_t* t, uint32_t addr, uint32_t error) {
     return 1;
 }
 
-int vm_handle_page_fault(task_t* t, uint32_t addr, uint32_t error) {
-    if (!t || !t->is_user || !(error & 4)) return 0;
-
-    if (error & PAGE_PRESENT)
-        return cowed_page(t, addr, error);
+/* 修复(2026-11-12): 从 vm_handle_page_fault 抽出的按需映射核心。
+ * 对用户空间内合法的未映射地址建立零页 (堆 brk 内/mmap/栈, 栈守卫除外)。
+ * 内核侧 copy_to/from_user 语义: 直接读写用户缓冲前必须先 fault-in。 */
+int vm_demand_fault(task_t* t, uint32_t addr) {
+    if (!t || !t->is_user) return 0;
 
     if (!in_range(addr, USER_BASE, VM_STACK_TOP)) {
         serial_puts("[VM] reject pid=");
@@ -484,6 +484,34 @@ int vm_handle_page_fault(task_t* t, uint32_t addr, uint32_t error) {
     put_hex(align_down(addr));
     serial_puts("\n\r");
     return 1;
+}
+
+/* 修复(2026-11-12): 内核直接读写用户缓冲前, 把 [addr, addr+length)
+ * 范围内缺失的页全部按需建立。任一页非法/失败返回 0 (调用方报 EFAULT)。
+ * 注意: 已映射但 COW 共享的页不在这里处理 (内核写会绕过 COW 断点,
+ * 属后续改进项; 当前 fork 后子进程首次触碰共享页仍走 #PF 的 cowed_page)。 */
+int vm_fault_user_range(task_t* t, uint32_t addr, uint32_t length) {
+    if (!t || !t->is_user || addr < USER_BASE || addr >= VM_STACK_TOP)
+        return 0;
+    if (length == 0) return 1;
+    if (length > VM_STACK_TOP - addr) return 0;
+
+    uint32_t last = addr + length - 1u;
+    for (uint32_t page = align_down(addr);
+         page <= align_down(last); page += PAGE_SIZE) {
+        if (paging_translate(t->cr3, page)) continue;   /* 已映射, 跳过 */
+        if (!vm_demand_fault(t, page)) return 0;
+    }
+    return 1;
+}
+
+int vm_handle_page_fault(task_t* t, uint32_t addr, uint32_t error) {
+    if (!t || !t->is_user || !(error & 4)) return 0;
+
+    if (error & PAGE_PRESENT)
+        return cowed_page(t, addr, error);
+
+    return vm_demand_fault(t, addr);
 }
 
 uint32_t vm_brk(task_t* t, uint32_t new_break) {

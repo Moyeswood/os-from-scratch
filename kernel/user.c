@@ -157,7 +157,10 @@ static int sys_open(task_t* me, const char* user_path, uint32_t flags) {
 static int sys_read(task_t* me, int fd, void* user_buf, uint32_t count) {
     task_file_t* f = sys_fd(me, fd);
     if (!f) return KERR(EBADF);
-    if (!user_buf || !vm_user_range_ok(me, (uint32_t)user_buf, count))
+    /* 修复(2026-11-12): 不能只检查"已映射" (vm_user_range_ok 会拒绝
+     * 尚未按需建立的堆页, 导致读进新 malloc 缓冲直接 EFAULT);
+     * 按 copy_to_user 语义主动 fault-in 缺失页再直接写入。 */
+    if (!user_buf || !vm_fault_user_range(me, (uint32_t)user_buf, count))
         return KERR(EFAULT);
     if (!count) return 0;
 
@@ -197,7 +200,8 @@ static int sys_read(task_t* me, int fd, void* user_buf, uint32_t count) {
 static int sys_write(task_t* me, int fd, const void* user_buf, uint32_t count) {
     task_file_t* f = sys_fd(me, fd);
     if (!f) return KERR(EBADF);
-    if (!user_buf || !vm_user_range_ok(me, (uint32_t)user_buf, count))
+    /* 修复(2026-11-12): 同 sys_read — fault-in 缺失页而非拒绝 */
+    if (!user_buf || !vm_fault_user_range(me, (uint32_t)user_buf, count))
         return KERR(EFAULT);
     if (!count) return 0;
 
@@ -474,8 +478,9 @@ void syscall_dispatch(user_frame_t* f) {
         f->eax = sys_getticks();
         break;
     case SYS_CLEAR:
+        /* 修复: [SH] clear 测试标记移到命令层 (user/sh.c 的 clear 内置),
+         * 内核系统调用层不输出任何命令级标记 */
         vga_clear();
-        serial_puts("[SH] clear\n\r");
         f->eax = 0;
         break;
     case SYS_FORK:
