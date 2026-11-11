@@ -12,6 +12,8 @@
 
 extern uint8_t _kernel_start[];
 extern uint8_t _kernel_end[];
+extern uint8_t _kernel_image_end[];
+extern uint8_t _bss_start[];
 
 static uint8_t* bitmap;
 static uint8_t* reserved_bitmap;
@@ -133,8 +135,12 @@ void memory_init() {
     }
 
     // 内核镜像、分配位图、页表所在物理页永远不交给调用者。
+    // 修复: BSS 被链接脚本上提到 0x200000, 若按 [_kernel_start,_kernel_end)
+    // 连续预留会把中间的 1.4-1.7MB 空洞也锁死; 改为分别预留镜像与 BSS 两段。
     reserve_range((uint32_t)_kernel_start,
-                  (uint32_t)(_kernel_end - _kernel_start));
+                  (uint32_t)(_kernel_image_end - _kernel_start));
+    reserve_range((uint32_t)_bss_start,
+                  (uint32_t)(_kernel_end - _bss_start));
     reserve_range(BITMAP_BASE, PAGE_SIZE * 2);
     reserve_range(PAGE_TABLES_BASE, PAGE_TABLES_BYTES);
 

@@ -125,8 +125,8 @@ $(ELF_DEMO): user/elfdemo.c user/lib.h user/elf_linker.ld
 $(KERNEL_DIR)/%.o: $(KERNEL_DIR)/%.c $(wildcard $(KERNEL_DIR)/*.h)
 	$(CC) $(CFLAGS32) -g -c $< -o $@
 
-$(KERNEL_ELF): $(KERNEL_OBJS) | $(KERNEL_DIR)/linker.ld
-	$(LD) -m elf_i386 -T $(KERNEL_DIR)/linker.ld $^ -o $@
+$(KERNEL_ELF): $(KERNEL_OBJS) $(KERNEL_DIR)/linker.ld
+	$(LD) -m elf_i386 -T $(KERNEL_DIR)/linker.ld $(KERNEL_OBJS) -o $@
 
 $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
@@ -159,7 +159,11 @@ debug: $(OS_IMG) $(DISK_IMG)
 		-serial stdio -s -S
 
 docs:
-	python3 tools/generate-source-docs.py
+	@if [ -f tools/generate-source-docs.py ]; then \
+		python3 tools/generate-source-docs.py; \
+	else \
+		echo "docs: tools/generate-source-docs.py 未提供 (仅本地保留, 未进版本库)"; \
+	fi
 
 clean:
 	rm -rf $(BUILD_DIR) $(KERNEL_DIR)/*.o

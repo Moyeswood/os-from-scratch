@@ -19,3 +19,8 @@ Thumbs.db
 
 # GDB 历史
 .gdb_history
+
+# 文档生成器及其产物：仅本地保留，不提交版本库
+tools/generate-source-docs.py
+docs/source/
+__pycache__/

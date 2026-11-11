@@ -28,6 +28,7 @@ typedef struct {
     char* error_output;
     int error_append;
     int stderr_to_stdout;
+    int pipe_input;         /* 修复: 标记 stdin 来自管道 (由 execute_pipeline 设置) */
 } command_t;
 
 typedef struct {
@@ -65,7 +66,7 @@ static int execute_script_file(const char* path);
 static void swrite_dec(int fd, uint32_t value);
 
 static const char* shell_builtin_names[] = {
-    "[", "bg", "cat", "cd", "clear", "cp", "echo", "env", "exit",
+    "[", ".", "bg", "cat", "cd", "clear", "cp", "echo", "env", "exit",
     "export", "false", "fg", "grep", "head", "help", "hexdump",
     "history", "jobs", "kill", "ln", "ls", "mkdir", "mv", "printf",
     "pwd", "read", "rm", "set", "sleep", "source", "stat", "tail",
@@ -94,7 +95,10 @@ static int parse_number(const char* text, int* value) {
     int n = 0;
     int digits = 0;
     while (*text >= '0' && *text <= '9') {
-        n = n * 10 + (*text++ - '0');
+        int d = *text++ - '0';
+        /* 修复: 10 位数字会符号溢出 (UB), 超 INT_MAX 直接拒绝 */
+        if (n > (2147483647 - d) / 10) return -1;
+        n = n * 10 + d;
         ++digits;
     }
     if (!digits || *text) return -1;
@@ -613,6 +617,7 @@ static int parse_commands(char** words, int count, command_t cmds[PIPE_MAX],
         cmd->error_output = 0;
         cmd->error_append = 0;
         cmd->stderr_to_stdout = 0;
+        cmd->pipe_input = 0;
         for (int i = start; i < split; ++i) {
             if (scmp(words[i], "2>&1") == 0) {
                 cmd->stderr_to_stdout = 1;
@@ -839,7 +844,12 @@ static int read_line_fd(int fd, char* line, int cap) {
     for (;;) {
         char c;
         int n = read_byte(fd, &c);
-        if (n <= 0) return any ? 1 : 0;
+        /* 修复: 满缓冲或最后一行无换行时也要 NUL 终结,
+         * 否则调用方会读过界读栈上垃圾 */
+        if (n <= 0) {
+            if (any) line[len] = '\0';
+            return any ? 1 : 0;
+        }
         any = 1;
         if (c == '\n') {
             line[len] = '\0';
@@ -912,6 +922,10 @@ static int copy_tree(const char* source, const char* target, int depth) {
     if (stat(target, &target_info) < 0) {
         if (mkdir(target) < 0) return -1;
     } else if (target_info.type != 2) {
+        return -1;
+    } else if (target_info.inum == source_info.inum) {
+        /* 修复: 拒绝目录自拷贝 (cp -r dir dir 会自嵌套直到深度上限) */
+        swrite(2, "cp: cannot copy directory into itself\n");
         return -1;
     }
 
@@ -1001,6 +1015,12 @@ static int utility_head(const command_t* cmd) {
 
     int files = cmd->argc - arg;
     if (!files) {
+        /* 修复: 裸 head 从键盘控制台读永不 EOF, 会永久挂起。
+         * 只有管道输入或 < 重定向时才允许读 stdin */
+        if (!cmd->pipe_input && !cmd->input) {
+            swrite(2, "head: no input (usage: head [-n N] FILE, or pipe into head)\n");
+            return 1;
+        }
         char line[LINE_MAX];
         for (int i = 0; i < count && read_line_fd(0, line, sizeof(line));
              ++i) {
@@ -1014,6 +1034,9 @@ static int utility_head(const command_t* cmd) {
     for (int file = arg; file < cmd->argc; ++file) {
         int fd = open(cmd->argv[file], O_RDONLY);
         if (fd < 0) {
+            swrite(2, "head: cannot open: ");
+            swrite(2, cmd->argv[file]);
+            swrite(2, "\n");
             status = 1;
             continue;
         }
@@ -1079,8 +1102,10 @@ static int tail_streaming(int fd, int count) {
         next = (next + 1) % TAIL_RING_MAX;
         if (used < TAIL_RING_MAX) ++used;
     }
-    int start = used == TAIL_RING_MAX ? next : 0;
-    for (int i = 0; i < used; ++i) {
+    /* 修复: 只输出最后 count 行 (此前忽略 -n 打印了全部缓冲行) */
+    int shown = used < count ? used : count;
+    int start = (next - shown + TAIL_RING_MAX) % TAIL_RING_MAX;
+    for (int i = 0; i < shown; ++i) {
         int index = (start + i) % TAIL_RING_MAX;
         swrite(1, ring[index]);
         swrite(1, "\n");
@@ -1105,6 +1130,11 @@ static int utility_tail(const command_t* cmd) {
     }
 
     if (arg == cmd->argc) {
+        /* 修复: 裸 tail 从键盘控制台读永不 EOF, 会永久挂起 */
+        if (!cmd->pipe_input && !cmd->input) {
+            swrite(2, "tail: no input (usage: tail [-n N] FILE, or pipe into tail)\n");
+            return 1;
+        }
         int result = tail_seekable(0, count);
         return result < 0 ? tail_streaming(0, count) : result;
     }
@@ -1112,6 +1142,9 @@ static int utility_tail(const command_t* cmd) {
     for (int file = arg; file < cmd->argc; ++file) {
         int fd = open(cmd->argv[file], O_RDONLY);
         if (fd < 0) {
+            swrite(2, "tail: cannot open: ");
+            swrite(2, cmd->argv[file]);
+            swrite(2, "\n");
             status = 1;
             continue;
         }
@@ -1174,6 +1207,9 @@ static int utility_wc(const command_t* cmd) {
     for (int file = arg; file < (files ? cmd->argc : 0); ++file) {
         int fd = open(cmd->argv[file], O_RDONLY);
         if (fd < 0) {
+            swrite(2, "wc: cannot open: ");
+            swrite(2, cmd->argv[file]);
+            swrite(2, "\n");
             status = 1;
             continue;
         }
@@ -1191,6 +1227,11 @@ static int utility_wc(const command_t* cmd) {
         ++processed;
     }
     if (!files) {
+        /* 修复: 裸 wc 从键盘控制台读永不 EOF, 会永久挂起 */
+        if (!cmd->pipe_input && !cmd->input) {
+            swrite(2, "wc: no input (usage: wc [-lwc] FILE, or pipe into wc)\n");
+            return 1;
+        }
         if (word_count_fd(0, &total_lines, &total_words, &total_bytes) < 0)
             return 1;
         processed = 1;
@@ -1278,6 +1319,11 @@ static int utility_grep(const command_t* cmd) {
     int matched = 0;
     int files = cmd->argc - arg;
     if (!files) {
+        /* 修复: 裸 grep 从键盘控制台读永不 EOF, 会永久挂起 */
+        if (!cmd->pipe_input && !cmd->input) {
+            swrite(2, "grep: no input (usage: grep [-in] PATTERN FILE, or pipe into grep)\n");
+            return 2;
+        }
         grep_fd(0, pattern, 0, show_line_numbers, ignore_case, &matched);
         return matched ? 0 : 1;
     }
@@ -1285,6 +1331,9 @@ static int utility_grep(const command_t* cmd) {
     for (; arg < cmd->argc; ++arg) {
         int fd = open(cmd->argv[arg], O_RDONLY);
         if (fd < 0) {
+            swrite(2, "grep: cannot open: ");
+            swrite(2, cmd->argv[arg]);
+            swrite(2, "\n");
             status = 2;
             continue;
         }
@@ -1424,7 +1473,8 @@ static int utility_read(const command_t* cmd) {
     }
     if (fd != 0) close(fd);
     value[len] = '\0';
-    swrite(1, "\n");
+    /* 修复: 从文件/管道读取时不输出换行, 避免污染脚本输出 */
+    if (!cmd->input) swrite(1, "\n");
     if (!got && !len) return 1;
     return env_put(cmd->argv[1], slen(cmd->argv[1]), value, 0) < 0 ? 1 : 0;
 }
@@ -1455,7 +1505,12 @@ static int utility_which(const command_t* cmd, int verbose) {
         }
         char path[LINE_MAX];
         const char* candidate = name;
-        if (name[0] != '/') {
+        /* 修复: 含 '/' 的名称按路径直接检查 (which ./hello),
+         * 只有纯命令名才拼 /bin 前缀 */
+        int has_slash = 0;
+        for (int k = 0; name[k]; ++k)
+            if (name[k] == '/') { has_slash = 1; break; }
+        if (!has_slash) {
             if (join_path(path, sizeof(path), "/bin", name) < 0) {
                 status = 1;
                 continue;
@@ -1479,7 +1534,12 @@ static int utility_sleep(const command_t* cmd) {
         swrite(2, "sleep: usage: sleep SECONDS\n");
         return 1;
     }
-    sleep((uint32_t)seconds * 18u);
+    /* 修复: seconds*18 在 uint32 中回绕 (sleep 8 年变几天);
+     * 超出范围时饱和为最大滴答数 */
+    uint32_t ticks;
+    if (seconds > 238609294) ticks = 0xFFFFFFFFu;
+    else ticks = (uint32_t)seconds * 18u;
+    sleep(ticks);
     return 0;
 }
 
@@ -1521,7 +1581,14 @@ static int hexdump_one(const char* path) {
 }
 
 static int utility_hexdump(const command_t* cmd) {
-    if (cmd->argc == 1) return hexdump_one(0);
+    if (cmd->argc == 1) {
+        /* 修复: 裸 hexdump 从键盘控制台读永不 EOF (与 tail/wc/grep 同类挂起) */
+        if (!cmd->pipe_input && !cmd->input) {
+            swrite(2, "hexdump: no input (usage: hexdump FILE, or pipe into hexdump)\n");
+            return 1;
+        }
+        return hexdump_one(0);
+    }
     int status = 0;
     for (int i = 1; i < cmd->argc; ++i)
         if (hexdump_one(cmd->argv[i])) status = 1;
@@ -1569,8 +1636,14 @@ static int remove_tree(const char* path, int recursive, int force) {
     user_stat_t info;
     if (stat(path, &info) < 0) return force ? 0 : 1;
     if (info.type != 2 || !recursive) return remove(path) < 0 ? 1 : 0;
-    if (scmp(path, "/") == 0 || scmp(path, ".") == 0 ||
-        scmp(path, "..") == 0) {
+    /* 修复: 除了字面量检查, 再按 inode 与 "/" 比对 —
+     * "rm -rf /shdir/.." 这类路径由内核解析后指向根目录,
+     * 必须拦住, 否则整个文件系统会被清空 */
+    user_stat_t root_info;
+    int is_root = 0;
+    if (stat("/", &root_info) == 0 && root_info.inum == info.inum)
+        is_root = 1;
+    if (is_root || scmp(path, ".") == 0 || scmp(path, "..") == 0) {
         swrite(2, "rm: refusing to remove root or current directory\n");
         return 1;
     }
@@ -1701,6 +1774,9 @@ static int execute_builtin(const command_t* cmd) {
     if (scmp(name, "which") == 0) return utility_which(cmd, 0);
     if (scmp(name, "type") == 0) return utility_which(cmd, 1);
     if (scmp(name, "clear") == 0) {
+        /* 修复: [SH] clear 标记从内核 SYS_CLEAR 移到命令层;
+         * 先输出标记再清屏, 串口测试可见且屏幕保持干净 */
+        swrite(1, "[SH] clear\n\r");
         clear_screen();
         return 0;
     }
@@ -1851,6 +1927,51 @@ static int run_command(const command_t* cmd, int child) {
     if (builtin >= 0) return builtin;
     exec_external(cmd);
     return 127;
+}
+
+/* 修复: 父内置命令在 shell 进程内执行, 不会走 setup_redirections,
+ * 导致 history/read/source 等的输出重定向被静默忽略。
+ * 这里手动应用输出/错误重定向, 执行后恢复 fd 1/2。
+ * (输入重定向由各内置命令自行处理: read 读 cmd->input 等) */
+static int run_parent_builtin(const command_t* cmd) {
+    int saved_out = -1;
+    int saved_err = -1;
+    if (cmd->output) {
+        uint32_t flags = O_CREAT | O_WRONLY |
+                         (cmd->append ? O_APPEND : O_TRUNC);
+        saved_out = dup(1);
+        int fd = open(cmd->output, flags);
+        if (fd < 0 || dup2(fd, 1) < 0) {
+            swrite(2, "sh: redirection failed\n");
+            if (saved_out >= 0) { dup2(saved_out, 1); close(saved_out); }
+            return 1;
+        }
+        if (fd != 1) close(fd);
+    }
+    if (cmd->stderr_to_stdout) {
+        saved_err = dup(2);
+        if (dup2(1, 2) < 0) saved_err = -1;
+    } else if (cmd->error_output) {
+        uint32_t flags = O_CREAT | O_WRONLY |
+                         (cmd->error_append ? O_APPEND : O_TRUNC);
+        saved_err = dup(2);
+        int fd = open(cmd->error_output, flags);
+        if (fd < 0 || dup2(fd, 2) < 0) {
+            swrite(2, "sh: redirection failed\n");
+            if (saved_err >= 0) { dup2(saved_err, 2); close(saved_err); }
+            saved_err = -1;
+        } else if (fd != 2) {
+            close(fd);
+        }
+    }
+    int result = execute_builtin(cmd);
+    if (result < 0) {
+        exec_external(cmd);
+        result = 127;
+    }
+    if (saved_out >= 0) { dup2(saved_out, 1); close(saved_out); }
+    if (saved_err >= 0) { dup2(saved_err, 2); close(saved_err); }
+    return result;
 }
 
 static int is_parent_builtin(const command_t* cmd) {
@@ -2100,7 +2221,7 @@ static int execute_pipeline(command_t cmds[PIPE_MAX], int count,
         if (scmp(name, "bg") == 0) return builtin_bg(&cmds[0]);
         if (scmp(name, "kill") == 0) return builtin_kill(&cmds[0]);
         if (scmp(name, "wait") == 0) return builtin_wait();
-        return run_command(&cmds[0], 0);
+        return run_parent_builtin(&cmds[0]);
     }
 
     int pipes[PIPE_MAX - 1][2];
@@ -2119,6 +2240,9 @@ static int execute_pipeline(command_t cmds[PIPE_MAX], int count,
 
     int pids[PIPE_MAX] = { -1, -1, -1, -1 };
     for (int i = 0; i < count; ++i) {
+        /* 修复: 标记管道输入, 供 head/tail/wc/grep/hexdump
+         * 区分"管道 stdin"与"键盘控制台" */
+        cmds[i].pipe_input = (i > 0);
         int pid = fork();
         if (pid == 0) {
             int group = i == 0 ? 0 : pids[0];
