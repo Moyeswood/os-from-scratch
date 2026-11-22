@@ -2,11 +2,12 @@
 //  开机画面 (模式 13h)
 //
 //  编排层: DAC 调色板编程 (深蓝渐变 16 色) → 渐变星空背景 →
-//  NEWOS 大标题逐字揭示动画 → 任意键跳过或播完自动进 shell。
+//  HELLO WORLD 大标题逐字揭示动画 → 任意键跳过或播完自动进 shell。
 //
 //  布局 (320x200):
-//    "NEWOS"      y=68   主标题 (32px 大字, 逐字出现)
-//    "MYQWEN-OS"  y=124  副标题 (16px, 白色)
+//    "HELLO"      y=40   主标题上排 (32px 大字, 逐字出现)
+//    "WORLD"      y=94   主标题下排
+//    "NewOS"      y=148  副标题 (16px, 白色)
 //    60 颗星 + 深蓝渐变背景 (顶部亮 → 底部黑)
 // ============================================================
 
@@ -75,25 +76,32 @@ static int splash_wait(uint32_t target) {
     return 0;
 }
 
-// ---------- 动画: NEWOS 逐字揭示 + 副标题 + 停留 ----------
+// ---------- 动画: HELLO WORLD 逐字揭示 + 副标题 + 停留 ----------
 static int splash_animate(void) {
-    static const char* title = "NEWOS";
-    static const char* sub   = "MYQWEN-OS";
+    static const char* title  = "HELLO";
+    static const char* title2 = "WORLD";
+    static const char* sub    = "NewOS";
     // 固定高对比色: 白、青、黄、绿、洋红。不随机，避免字母落进深色背景。
     static const uint8_t title_colors[5] = {
         0x0F, 0x0B, 0x0E, 0x0A, 0x0D
     };
     uint32_t t = g_ticks + 2;
 
-    // 主标题 "NEWOS": 5 字 x (32+6 间距) - 6 = 184px → x = 68
+    // 主标题 "HELLO WORLD": 11 字 x 38 间距 = 412px > 320, 拆两行居中。
+    // 每行 5 字 x (32+6 间距) - 6 = 184px → x = 68
     for (int i = 0; i < 5; i++) {
-        splash_glyph(68 + i * 38, 68, title[i], title_colors[i], 4);
+        splash_glyph(68 + i * 38, 40, title[i], title_colors[i], 4);
         if (splash_wait(t)) return 1;
         t += 3;
     }
-    // 副标题 "MYQWEN-OS": 16px, 9 字 x 18 - 2 = 160px → x = 80
+    for (int i = 0; i < 5; i++) {
+        splash_glyph(68 + i * 38, 94, title2[i], title_colors[i], 4);
+        if (splash_wait(t)) return 1;
+        t += 3;
+    }
+    // 副标题 "NewOS": 16px, 5 字 x 18 - 2 = 88px → x = 116
     for (int i = 0; sub[i]; i++) {
-        splash_glyph(80 + i * 18, 124, sub[i], 0x0F, 2);
+        splash_glyph(116 + i * 18, 148, sub[i], 0x0F, 2);
         if (splash_wait(t)) return 1;
         t++;
     }

@@ -100,7 +100,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 ### 🎮 Fun & Applications
 - **Tetris**: 7-bag randomizer, wall kicks, lock delay, hold piece, line-clear animation, 5 color themes, beep SFX
 - **Super Mario**: two themed stages, super/star abilities, checkpoints, stomp combos, variable jumps, jump buffering/coyote time, particles, screen shake, mid-stage retry, and a polished HUD
-- **🚀 Boot screen**: deep-blue gradient starfield (DAC palette programming) + 32px high-contrast "NEWOS" letter-by-letter reveal animation + "MYQWEN-OS" subtitle; press any key to skip; replayable via the `splash` command
+- **🚀 Boot screen**: deep-blue gradient starfield (DAC palette programming) + 32px high-contrast "HELLO WORLD" two-line letter-by-letter reveal animation + "NewOS" subtitle; press any key to skip; replayable via the `splash` command
 
 ## 💻 Command Reference
 

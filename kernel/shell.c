@@ -174,7 +174,7 @@ static void cmd_reboot() {
 
 // 5. version 命令
 static void cmd_version() {
-    vga_puts("\n\rMyQwen-OS v1.0.0 - Built with Qwen\n\r");
+    vga_puts("\n\rNewOS v1.1.0 - Built with Qwen\n\r");
 }
 
 static int font_parse_size(const char* s, uint8_t* out) {
@@ -231,7 +231,7 @@ static void cmd_font(int argc, char** argv) {
             return;
         }
         font_apply(size);
-        vga_puts("MyQwen-OS v1.0.0\n\r");
+        vga_puts("NewOS v1.1.0\n\r");
         return;
     }
 
@@ -248,7 +248,7 @@ static void cmd_font(int argc, char** argv) {
         return;
     }
     if (argc == 3) font_apply(size);
-    vga_puts("MyQwen-OS v1.0.0\n\r");
+    vga_puts("NewOS v1.1.0\n\r");
 }
 
 // ============================================================
@@ -716,7 +716,7 @@ static void execute_command() {
         font_apply(font_current());
 
         vga_clear();
-        vga_puts("MyQwen-OS v1.0.0\n\r");
+        vga_puts("NewOS v1.1.0\n\r");
         vga_puts("[RM] Round-trip test PASSED!\n\r");
     } else if (k_strcmp(argv[0], "tetris") == 0) {
         vga_puts("\n\r[GAME] Entering TETRIS... (ESC to exit)\n\r");
@@ -739,7 +739,7 @@ static void execute_command() {
         font_apply(font_current());
 
         vga_clear();
-        vga_puts("MyQwen-OS v1.0.0\n\r");
+        vga_puts("NewOS v1.1.0\n\r");
     } else if (k_strcmp(argv[0], "mario") == 0) {
         vga_puts("\n\r[GAME] Entering SUPER MARIO... (ESC to exit)\n\r");
 
@@ -759,7 +759,7 @@ static void execute_command() {
         font_apply(font_current());
 
         vga_clear();
-        vga_puts("MyQwen-OS v1.0.0\n\r");
+        vga_puts("NewOS v1.1.0\n\r");
     } else if (k_strcmp(argv[0], "date") == 0) {
         cmd_date();
     } else if (k_strcmp(argv[0], "font") == 0) {
@@ -866,28 +866,28 @@ static void execute_command() {
         splash_run();              // 重放开机画面 (任意键跳过)
         kbd_drain();
         shell_reset_input();       // 动画期间按的其它键清掉
-        vga_puts("MyQwen-OS v1.0.0\n\r");
+        vga_puts("NewOS v1.1.0\n\r");
     } else if (k_strcmp(argv[0], "edit") == 0) {
         if (argc < 2) {
             vga_puts("\n\rUsage: edit <file>\n\r");
         } else {
             // 编辑器在文本模式内直接运行 (无模式切换), 返回后恢复屏幕
             editor_run(argv[1]);
-            vga_puts("MyQwen-OS v1.0.0\n\r");
+            vga_puts("NewOS v1.1.0\n\r");
         }
     } else if (k_strcmp(argv[0], "vi") == 0) {
         if (argc < 2) {
             vga_puts("\n\rUsage: vi <file>\n\r");
         } else {
             vi_run(argv[1]);
-            vga_puts("MyQwen-OS v1.0.0\n\r");
+            vga_puts("NewOS v1.1.0\n\r");
         }
     } else if (k_strcmp(argv[0], "debug") == 0) {
         if (argc < 2) {
             vga_puts("\n\rUsage: debug <flat-program>\n\r");
         } else {
             debug_run(argv[1]);
-            vga_puts("MyQwen-OS v1.0.0\n\r");
+            vga_puts("NewOS v1.1.0\n\r");
         }
     } else {
         vga_puts("Unknown command: ");

@@ -593,7 +593,7 @@ static void title_screen() {
         gfx_fillrect(80 + i * 24, 60, 16, 16, 1 + i);   // 七色方块
     }
     put_str(14, 11, "T E T R I S");
-    put_str(9, 13, "MyQwen-OS EDITION");
+    put_str(9, 13, "NewOS EDITION");
     put_str(13, 18, "PRESS ANY KEY");
 
     while (game_key() < 0) __asm__ volatile("hlt");   // 等任意键

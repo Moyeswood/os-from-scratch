@@ -129,7 +129,7 @@ check("boot: splash done", wait_for(
     timeout=15.0, name="splash-done"))
 time.sleep(1.0)
 check("boot: banner on screen",
-      wait_for(lambda: "MyQwen-OS" in read_screen(), timeout=5.0))
+      wait_for(lambda: "NewOS v1.1.0" in read_screen(), timeout=5.0))
 check("boot: no reset loop", dbg.count("[Paging] ENABLED") == 1,
       f"serial_buf={len(dbg)}B boots={dbg.count('[Paging] ENABLED')}")
 
@@ -137,7 +137,7 @@ check("boot: no reset loop", dbg.count("[Paging] ENABLED") == 1,
 mark_serial_base()
 type_text("font 14\n")
 check("font 14: hardware applied", wait_font_marker(0x0E, 0x0D))
-check("font 14: screen works", "MyQwen-OS" in read_screen())
+check("font 14: screen works", "NewOS v1.1.0" in read_screen())
 type_text("font\n")
 time.sleep(0.5)
 check("font 14: shell rows=28", "(28 lines)" in read_screen())

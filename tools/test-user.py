@@ -110,7 +110,7 @@ check("boot: splash done", wait_for(
     timeout=15.0, name="splash-done"))
 time.sleep(1.0)
 check("boot: banner on screen", wait_for(
-    lambda: "MyQwen-OS" in read_screen(), timeout=5.0, name="banner"))
+    lambda: "NewOS v1.1.0" in read_screen(), timeout=5.0, name="banner"))
 check("boot: no reset loop", dbg.count("[Paging] ENABLED") == 1)
 
 # ================= 2. run hello =================

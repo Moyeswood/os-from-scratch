@@ -46,7 +46,7 @@ void kernel_main() {
     kbd_drain();            // 开机画面期间按的键清掉 (环形缓冲, 零开销)
     shell_reset_input();    // 跳过画面的按键别留到 shell 输入里
 
-    vga_puts("MyQwen-OS v1.0.0\n\r");
+    vga_puts("NewOS v1.1.0\n\r");
     vga_puts("Type 'help' for available commands.\n\r\n\r");
 
     // The first stage carries a mode byte in the last unused boot-sector
