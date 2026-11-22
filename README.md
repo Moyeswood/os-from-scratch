@@ -1,352 +1,1080 @@
 # 🚀 NewOS
 
 <p align="center">
-  <em>一个从零开始、纯手写的 32 位 x86 微型操作系统</em><br>
-  <em>从 512 字节引导扇区到"在自制 OS 里写 C、编译、运行"</em>
+  <em>一个从零开始、手写的 32 位 x86 教学操作系统</em><br>
+  <em>从 512 字节引导扇区，到在自制 OS 中编辑、编译、调试和运行程序</em>
 </p>
 
 <p align="center">
-  <a href="README.en.md">English</a> · 中文
+  <a href="README.en.md">English</a> · 中文主文档
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="language"/>
-  <img src="https://img.shields.io/badge/Milestones-31%2F31%20Done-blue" alt="milestones"/>
-  <img src="https://img.shields.io/badge/Tests-745%20Passing-brightgreen" alt="tests"/>
-  <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="platform"/>
+  <img src="https://img.shields.io/badge/Language-C%20%2B%20x86%20ASM-4CAF50" alt="C and x86 assembly"/>
+  <img src="https://img.shields.io/badge/Milestones-33%2F33%20Done-blue" alt="33 milestones complete"/>
+  <img src="https://img.shields.io/badge/Tests-Full%20Suite%20Passing-brightgreen" alt="full test suite passing"/>
+  <img src="https://img.shields.io/badge/Platform-QEMU%20i386-orange" alt="QEMU i386"/>
 </p>
 
 <p align="center">
-  <img src="note/splash-mid.png" width="480" alt="开机画面"/>
+  <img src="note/splash-mid.png" width="480" alt="NewOS 开机画面"/>
 </p>
 
-NewOS 是一个教学用途的 32 位 x86 操作系统，用 C 和少量汇编从零编写，在 QEMU 中运行。它走完了操作系统学习的完整链路：**引导 → 保护模式 → 中断 → 内存管理 → 多任务 → 图形 → 持久化文件系统 → 编辑器 → C 编译器 → Ring 3 用户态 → 用户态 Shell**——最终你可以在它里面写、编译、运行 C 程序，从 `/bin` 加载 flat 或 ELF32 程序，通过 `fork/waitpid/execve` 管理进程，并使用管道、重定向和后台任务。文件、目录和 `/bin` 会跨重启保留。
+NewOS 是一个以学习和可读性为优先的 32 位 x86 操作系统。它使用 C 和少量
+x86 汇编实现，在 QEMU 中完成引导、保护模式、分页、进程、文件系统、
+Ring 3 用户态、Shell、编辑器和调试器，并最终支持在操作系统内部编写和运行
+程序。
 
-## ✨ 核心特性
+当前稳定进度为 **里程碑 33**。完整 `make test-suite` 已通过，包含内存、
+文件系统、磁盘持久化、进程、ELF、Shell、编辑器、C 编译器、汇编器、调试器、
+抢占调度和游戏回归。
 
-### 🖥️ 底层基础
-- **引导加载器**：512 字节手写引导扇区，从软盘加载内核（448KB 加载窗口，含 64KB 段回绕处理）
-- **保护模式**：GDT 段机制、A20 门、32 位保护模式切换
-- **内存管理**：BIOS E820 内存地图解析 + 保留区保护位图 + 物理页分配器与引用计数 + 内核 `kmalloc/kfree/krealloc` 堆 + 32MB 恒等映射分页
-- **按进程虚拟内存**：独立页目录/页表、首次访问补零页、fork COW、栈 guard page、`brk` 堆收缩与匿名 `mmap` 窗口
-- **可执行文件与进程模型**：`/bin` 同时支持 flat 和 ELF32；解析 PT_LOAD、数据段与 BSS，构造 `argc/argv/envp` 初始栈；`fork/waitpid/execve` 提供完整父进程收尸和事务式进程替换
-- **中断系统**：完整 IDT（32 个异常处理器 + IRQ + 系统调用门）、8259A PIC 重映射、PS/2 键盘中断驱动
-- **实模式往返**：随时降级回实模式调 BIOS（切视频模式），用完自动回保护模式——跳板寄存器全套保存恢复
+> 这是教学项目，不是生产操作系统。设计重点是理解机制、验证行为和保持代码
+> 可读性；安全边界、性能和 POSIX 完整度都不是目前的主要目标。
 
-### 🛡️ Ring 3 用户态
-- **特权级隔离**：TSS 内核栈切换、用户代码/数据段（DPL3）、页表 U/S 位保护——用户程序碰内核内存直接 #PF
-- **系统调用**：`int 0x80`（门 DPL3）——putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/link/truncate/sigaction/sigprocmask/sigreturn/setpgid/tcsetpgrp/kill；内核逐页校验用户指针，失败返回负 errno，用户库转为 `-1` 并设置 `errno`
-- **用户态信号**：`SIGINT/SIGTERM/SIGCONT` 可安装 handler 或忽略；支持 pending 位图、屏蔽字、自动屏蔽当前信号和 SysV 风格用户栈返回帧
-- **默认用户态 Shell 3.0**：正常启动直接进入 Ring 3 `sh:/>`；支持单/双引号、反斜杠、`$VAR/$?`、字段拆分、`*`/`?` 通配符、`$(...)` 命令替换、多行输入、脚本与 `sh -c`、行内编辑、Ctrl+R 历史搜索、Tab 补全、上下键与持久化历史、可变环境、`;`、`2>/2>&1`、四段管道、进程组、信号、作业控制与 `mv/ln/truncate/stat/ls -l`。`exit` 进入内核恢复 Shell
-- **异常处理**：32 个异常处理器打印完整现场（EIP/CS/EFLAGS/ESP/CR2 + 页错误码 P/W/U 位解读），用户态异常杀进程回 shell，内核态异常 panic
-- **23 个 flat 程序 + 1 个 ELF32 演示程序**：覆盖用户 Shell、信号处理、POSIX errno、共享打开文件、管道、waitpid、execve、ELF32、fork 堆隔离、空闲链表 allocator、每进程工作目录和文件系统并发压力测试
+## 目录
 
-### ⏱️ 多任务与设备
-- **抢占式多任务**：PIT IRQ0（18.2Hz）时间片轮转，协作式/抢占式统一上下文帧可互恢复，带"恶霸任务"演示
-- **完整进程生命周期**：独立页目录与地址空间、fork、进程组、RUNNING/STOPPED 作业、`ps`/`kill`、孤儿僵尸回收；每进程拥有 16 项 fd 表和独立 CWD，暂停时保留全部 VM/fd 状态
-- **设备驱动**：ATA PIO 磁盘、VGA 文本/图形、串口 COM1、PS/2 键盘、PIT 定时器、PC 扬声器蜂鸣
-- **图形库**：模式 13h（320×200×256）调色板/画点/矩形/精灵/字体
-- **🎨 可调字体**：纯 VGA 硬件编程加载 5 套 8 宽点阵字体（Terminus、Goha、Goha Classic、VGA Console、DOS），`font` 命令支持 **8–32px 任意字号**与字体风格组合；非原生字号实时缩放，每次加载均做硬件级自测
+- [项目特点](#项目特点)
+- [快速开始](#快速开始)
+- [两套 Shell](#两套-shell)
+- [启动流程](#启动流程)
+- [系统架构](#系统架构)
+- [Ring 3 用户 Shell](#ring-3-用户-shell)
+- [内核恢复 Shell](#内核恢复-shell)
+- [C 编译器](#c-编译器)
+- [汇编器与调试器](#汇编器与-debug-monitor)
+- [编辑器和应用](#编辑器和应用)
+- [文件系统](#文件系统)
+- [系统调用 ABI](#系统调用-abi)
+- [典型工作流](#典型工作流)
+- [自动化测试](#自动化测试)
+- [目录结构](#目录结构)
+- [已知限制](#已知限制)
+- [常见问题](#常见问题)
+- [源码逐文件文档](#源码逐文件文档)
+- [开发记录](#开发记录)
+- [项目历程](#项目历程)
 
-### 📁 文件系统
-xv6 风格教学实现（ATA PIO 持久化磁盘，1MB/256 块，64 inode）：
-- 超级块 + inode/块位图 + 64 字节 inode（12 直接块 + 一级间接块，解除 48KB 结构限制）
-- 目录项链式存储、`.`/`..` 真实目录项、绝对/相对路径统一解析
-- Shell 命令：`pwd` `ls` `cd` `mkdir` `touch` `cat` `rm` `mv` `ln` `truncate` `stat` `echo >` `df` `sync`
-- 4KB 脏块缓存：24 块阈值或约 1 秒周期回写，文件 close/reboot 自动提交
-- 可睡眠单写者 mutex；等待者进入 `TASK_WAIT_FS`，不再在大文件 I/O 期间长期关闭 IRQ
-- 元数据 redo journal：日志提交后才更新 home blocks，启动时自动重放已提交事务
-- POSIX 风格 `rename` 覆盖、硬链接、按字节增长/截断、跨目录 `..` 更新与元数据查询
-- 删除保护（不能删 cwd/祖先）、重启持久化回归、开机自测（创建→写→读回→删除全流程验证）
+## 项目特点
 
-### ✏️ 内置编辑器
-nano 风格的 `edit` 命令：
-- 方向键/Home/End/PgUp/PgDn 导航、Ctrl+方向键按词移动、Ctrl+Backspace 按词删除
-- **Ctrl+Z/Ctrl+Y 撤销重做**、**Ctrl+F 搜索**、**Ctrl+G 跳行**
-- **Ctrl+S 保存、Ctrl+X 退出**（修改未保存时可选保存、丢弃或取消）
-- 精确定位光标格（修复换行残影）、底部状态栏、长行水平滚动
-- 自己轮询 8042 并跟踪 Shift/Ctrl/Caps/0xE0 扩展键前缀
+### 从硬件开始
 
-vi 风格的 `vi` 命令复用同一文本缓冲：
+- 512 字节手写引导扇区。
+- BIOS E820 内存地图解析。
+- A20 开启和 32 位保护模式切换。
+- GDT、TSS、IDT、8259A PIC 和中断门。
+- 实模式往返跳板，可临时调用 BIOS 切换 VGA 图形模式。
 
-- Normal/Insert/Command 三模式，`i/a/o`、`h/j/k/l`、`0/$`、`w/b`
-- `x`、`dd`、`yy`、`p`、`dw`、`d$`
-- `/`/`n` 搜索、`u`/Ctrl+R 撤销重做
-- `:w`、`:q`、`:q!`、`:wq`/`:x`
+### 内存与进程
 
-### ⚙️ C 编译器（c4 移植）
-`cc` 命令——**C in four functions**（Robert Swierczek）移植，编译 C 子集到内置栈式虚拟机执行：
+- 物理页分配器、保留区位图、页引用计数。
+- 内核堆 `kmalloc/kfree/krealloc`，带分裂、合并和完整性检查。
+- 32MB 恒等映射分页。
+- 每个用户进程拥有独立页目录和页表。
+- 按需补零页、fork COW、栈 guard page、`brk` 和匿名 `mmap`。
+- PCB 轮转调度、PIT 抢占、睡眠队列和僵尸进程回收。
 
-| 支持 | 说明 |
+### 文件与设备
+
+- ATA PIO、LBA28 主盘访问。
+- 1MB 教学文件系统，4KB 块，64 个 inode。
+- 12 个直接块和一级间接块。
+- 延迟回写、可睡眠 FS mutex、元数据 redo journal 和断电重放。
+- `rename` 覆盖、硬链接、截断和完整目录路径解析。
+- VGA 文本/图形、PS/2 键盘、COM1 串口、PIT 和 PC 扬声器。
+
+### 用户态
+
+- Ring 3 代码/数据段。
+- TSS 自动切换每进程内核栈。
+- `int 0x80` 系统调用门。
+- 37 个系统调用编号。
+- 负 errno 内核 ABI 和用户态 `errno` 兼容层。
+- flat 和 ELF32 可执行文件加载。
+- `fork`、`execve`、`waitpid`、管道、dup、信号和作业控制。
+
+### 开发工具
+
+- nano 风格 `edit`。
+- vi 风格 `vi`。
+- c4 迷你 C 编译器 `cc`。
+- 两遍扫描 32 位汇编器 `asm`。
+- 带真实寄存器、TF/#DB 单步和 INT3 断点的 `debug` Monitor。
+
+## 快速开始
+
+### 环境要求
+
+当前主要在 Arch Linux 上开发和测试，需要：
+
+- `nasm`
+- 支持 32 位目标的 `gcc`
+- `ld`
+- `objcopy`
+- `qemu-system-i386`
+- Python 3，用于自动化测试
+
+检查工具链：
+
+```bash
+gcc -m32 -v
+nasm -v
+ld -v
+qemu-system-i386 --version
+python3 --version
+```
+
+如果 `gcc -m32` 无法链接，需要安装发行版的 32 位开发库。
+
+### 构建和运行
+
+```bash
+make -j4
+make run
+```
+
+生成文件：
+
+| 文件 | 用途 |
 |---|---|
-| 类型 | `char`、`int`、指针、一维数组、`enum`、`sizeof` |
-| 声明 | 可带初始化：`int a = 5;`（全局/局部均支持，全局初始化在进入 main 前执行） |
-| 语句 | `if/else`、`while`、`do/while`、`for`、`break/continue`、`return`、表达式、函数调用（含递归） |
-| 注释 | `//` 和 `/* */` |
-| 内建 | `printf` `open` `read` `close` `malloc` `free` `memset` `memcmp` `exit` |
-| 不支持 | struct/union、float、switch、goto、预处理；for 增量/全局初始化表达式里勿用 `&&` `\|\|` `?:`（代码暂存后拷回的局限） |
+| `build/os.img` | 默认镜像，启动 Ring 3 用户 Shell |
+| `build/os-kernel.img` | 恢复/测试镜像，直接启动内核 Shell |
+| `build/kernel.bin` | 原始内核二进制 |
+| `build/kernel.elf` | 带符号的内核 ELF |
+| `build/disk.img` | 2MB ATA 持久化磁盘 |
+| `build/sh.bin` | Ring 3 Shell 的 flat 镜像 |
 
-**`open/read` 对接本 OS 文件系统**——C 程序能直接读取 OS 里的文件！编译错误带行号，死循环可 ESC 中断。
+`build/disk.img` 不会被 `make` 自动清空。文件系统中的文件可以跨 QEMU
+重启保留。执行 `make clean` 才会删除整个 `build/`。
 
-### 🔧 汇编器与 DEBUG Monitor
-- `asm source.asm -o /bin/program`：两遍扫描的 32 位 Intel 语法汇编器
-- 支持标签、`db/dd`、寄存器/立即数/内存寻址、算术/逻辑、分支、栈和 `int`
-- 输出 flat Ring 3 程序并直接从 `/bin` 运行
-- `debug /bin/program`：暂停真实用户进程；`t` 单步、`p` step-over、
-  `bp/bl/bc` 管理软件断点、`g` 从当前现场继续
-- `r` 显示真实 GPR/EIP/EFLAGS/CR2/CR3，命中时自动反汇编 EIP 并显示栈顶
+### 默认启动
 
-### 🎮 娱乐与应用
-- **俄罗斯方块**：7-bag 随机、wall kick、锁定延迟、暂存、消行动画、5 套主题、蜂鸣音效
-- **超级马里奥**：双主题关卡、超级/星星能力、检查点、连踩计分、可变跳跃、跳跃缓冲/Coyote time、粒子与震屏、中途重试和精致 HUD
-- **🚀 开机画面**：深蓝渐变星空（DAC 调色板编程）+ 32px 高对比彩色 "NEWOS" 逐字出现动画 + "MYQWEN-OS" 副标题，任意键跳过，`splash` 命令可重放
+`make run` 启动 `build/os.img`：
 
-## 💻 命令参考
+```text
+sh:/>
+```
+
+这是 Ring 3 用户 Shell。
+
+### 直接进入恢复 Shell
+
+首次使用时先确保磁盘镜像存在：
+
+```bash
+make build/disk.img
+```
+
+```bash
+qemu-system-i386 -fda build/os-kernel.img \
+  -drive file=build/disk.img,format=raw,if=ide,index=0 \
+  -serial stdio
+```
+
+启动后进入：
+
+```text
+OS:/>
+```
+
+恢复 Shell 拥有 `cc`、`edit`、`vi`、`asm`、`debug`、`tetris` 和
+`mario` 等内核工具。
+
+### GDB 调试
+
+```bash
+make debug
+```
+
+QEMU 会监听 GDB 端口 `1234` 并在启动时暂停。
+
+## 两套 Shell
+
+NewOS 故意保留两套 Shell，它们不是重复实现，而是特权级边界两侧的不同接口。
+
+| 对比项 | `sh:/>` | `OS:/>` |
+|---|---|---|
+| 运行级别 | Ring 3 用户态 | Ring 0 内核态 |
+| 入口 | `build/os.img` 默认 | `build/os-kernel.img` 或用户 Shell 退出后 |
+| 实现 | `user/sh.c` | `kernel/shell.c` |
+| 地址空间 | 独立用户进程 | 内核线程/内核上下文 |
+| 文件操作 | 通过系统调用 | 直接调用 FS |
+| 崩溃影响 | 杀死 Shell 进程，返回恢复 Shell | 可能导致内核 panic |
+| 作业控制 | `jobs/fg/bg`、管道、Ctrl+C/Z | 简化内核任务命令 |
+| 内核工具 | 不可直接使用 | `cc/edit/vi/asm/debug/font` |
+| 游戏 | 不可直接使用 | `tetris/mario` |
+
+### 用户 Shell 进入恢复 Shell
+
+```text
+sh:/> exit
+```
+
+`exit` 只结束 Ring 3 Shell 进程，不关闭 QEMU。正常或异常退出后，内核会重新
+唤醒恢复 Shell：
+
+```text
+OS:/>
+```
+
+### 恢复 Shell 返回用户 Shell
+
+```text
+OS:/> run sh
+```
+
+重新启动 Ring 3 Shell 进程。
+
+### 为什么游戏和编译器不在 `sh:/>`
+
+`cc` 使用内核虚拟机和内核内存池，`debug` 操作页表、异常和任务状态，
+`edit/vi` 直接操作 VGA 文本缓冲，`tetris/mario` 需要切换 VGA 模式并读取
+硬件键盘。它们目前没有通过受控系统调用暴露给 Ring 3。
+
+## 启动流程
+
+典型启动过程：
+
+```text
+BIOS
+  → 读取磁盘第一个扇区
+  → boot/boot.asm
+  → 开启 A20，加载 GDT
+  → 进入 32 位保护模式
+  → 加载 kernel.bin 到低地址
+  → kernel/entry.asm
+  → kernel_main()
+     → E820 和物理内存
+     → 分页和内核堆
+     → GDT/TSS/IDT/PIC/PIT
+     → 调度器
+     → VGA 字体和文件系统
+     → 用户程序表与 /bin 发布
+     → 开机画面
+     → sh:/>  或  OS:/>
+```
+
+引导扇区最多加载 896 个扇区，即 448KB。内核 ELF 中的普通 BSS 不写入磁盘
+镜像；链接脚本将 BSS 放到普通 RAM 的 `0x00200000`，避免进入
+`0x000A0000–0x000FFFFF` 的 VGA/BIOS 保留区域。
+
+启动模式字节位于镜像偏移 `0x1FD`：
+
+| 值 | 行为 |
+|---|---|
+| `1` | 自动启动 Ring 3 Shell |
+| `0` | 直接启动内核恢复 Shell |
+
+`build/os-kernel.img` 由 `build/os.img` 复制后将此字节清零生成。
+
+## 系统架构
+
+### 物理内存
+
+| 区域 | 用途 |
+|---|---|
+| `0x00000000–0x000FFFFF` | 传统低内存、VGA/BIOS 保留区 |
+| `0x00100000` 起 | 可管理物理页、位图 |
+| `0x01000000` | 内核页目录和页表预留区 |
+| `0x00200000` | 内核 BSS |
+
+当前恒等映射上限为 32MB。物理页分配器只从 `0x00100000` 以上的可用 E820
+区域分配，并保留内核镜像、位图和页表。
+
+### 用户虚拟地址空间
+
+| 范围 | 用途 |
+|---|---|
+| `0x02000000–0x02040000` | 可执行镜像 |
+| `0x02040000–0x020C0000` | `brk` 堆 |
+| `0x020C0000–0x022F0000` | 匿名 `mmap` |
+| `0x022F0000` | 栈 guard page |
+| `0x022F1000–0x02400000` | 用户栈 |
+
+每个进程只创建实际触及的用户物理页。首次访问堆、mmap 和栈页时由 #PF 补零。
+fork 初始共享物理页并标记 COW，用户写共享页时才复制。
+
+### 任务与进程
+
+- 最多 16 个任务槽。
+- 每个用户进程拥有独立页目录、内核栈和 fd 表。
+- 每个 fd 表有 16 项。
+- 最多四段管道。
+- `TASK_READY/RUNNING/SLEEPING/STOPPED/ZOMBIE` 状态机。
+- 子进程退出后由父进程 `waitpid` 收尸，孤儿僵尸由后续 spawn 清扫。
+
+## Ring 3 用户 Shell
+
+默认用户 Shell 支持：
+
+- 单/双引号和反斜杠转义。
+- `$VAR`、`$?`、`$$`。
+- `*`、`?` 通配符和字段拆分。
+- `$(...)` 命令替换，支持嵌套和多行。
+- 未闭合引号、命令替换和结尾反斜杠的多行续行。
+- `;` 顺序命令。
+- `<`、`>`、`>>`、`2>`、`2>>`、`2>&1`。
+- 最多四段管道。
+- 后台 `&`、进程组和 Ctrl+C/Ctrl+Z。
+- 行内光标编辑、Home/End/Delete。
+- 上下键历史、Ctrl+R 搜索和 Tab 补全。
+- `/.sh_history` 持久化历史。
+- 16 项 Shell 环境变量。
+
+### 内置与工具命令
+
+Shell 状态：
 
 | 命令 | 说明 |
 |---|---|
-| `help` | 显示所有命令 |
-| `history [N]` | 显示最近 N 条命令；上下方向键回忆 |
-| `NAME=value` / `export NAME` / `unset NAME` | 设置局部变量、导出到环境或删除变量 |
-| `set` / `env` | 显示全部 Shell 变量 / 已导出环境 |
+| `help` | 显示命令类别 |
+| `cd [dir]` | 切换目录；无参数回根目录 |
+| `cd -` | 返回并打印上一条目录 |
+| `exit [N]` | 退出 Ring 3 Shell 并进入恢复 Shell |
+| `history [N]` | 显示最近历史 |
+| `history -c` | 清空历史文件 |
+| `export NAME` / `unset NAME` | 管理环境变量 |
+| `set` / `env` | 显示全部变量 / 导出变量 |
+| `true` / `false` | 固定返回 0 / 1 |
+| `read NAME` | 从键盘或 `< file` 读取变量 |
+| `source FILE` / `. FILE` | 在当前 Shell 执行脚本 |
+| `which NAME` / `type NAME` | 查询内置命令或 `/bin` 程序 |
+
+文件和文本：
+
+| 命令 | 说明 |
+|---|---|
+| `echo [text]` | 输出文本，支持重定向 |
+| `pwd` | 当前目录 |
+| `ls [-la] [path]` | 简洁或长格式列目录 |
+| `cat [file...]` | 输出文件 |
+| `touch file...` | 创建空文件 |
+| `cp [-r] src dest` | 复制文件或目录 |
+| `mkdir [-p] dir...` | 创建目录 |
+| `rm [-rf] path...` | 删除文件或目录 |
+| `mv old new` | 移动/重命名 |
+| `ln old new` | 创建普通文件硬链接 |
+| `truncate file N` | 设置文件字节长度 |
+| `stat path` | inode、类型、大小和链接数 |
+| `head [-n N] [file...]` | 文件开头，默认 10 行 |
+| `tail [-n N] [file...]` | 文件结尾，默认 10 行 |
+| `wc [-lwc] [file...]` | 行数、单词数和字节数 |
+| `grep [-in] pattern [file...]` | 固定字符串过滤 |
+| `hexdump [file...]` | 十六进制和 ASCII 查看 |
+
+格式化和其他命令：
+
+| 命令 | 说明 |
+|---|---|
+| `printf FORMAT [args...]` | `%s/%d/%u/%x/%c/%%` 格式化 |
+| `test EXPR` / `[ EXPR ]` | 文件、字符串和整数测试 |
 | `clear` | 清屏 |
-| `meminfo` | 内存统计（页） |
-| `memmap` | 显示 BIOS E820 内存地图和各区域类型 |
-| `heap` | 内核堆统计与完整性检查 |
-| `heap blocks` | 显示堆块分裂/合并后的块列表 |
-| `heaptest` | 运行分配、重分配、释放和块合并压力测试 |
-| `echo [text]` | 打印文本；`echo text > file` 写入文件（覆盖） |
+| `sleep N` | 按 PIT 滴答近似睡眠 N 秒 |
+| `uptime` | 显示启动时长 |
+| `jobs` | 显示作业 |
+| `fg %N` / `bg %N` | 前台/后台恢复作业 |
+| `kill PID` / `kill %N` | 发送信号 |
+| `wait` | 等待作业 |
+
+### 文本工具示例
+
+```text
+cp /etc/readme.txt /backup.txt
+cat /backup.txt | grep -n "NewOS"
+head -n 5 /backup.txt
+tail -n 3 /backup.txt
+wc -lwc /backup.txt
+```
+
+### 脚本示例
+
+```sh
+NAME=NewOS
+echo "hello $NAME"
+printf 'count=%d\n' 42
+
+read ANSWER < /answer.txt
+echo "answer=$ANSWER"
+```
+
+当前还没有 `if/for/while/case` Shell 控制流；`test` 已经提供了基础条件判断。
+
+### `/bin` 中的用户程序
+
+构建时嵌入 23 个 flat 用户程序和 1 个 ELF32 演示程序：
+
+```text
+hello count crash div0 echodemo badptr forkdemo spinner
+vmtest vmguard execdemo execbad waittest execargv
+memdemo allocdemo filedemo fdstdin sh fdpipe fscheck
+sigtest errtest elfdemo
+```
+
+这些程序用于用户态、进程、VM、文件系统、信号和错误码回归验证。用户 Shell
+也会将同一份 Shell 镜像发布为 `/bin/echo`、`cat`、`ls`、`pwd`、`mkdir`、
+`rm`、`mv` 和 `stat` 工具入口。
+
+## 内核恢复 Shell
+
+恢复 Shell 直接运行在内核态，提供系统诊断和维护工具。
+
+### 基础与诊断
+
+| 命令 | 说明 |
+|---|---|
+| `help` | 命令列表 |
+| `clear` | 清屏 |
+| `version` | 版本 |
 | `date` | CMOS 实时时钟 |
-| `version` / `reboot` | 版本 / 重启 |
-| `ps` / `start` / `stop` | 任务状态 / 启停多任务演示 |
-| `testmode` | 图形模式实模式往返测试 |
-| `tetris` / `mario` | 游戏（ESC 退出） |
-| `font N` / `font <style> [N]` | 任意字号 8–32px / 字体风格 + 字号；`font list` 查看风格 |
-| `pwd` | 打印当前目录 |
-| `ls [dir]` | 列出目录（`<DIR>` 标记目录） |
-| `cd [dir]` | 切换目录（无参数回根目录） |
-| `mkdir dir` | 创建目录 |
-| `touch file` | 创建空文件 |
-| `cat file` | 查看文件内容 |
-| `rm path` | 删除文件或空目录 |
-| `mv old new` | 重命名/移动；文件可覆盖文件，目录可覆盖空目录 |
-| `ln old new` | 为普通文件创建硬链接 |
-| `truncate file N` | 把文件收缩或扩展到 N 字节 |
-| `stat path` | 显示类型、大小、链接数和 inode 号 |
-| `df` | 文件系统用量 |
-| `sync` | 强制提交延迟回写与元数据日志 |
-| `edit file` | 打开编辑器（^S 保存，^X 退出时询问保存） |
-| `vi file` | 打开 vi 风格编辑器（Esc 返回 Normal，`:wq` 保存退出） |
-| `cc file.c [args...]` | 编译并运行 C 程序（参数传给 main） |
-| `asm source.asm -o dest` | 汇编 32 位 Intel 语法 flat 用户程序 |
-| `debug file` | DOS DEBUG 风格 monitor：真实 `t/p` 单步、`bp/bl/bc` 断点和继续 |
-| `run prog [args] [&]` | 运行内嵌或 `/bin` 程序；参数进入初始用户栈，& = detached 后台任务 |
-| `run sh` | 从恢复 Shell 再进入用户态 Shell（正式镜像默认已进入） |
-| `sh FILE` / `sh -c CMD` | 在独立用户 Shell 中执行脚本或命令串 |
+| `reboot` | 重启 |
+| `meminfo` | 物理页统计 |
+| `memmap` | E820 内存地图 |
+| `heap [blocks]` | 内核堆状态和完整性 |
+| `heaptest` | 内核堆压力测试 |
+| `ps` | 任务表 |
+| `start` / `stop` | 启停 A/B/C 抢占演示 |
+
+### 文件与开发工具
+
+| 命令 | 说明 |
+|---|---|
+| `pwd/ls/cd/mkdir/touch/cat/rm/mv/ln/truncate/stat/df/sync` | 内核文件系统操作 |
+| `edit FILE` | nano 风格编辑器 |
+| `vi FILE` | vi 风格编辑器 |
+| `cc FILE.c [args...]` | 编译并运行迷你 C |
+| `asm SRC -o DEST` | 汇编 flat 用户程序 |
+| `debug FILE` | 调试真实暂停用户进程 |
+| `font` | 字体和字号 |
+| `tetris` / `mario` | 游戏 |
+| `testmode` | VGA 图形模式往返测试 |
 | `splash` | 重放开机画面 |
+| `run PROG [args] [&]` | 启动内置或 `/bin` 程序 |
+| `run sh` | 重新进入 Ring 3 Shell |
 
-## 🚀 快速开始
+`fscrash` 是日志断电注入测试入口，普通使用通常不需要。
 
-**环境要求**（Arch Linux）：`nasm` `gcc`（32 位支持）`ld` `objcopy` `qemu-system-i386`
+## C 编译器
 
-```bash
-make          # 构建默认 Ring 3 的 os.img 和内核恢复用 os-kernel.img
-make run      # QEMU 运行；build/disk.img 保存持久化文件系统
-make debug    # QEMU + GDB 源码级调试 (端口 1234)
-make clean    # 清理
+`cc` 基于 Robert Swierczek 的 **c4: C in four functions** 移植。它不是
+原生代码编译器，而是：
+
+```text
+C 源码
+  → 词法/语法分析
+  → 内部字节码
+  → 内核栈式虚拟机执行
 ```
 
-开机后约 4 秒开机画面（任意键跳过），正式镜像直接进入 Ring 3 Shell：
+它不会生成独立 ELF，也不参与系统链接。
 
+### 支持范围
+
+- 类型：`char`、`int`、多级指针、`enum`。
+- 全局/局部变量和声明初始化。
+- 算术、取模、移位、位运算、比较、逻辑运算和三元表达式。
+- 前置/后置 `++`、`--`。
+- `&`、`*`、指针加减和 `ptr[i]`。
+- 类型转换和 `sizeof(int/char/pointer)`。
+- `if/else`、`while`、`do/while`、`for`。
+- `break`、`continue`、`return`。
+- 自定义函数、参数、递归。
+- `int main(argc, argv)`。
+- 十进制、十六进制和八进制整数。
+- 字符、字符串和 `//` 行注释。
+
+### 内建运行时
+
+```text
+printf malloc free memset memcmp
+open read close
+exit
 ```
-sh:/> help
-```
 
-输入 `exit` 进入内核恢复 Shell（`OS:/>`），可使用 `font/tetris/edit/cc/splash` 等内核服务。
+- `printf` 支持 `%d/%s/%c/%%`，数字支持宽度和零填充。
+- `open/read/close` 可读取 OS 内已有文件。
+- `malloc` 是 64KB bump 堆。
+- `free` 当前为空操作。
+- 文件写入、截断和 seek 尚未作为 cc 内建函数开放。
 
-## 📝 典型工作流
-
-```
-sh:/> mkdir src
-sh:/> cd src
-sh:/src> exit                  ← 进入内核恢复 Shell
-OS:/src> edit hello.c          ← 编辑器写 C 程序
-OS:/src> cc hello.c            ← 编译并运行
-hello from C! (42)
-exit(0) cycle = 11
-```
-
-更酷的：C 程序读 OS 自己的文件系统——
+### 示例
 
 ```c
-int main() { int fd; char *buf; int n;
-fd = open("/data.txt", 0); buf = malloc(32);
-n = read(fd, buf, 31); buf[n] = 0;
-printf("read %d: %s\n", n, buf); return 0; }
+int fact(int n) {
+    if (n < 2) return 1;
+    return n * fact(n - 1);
+}
+
+int main() {
+    int i;
+    int sum = 0;
+    for (i = 1; i <= 5; i = i + 1) {
+        sum = sum + i;
+    }
+    printf("sum=%d fact=%d\n", sum, fact(5));
+    return 0;
+}
 ```
 
-## 📷 截图
+### 当前限制
 
-| 文件系统操作 | 内置编辑器 | C 编译运行 |
-|---|---|---|
-| <img src="note/shell-fs.png" width="240" alt="文件系统操作"/> | <img src="note/editor.png" width="240" alt="内置编辑器"/> | <img src="note/cc-demo.png" width="240" alt="C 编译运行"/> |
+- 不支持 `struct/union/typedef`。
+- 不支持 `float/double`。
+- 不支持 `unsigned/short/long`。
+- 不支持 `switch/case`、`goto`。
+- 不支持 `/* ... */` 块注释。
+- 不支持宏和真正的预处理器；`#` 开头的行会被跳过。
+- 不支持真正的 `int a[N]` 数组声明；可用 `ptr[i]` 模拟一维数组。
+- 局部声明位于函数开头，暂不支持语句块中的新声明。
+- 不支持 `for (int i = ...)`。
+- 不支持函数原型、前置声明和跨文件链接。
+- 不支持 `+=`、`-=` 等复合赋值。
+- 源文件约 16KB 上限。
+- 符号、代码、数据、栈和堆各使用一个 64KB 运行时池。
+- 无限循环可按 ESC 中断。
 
-| 默认 Ring 3 Shell | 内核恢复 Shell |
+## 汇编器与 DEBUG Monitor
+
+### `asm`
+
+```text
+asm source.asm -o /bin/program
+```
+
+两遍扫描生成入口为 `0x02000000` 的 flat Ring 3 程序。
+
+支持：
+
+- `mov/lea`
+- `add/or/and/sub/xor/cmp/test`
+- `inc/dec/not/neg/mul/div`
+- `shl/shr`
+- `push/pop`
+- `jmp/call/ret`
+- 条件分支
+- `int`、`nop/hlt`
+- 标签、`db/dd`
+- 立即数、寄存器、绝对地址和 `[reg+disp]`
+
+生成后可直接运行：
+
+```text
+run /bin/program
+```
+
+### `debug`
+
+```text
+debug /bin/program
+```
+
+调试目标是一个真实的 STOPPED Ring 3 进程。
+
+| 命令 | 说明 |
 |---|---|
-| <img src="note/splash-shell.png" width="360" alt="默认 Ring 3 Shell"/> | <img src="note/recovery-shell.png" width="360" alt="内核恢复 Shell"/> |
+| `r` | 真实 GPR/EIP/EFLAGS/ESP/CR2/CR3 |
+| `t [addr]` | TF/#DB 单步 |
+| `p` | call step-over |
+| `g [addr]` | 从当前现场继续 |
+| `bp [addr]` | 持久 INT3 断点 |
+| `bl` / `bc` | 列出/清除断点 |
+| `d [addr]` | 内存转储 |
+| `u [addr]` | 反汇编 |
+| `e addr bytes` | 修改镜像和目标内存 |
+| `w` | 写回镜像文件 |
+| `q` | 退出并回收目标进程 |
 
-| Ring 3 用户态 | 用户态越界被内核抓获 |
-|---|---|
-| <img src="note/ring3-hello.png" width="360" alt="Ring 3 用户态"/> | <img src="note/ring3-crash.png" width="360" alt="页错误现场"/> |
+断点命中后会恢复原指令字节，继续时通过 TF 隐式单步并自动重装 INT3。
 
-| fork 独立地址空间 (子改 200 父仍 100) | 后台进程 + ps 进程表 |
-|---|---|
-| <img src="note/proc-forkdemo.png" width="360" alt="fork 独立地址空间"/> | <img src="note/proc-ps.png" width="360" alt="后台进程与进程表"/> |
+## 编辑器和应用
 
-| 用户堆 + fork 堆隔离 + waitpid |
-|---|
-| <img src="note/memdemo.png" width="480" alt="用户堆、fork 堆隔离与 waitpid"/> |
+### nano 风格 `edit`
 
-| 超级马里奥标题 | 超级马里奥游戏画面 |
-|---|---|
-| <img src="note/mario-title.png" width="360" alt="超级马里奥标题"/> | <img src="note/mario.png" width="360" alt="超级马里奥游戏画面"/> |
+- 方向键、Home/End、PgUp/PgDn。
+- Ctrl+方向键按词移动。
+- Ctrl+Backspace 按词删除。
+- Ctrl+Z/Ctrl+Y 撤销/重做。
+- Ctrl+F 搜索、Ctrl+G 跳行。
+- Ctrl+S 保存、Ctrl+X 退出。
+- 未保存退出时选择保存、丢弃或取消。
 
-## 🧪 自动化测试
+### vi 风格 `vi`
 
-25 套串口驱动的无头测试（QEMU monitor 注入按键 + 内核串口标记断言）：
+- Normal/Insert/Command 模式。
+- `i/a/o`、Esc。
+- `h/j/k/l`、`0/$`、`w/b`。
+- `x/dd/yy/p/dw/d$`。
+- `/`、`n`、`u`、Ctrl+R。
+- `:w`、`:q`、`:q!`、`:wq`、`:x`。
+
+### 字体
+
+```text
+font 20
+font terminus 18
+font goha 16
+font list
+```
+
+支持 8–32px 高度和多种 8 像素宽位图字体。图形模式返回文本模式后会重新应用
+当前字体和字号。
+
+### 游戏
+
+```text
+tetris
+mario
+```
+
+游戏运行在 VGA 模式 13h，按 ESC 返回文本模式。
+
+## 文件系统
+
+NewOS 文件系统是 xv6 风格教学实现。
+
+- 独立 `build/disk.img`，2MB ATA 磁盘。
+- 文件系统从 LBA 2048 开始。
+- 文件系统容量 1MB，256 个 4KB 块。
+- 64 个 inode。
+- 超级块、inode 位图、块位图。
+- inode 含 12 个直接块和 1 个一级间接块。
+- 目录项链式存储，包含真实 `.` 和 `..`。
+- 文件 close、`sync` 和重启触发持久化。
+- 4KB 脏块缓存，有界延迟回写。
+- 元数据 redo journal。
+- 已提交日志在启动时重放。
+- 支持硬链接、truncate、rename 覆盖和目录移动。
+
+没有磁盘时提供易失文件系统回退。
+
+### 持久化
 
 ```bash
-python3 tools/test-memory.py  # E820 + 页分配 + 内核堆 (15 项)
-python3 tools/test-splash.py   # 开机画面 (14 项)
-python3 tools/test-font.py     # 字体/字号 (30 项)
-python3 tools/test-fs.py       # 文件系统 (43 项)
-python3 tools/test-disk.py     # ATA/挂载/重启持久化 (19 项)
-python3 tools/test-fs2.py      # 间接块/rename/硬链接/truncate/重启
-python3 tools/test-fs-journal.py # 日志提交后断电与启动重放
-python3 tools/test-signals.py  # 用户 handler/屏蔽/pending/sigreturn
-python3 tools/test-boot-shell.py # 正式镜像 Ring 3 / 恢复镜像内核 Shell
-python3 tools/test-edit.py     # 编辑器/撤销/搜索/光标 (67 项)
-python3 tools/test-vi.py       # vi 模式/行操作/搜索/退出命令 (28 项)
-python3 tools/test-asm.py      # 汇编器/flat 程序/真实单步与断点 (34 项)
-python3 tools/test-cc.py       # C 编译器 (41 项)
-python3 tools/test-preempt.py  # 抢占调度 (7 项)
-python3 tools/test-mario.py    # 马里奥/道具/界面/双主题 (18 项)
-python3 tools/test-user.py     # Ring 3 用户态 (36 项)
-python3 tools/test-sched.py    # PCB 调度器 + 键盘缓冲 (15 项)
-python3 tools/test-proc.py     # 多进程/fork/后台/kill (36 项)
-python3 tools/test-memproc.py  # 用户堆/fork 隔离/waitpid (26 项)
-python3 tools/test-alloc.py    # 空闲链表/合并/realloc (24 项)
-python3 tools/test-vm.py       # 按需分页/COW/guard/brk/mmap (22 项)
-python3 tools/test-exec.py     # 文件加载/exec/失败回滚 (26 项)
-python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 项)
-python3 tools/test-fd.py       # fd/CWD/共享偏移/pipe/dup2/errno (63 项)
-python3 tools/test-shell.py    # Shell/管道/环境/脚本/作业 (155 项)
+make run
+# 在 OS 中创建文件
+# 退出 QEMU
+make run
 ```
 
-> test-preempt / test-mario 是附着式测试（argv[1]=monitor socket），请用
-> `python3 tools/run-attached-tests.py` 启动（自动起 QEMU → 等开机画面结束 → 依次运行）。
+只要不删除 `build/disk.img`，文件就会保留。
 
-## 📂 目录结构
+## 系统调用 ABI
 
+用户态通过软件中断 `int 0x80` 进入内核。
+
+寄存器约定：
+
+```text
+eax = 系统调用号
+ebx = 参数 1
+ecx = 参数 2
+edx = 参数 3
+eax = 返回值
 ```
+
+内核错误返回负 errno。用户库将其转换为：
+
+```c
+return -1;
+errno = error_code;
+```
+
+系统调用编号：
+
+| 编号 | 名称 |
+|---:|---|
+| 0 | `exit` |
+| 1 | `putc` |
+| 2 | `puts` |
+| 3 | `getkey` |
+| 4 | `getticks` |
+| 5 | `fork` |
+| 6 | `getpid` |
+| 7 | `sleep` |
+| 8 | `brk` |
+| 9 | `mmap` |
+| 10 | `execve` |
+| 11 | `waitpid` |
+| 12–16 | `open/read/write/close/lseek` |
+| 17–19 | `chdir/getcwd/mkdir` |
+| 20–24 | `pipe/dup/dup2/remove/readdir` |
+| 25–27 | `setpgid/tcsetpgrp/kill` |
+| 28–31 | `rename/stat/link/truncate` |
+| 32–35 | signal action/mask/return/flags |
+| 36 | `clear` |
+
+## 典型工作流
+
+### 1. 在用户 Shell 中管理文件
+
+```text
+sh:/> mkdir -p /work/test
+sh:/> cd /work/test
+sh:/work/test> echo hello > note.txt
+sh:/work/test> cp note.txt backup.txt
+sh:/work/test> grep -n hello *.txt
+sh:/work/test> wc -l note.txt
+```
+
+### 2. 编写和运行 C
+
+```text
+sh:/> exit
+OS:/> edit /hello.c
+OS:/> cc /hello.c
+hello from C! (42)
+```
+
+或使用 vi：
+
+```text
+OS:/> vi /hello.c
+OS:/> cc /hello.c
+```
+
+### 3. 汇编和运行程序
+
+```text
+OS:/> edit /hello.asm
+OS:/> asm /hello.asm -o /bin/helloasm
+OS:/> run /bin/helloasm
+```
+
+### 4. 调试程序
+
+```text
+OS:/> debug /bin/helloasm
+- bp 0x02000005
+- g
+- r
+- t
+- g
+- q
+```
+
+### 5. 返回用户 Shell
+
+```text
+OS:/> run sh
+```
+
+## 自动化测试
+
+项目包含 24 个 Python 无头测试脚本；附着式测试内部再运行 preempt 和 Mario，
+合计覆盖 25 套测试。测试通过 QEMU monitor 注入键盘输入，并读取 COM1 串口和
+部分 VGA 文本结果。
+
+运行完整测试：
+
+```bash
+make test-suite
+```
+
+常用单项测试：
+
+```bash
+make test-memory
+make test-fs2
+make test-fs-journal
+make test-boot-shell
+make test-vi
+make test-asm
+make test-shell
+make test-fd
+```
+
+### 测试覆盖
+
+| 测试 | 覆盖范围 |
+|---|---|
+| `test-memory` | E820、页分配和内核堆，15 项 |
+| `test-splash` | 开机画面，14 项 |
+| `test-font` | 字体与字号，30 项 |
+| `test-fs` | 文件和目录基础操作，43 项 |
+| `test-disk` | ATA、挂载和跨重启持久化，19 项 |
+| `test-fs2` | 间接块、rename、硬链接、truncate 和并发写 |
+| `test-fs-journal` | 日志提交和断电重放 |
+| `test-signals` | handler、mask、pending、sigreturn，17 项 |
+| `test-boot-shell` | 两种启动模式及恢复工具入口 |
+| `test-edit` | nano 编辑器，67 项 |
+| `test-vi` | vi 模式与行操作，28 项 |
+| `test-asm` | 汇编器和 DEBUG，34 项 |
+| `test-cc` | C 编译器，41 项 |
+| attached tests | 抢占调度和 Mario 界面 |
+| `test-user` | Ring 3 基础行为，36 项 |
+| `test-sched` | PCB 调度与键盘，15 项 |
+| `test-proc` | fork、后台和 kill，36 项 |
+| `test-memproc` | 用户堆、fork 隔离和 waitpid，26 项 |
+| `test-alloc` | 空闲链表和 realloc，24 项 |
+| `test-vm` | 按需分页、COW、guard、brk/mmap，22 项 |
+| `test-exec` | flat/ELF 加载与回滚，26 项 |
+| `test-process` | waitpid、argv/envp、ELF32，39 项 |
+| `test-fd` | fd、CWD、pipe、dup2、errno，63 项 |
+| `test-shell` | Shell、实用工具、脚本和作业，224 项 |
+
+附着式测试需要等待 QEMU 开机完成：
+
+```bash
+python3 tools/run-attached-tests.py
+```
+
+## 目录结构
+
+```text
 .
-├── boot/boot.asm       # 512 字节引导扇区
-├── kernel/             # 内核源码 (C + 汇编)
-│   ├── kernel.c        # 内核入口
-│   ├── memory.c/h      # E820 解析 + 保留保护 + 物理页分配
-│   ├── heap.c/h        # 内核堆：分裂、合并、重分配、完整性检查
-│   ├── paging.c/h      # 页目录/页表、恒等映射与用户映射原语
-│   ├── ata.c/h         # ATA PIO 28-bit LBA 扇区读写
-│   ├── vm.c/h          # 独立进程地址空间、按需分页、COW、brk/mmap
-│   ├── exec.c/h        # /bin 发布、flat 加载器、事务式 exec
-│   │                    # (vm.c/h 同时包含 ELF32 loader 与初始栈)
-│   ├── gdt.c/h         # 内核 GDT (用户段 + TSS)
-│   ├── idt.c/h pic.c   # 中断与 8259A
-│   ├── irq.asm         # IRQ 汇编桩
-│   ├── exc.c exc_asm.asm    # 异常处理器 (32 个向量)
-│   ├── user.c/h user_asm.asm user_progs.c user_embed.asm  # Ring 3 用户态
-│   ├── keyboard.c      # PS/2 键盘
-│   ├── timer.c/h       # PIT 滴答 + 蜂鸣
-│   ├── vga.c/h         # 文本模式显示
-│   ├── graphics.c/h    # 模式 13h 图形库
-│   ├── font.c/h        # VGA 字符发生器字体管理
-│   ├── font12/14/16.h  # Terminus 字体数据
-│   ├── fs.c/h          # 间接块、可睡眠锁、脏块回写、redo journal
-│   ├── fd.c/h          # 共享打开文件对象、pipe 环形缓冲区、引用计数
-│   ├── editor.c/h      # 内置编辑器
-│   ├── cc.c/h          # c4 编译器移植
-│   ├── splash.c/h .asm # 开机画面
-│   ├── tetris.c/h      # 俄罗斯方块
-│   ├── mario.c/h       # 超级马里奥
-│   ├── task.c/h switch.asm   # 多任务
-│   ├── realmode.c/h rm_*.asm  # 实模式往返跳板
-│   └── keymap.h string.h      # 扫描码映射 / 字符串工具
-├── user/               # 用户态演示程序 (宿主 gcc 编译后 incbin 进内核)
-│   ├── lib.h           # 系统调用封装 (int 0x80)
-│   ├── linker.ld       # 链接到 0x2000000 (用户区)
-│   └── hello.c count.c crash.c div0.c echo.c badptr.c forkdemo.c
-│       spinner.c vmtest.c vmguard.c execdemo.c execbad.c
-│       waittest.c execargv.c elfdemo.c memdemo.c allocdemo.c
-│       filedemo.c fdstdin.c sh.c fdpipe.c fscheck.c
-├── tetris/             # 原始实模式汇编版 (移植蓝本)
-├── tools/              # 字体转换 + 25 套测试脚本
-├── note/               # 开发记录 + 截图
-└── Makefile
+├── boot/
+│   └── boot.asm              # 512B 引导扇区
+├── kernel/
+│   ├── kernel.c              # 内核初始化入口
+│   ├── memory.c              # E820、物理页和引用计数
+│   ├── heap.c                # 内核堆
+│   ├── paging.c              # 页表和地址空间原语
+│   ├── vm.c                  # 按需分页、COW、brk/mmap、ELF
+│   ├── proc.c                # 进程、fork、waitpid 和信号
+│   ├── task.c                # PCB 调度器
+│   ├── switch.asm            # 上下文切换
+│   ├── user.c                # int 0x80 分发
+│   ├── user_asm.asm          # Ring 3 syscall 入口
+│   ├── fs.c                  # 文件系统、缓存、日志
+│   ├── fd.c                  # fd、pipe 和共享打开对象
+│   ├── exec.c                # /bin 发布和 exec 加载
+│   ├── editor.c              # nano/vi
+│   ├── cc.c                  # c4 C 编译器
+│   ├── assembler.c           # 32 位 flat 汇编器
+│   ├── debugger.c            # 真实单步和断点
+│   ├── shell.c               # 内核恢复 Shell
+│   ├── ata.c                 # ATA PIO
+│   ├── keyboard.c            # PS/2 键盘
+│   ├── timer.c               # PIT
+│   ├── vga.c                 # VGA 文本
+│   ├── graphics.c            # 模式 13h
+│   ├── font.c                # 字体管理
+│   ├── tetris.c              # 俄罗斯方块
+│   ├── mario.c               # 超级马里奥
+│   └── linker.ld             # 内核 BSS 布局
+├── user/
+│   ├── lib.h                 # 用户 syscall 包装
+│   ├── sh.c                  # Ring 3 Shell
+│   ├── linker.ld             # flat 用户镜像布局
+│   └── *.c                   # 用户态程序和演示
+├── tools/
+│   ├── test-*.py             # 无头回归测试
+│   └── run-attached-tests.py # 附着式测试
+├── docs/
+│   ├── MILESTONE_*.md        # 里程碑设计记录
+│   └── source/               # 逐文件源码解析文档
+├── note/
+│   ├── *.md                  # 开发踩坑记录
+│   └── *.png                 # 运行截图
+├── assets/
+├── Makefile
+├── ROADMAP.md
+├── LEARNING_PLAN.md
+└── README.md
 ```
 
-## 📖 项目历程
+`smallOS/` 保留了早期最小内核版本，主要用于对照学习，不是当前主构建目标。
+
+## 已知限制
+
+### 用户态和进程
+
+- 不支持动态链接、PT_INTERP、PIE/ET_DYN。
+- 最多 16 个任务槽。
+- argv 上限 16，envp 上限 8，参数文本约 3KB。
+- 最多四段管道。
+- pipe 缓冲区 1KB。
+- 文件系统锁等待暂不返回 EINTR。
+- errno 是 Shell/程序内的静态值，不是完整线程局部存储。
+
+### Shell
+
+- 还没有 `if/for/while/case`。
+- 没有函数、positional parameters、alias 和完整 POSIX 展开规则。
+- `grep` 不支持正则表达式。
+- `test` 不支持完整 `-a/-o` 优先级。
+- `printf` 不支持完整宽度、精度、`*` 和格式复用。
+- 命令替换的非零退出状态尚未完整传播。
+- Shell 环境不跨 Shell 重启持久化。
+
+### 文件系统
+
+- 只有 1MB 文件系统空间。
+- 没有时间戳、权限位、用户/组。
+- 没有二级间接块。
+- 日志保护元数据原子性；未回写文件数据仍可能在模拟断电时丢失。
+- ATA 只支持 primary master、polling PIO 和 LBA28。
+- 没有通用 mount 和分区表。
+
+### 调试器
+
+- `p` 只识别直接 `call rel32`。
+- 最多 8 个软件断点。
+- 暂无硬件断点。
+- 暂无 `a addr` 交互式汇编和寄存器写。
+- 反汇编是面向当前汇编器子集的教学实现。
+
+### C 编译器
+
+- 只支持单文件 C 子集。
+- 不兼容标准 C 头文件和链接流程。
+- 不生成原生机器码或 ELF。
+- 堆 `free` 为空操作。
+- 只提供文件读取，没有完整文件写 API。
+
+## 常见问题
+
+### 为什么 `cc/edit/vi/asm/debug/tetris/mario` 在 `sh:/>` 中不存在？
+
+它们属于内核恢复 Shell，不是 Ring 3 用户 Shell。
+
+```text
+sh:/> exit
+OS:/> help
+```
+
+### 如何直接启动恢复 Shell？
+
+```bash
+qemu-system-i386 -fda build/os-kernel.img \
+  -drive file=build/disk.img,format=raw,if=ide,index=0 \
+  -serial stdio
+```
+
+### QEMU 提示镜像被占用
+
+通常表示另一个 QEMU 仍在运行并打开了 `build/os.img`。关闭旧 QEMU 后重新执行：
+
+```bash
+make run
+```
+
+使用 `-snapshot` 的只读测试映像不会主动写回磁盘。
+
+### 构建时报 32 位工具链错误
+
+确认 `gcc -m32` 可用，并确认 `nasm`、`ld`、`objcopy` 已安装。
+
+### 文件重启后消失
+
+检查是否启动时带入了持久化磁盘：
+
+```bash
+-drive file=build/disk.img,format=raw,if=ide,index=0
+```
+
+不带 ATA 盘时内核使用易失回退文件系统。
+
+### `cc` 找不到 `stdio.h`
+
+`cc` 没有预处理器和标准库头文件。`printf`、`malloc`、`open`、`read` 等名称
+已经内置，直接使用即可，不要写 `#include`。
+
+### 程序源码过大
+
+`cc` 源文件上限约 16KB。可以拆分逻辑，但目前没有跨文件链接。
+
+## 源码逐文件文档
+
+完整源码解析集中在 [`docs/source/`](docs/source/README.md)，当前包含 184 份
+Markdown 文档，覆盖 33,744 行源码。每份文档包含文件职责、关键符号、易错点
+以及源文件逐行解析。
+
+重新生成：
+
+```bash
+make docs
+```
+
+## 开发记录
+
+关键设计文档：
+
+- [文档索引与当前状态](docs/NEXT_SESSION.md)
+- [虚拟内存](docs/MILESTONE_13_VM.md)
+- [exec 与文件加载](docs/MILESTONE_14_EXEC.md)
+- [进程、ELF 与 waitpid](docs/MILESTONE_15_PROCESS_ELF.md)
+- [用户 Shell](docs/MILESTONE_20_USER_SHELL.md)
+- [作业控制](docs/MILESTONE_21_JOBS.md)
+- [停止与恢复](docs/MILESTONE_22_STOP_RESUME.md)
+- [磁盘文件系统](docs/MILESTONE_23_DISK_FS.md)
+- [文件系统 V2](docs/MILESTONE_24_FS_V2.md)
+- [崩溃一致性](docs/MILESTONE_25_CRASH_CONSISTENCY.md)
+- [用户态信号](docs/MILESTONE_26_SIGNALS.md)
+- [Shell 2.0](docs/MILESTONE_27_SHELL_V2.md)
+- [Shell 3.0](docs/MILESTONE_28_SHELL_V3.md)
+- [errno 与脚本状态](docs/MILESTONE_29_ERRORS.md)
+- [vi 编辑器](docs/MILESTONE_30_VI.md)
+- [汇编器与 DEBUG](docs/MILESTONE_31_ASSEMBLY_DEBUG.md)
+- [真实单步与断点](docs/MILESTONE_32_REAL_DEBUG.md)
+- [实用 Shell 命令](docs/MILESTONE_33_SHELL_UTILITIES.md)
+
+更多开发踩坑记录和截图位于 [`note/`](note/)。
+
+## 项目历程
 
 | 里程碑 | 内容 |
+|---:|---|
+| 1 | 实模式往返、BIOS 调用和图形模式 |
+| 2 | 俄罗斯方块 C 移植 |
+| 3 | PIT IRQ0 抢占式多任务 |
+| 4 | 超级马里奥 |
+| 5 | VGA 字体和字号 |
+| 6 | 内存文件系统和文件命令 |
+| 7 | nano 风格编辑器 |
+| 8 | c4 迷你 C 编译器 |
+| 9 | 32 位开机画面 |
+| 10 | Ring 3、TSS、用户页表、系统调用和异常 |
+| 11 | PCB 调度、fork、每进程地址空间和后台进程 |
+| 12 | E820、内核堆和内存诊断 |
+| 13 | 按需分页、COW、guard、brk/mmap |
+| 14 | `/bin`、flat 加载和事务式 exec |
+| 15 | waitpid、argv/envp、ELF32 |
+| 16 | 用户 allocator |
+| 17 | 编辑器增强 |
+| 18 | 马里奥增强 |
+| 19 | fd 表、CWD、文件 API |
+| 20 | 用户 Shell、管道、重定向和共享打开对象 |
+| 21 | 四段管道、进程组和 Ctrl+C |
+| 22 | SIGSTOP/SIGCONT、Ctrl+Z 和 bg |
+| 23 | ATA、磁盘文件系统和持久化 |
+| 24 | 一级间接块、rename、stat 和并发写 |
+| 25 | FS mutex、延迟回写、redo journal、硬链接 |
+| 26 | 用户态信号和默认 Ring 3 Shell |
+| 27 | 引号、变量、stderr、通配符、补全和 SA_RESTART |
+| 28 | 行编辑、Ctrl+R、环境、命令替换、多行、脚本 |
+| 29 | 负 errno 和脚本退出状态 |
+| 30 | vi Normal/Insert/Command |
+| 31 | 两遍汇编器和 DEBUG Monitor |
+| 32 | 真实 TF/#DB 单步、INT3 断点和 step-over |
+| 33 | cp/head/tail/wc/grep/printf/test/read/source 等实用命令 |
+
+## 截图
+
+| 用户 Shell | 内核恢复 Shell |
 |---|---|
-| 1 | 实模式往返（BIOS 调用 + 图形模式） |
-| 2 | 俄罗斯方块（汇编 1:1 移植 C） |
-| 3 | 抢占式多任务（PIT IRQ0 时间片） |
-| 4 | 超级马里奥（横版跳跃 + 卷轴） |
-| 5 | Terminus 字体 + 三档字号（纯 VGA 硬件编程） |
-| 6 | 内存文件系统 + 9 个文件命令 |
-| 7 | nano 风格内置编辑器 |
-| 8 | c4 迷你 C 编译器（写 C → 编译 → 运行闭环） |
-| 9 | 开机画面（用户 hello.asm 的 32 位移植美化版） |
-| 10 | Ring 3 用户态（TSS + 页表 U/S 保护 + int 0x80 系统调用 + 异常处理） |
-| 11 | 多进程（PCB 调度器 + 键盘环形缓冲 + 每进程独立地址空间 + fork + 后台进程） |
-| 12 | E820 内存地图 + 保留区保护 + 内核堆分配器 + `memmap`/`heap` 诊断 |
-| 13 | 独立虚拟地址空间 + 按需分页 + fork COW + guard page + `brk`/`mmap` |
-| 14 | `/bin` 可执行文件发布 + flat 加载器 + 事务式 `exec` + PID 保持 |
-| 15 | `waitpid` + argv/envp 初始栈 + ELF32 PT_LOAD/BSS + 只读代码页 |
-| 16 | 用户态空闲链表 allocator（首适配 + 分裂 + 相邻合并 + 堆尾收缩 + calloc/realloc） |
-| 17 | 编辑器增强（光标残影修复 + 撤销重做 + 搜索跳行 + 按词导航） |
-| 18 | 马里奥增强（双关卡、能力块、检查点、连踩、粒子震屏、精致 HUD） |
-| 19 | 进程级 fd 表（open/read/write/close/lseek）+ 每进程 CWD + fd 0/1/2 |
-| 20 | 用户态 Shell + echo/cat/ls/pwd/mkdir/rm + 共享文件对象 + pipe/dup2 + `<`/`>`/`>>`/`\|`/`&` |
-| 21 | 四段管道 + 进程组 + 前台 Ctrl+C + `jobs/fg/kill/wait` + 后台作业回收 |
-| 22 | TASK_STOPPED + SIGSTOP/SIGCONT + Ctrl+Z + `WUNTRACED` + `bg` + 暂停作业恢复 |
-| 23 | ATA PIO + 磁盘超级块/inode/块位图 + 挂载检查 + 写穿缓存 + 重启持久化 |
-| 24 | 一级间接块 + 文件系统全局临界区 + `rename/stat` + 用户态 `mv`/`ls -l` + 并发写测试 |
-| 25 | 可睡眠 FS mutex + 有界延迟回写 + 元数据 redo journal + 断电重放 + rename 覆盖/硬链接/truncate |
-| 26a | 用户态 sigaction/sigprocmask/sigreturn + pending/mask + handler 栈帧与返回跳板 |
-| 26b | 正式镜像默认 Ring 3 Shell + 启动模式字节 + 内核恢复 Shell/测试镜像 |
-| 27a | Shell 引号/变量/分号 + stderr 重定向 + EINTR 与作业状态修复 |
-| 27b | 通配符/字段展开 + Tab 补全 + 持久化历史 + `SA_RESTART` |
-| 28 | 行内编辑/历史搜索 + 可变环境 + 命令替换 + 多行/脚本 |
-| 29 | 负 errno syscall ABI + 用户 errno 兼容层 + 脚本退出状态 |
-| 30 | vi Normal/Insert/Command、行操作、搜索与 `:w/:q/:wq/:q!` |
-| 31 | 32 位两遍汇编器 + flat 输出 + DEBUG monitor 的 `r/d/u/e/w/g/q` |
-| 32 | 暂停用户进程 + TF/#DB 单步 + INT3 断点 + call step-over + 真实现场 |
+| <img src="note/splash-shell.png" width="360" alt="Ring 3 用户 Shell"/> | <img src="note/recovery-shell.png" width="360" alt="内核恢复 Shell"/> |
 
-每个里程碑的开发过程、踩坑记录与修复思路详见 `note/` 目录下的开发记录。
+| 文件系统 | 编辑器 |
+|---|---|
+| <img src="note/shell-fs.png" width="360" alt="文件系统操作"/> | <img src="note/editor.png" width="360" alt="内置编辑器"/> |
 
-里程碑 12–15 的完整逐步教程见
-[`docs/MILESTONE_12_E820_HEAP.md`](docs/MILESTONE_12_E820_HEAP.md) 与
-[`docs/MILESTONE_13_VM.md`](docs/MILESTONE_13_VM.md)、
-[`docs/MILESTONE_14_EXEC.md`](docs/MILESTONE_14_EXEC.md)、
-[`docs/MILESTONE_15_PROCESS_ELF.md`](docs/MILESTONE_15_PROCESS_ELF.md)、
-[`docs/MILESTONE_23_DISK_FS.md`](docs/MILESTONE_23_DISK_FS.md)、
-[`docs/MILESTONE_24_FS_V2.md`](docs/MILESTONE_24_FS_V2.md)。
+| C 编译运行 | 页错误现场 |
+|---|---|
+| <img src="note/cc-demo.png" width="360" alt="C 编译运行"/> | <img src="note/ring3-crash.png" width="360" alt="页错误现场"/> |
 
-## 📄 致谢
+| fork 地址空间 | 进程表 |
+|---|---|
+| <img src="note/proc-forkdemo.png" width="360" alt="fork 地址空间"/> | <img src="note/proc-ps.png" width="360" alt="进程表"/> |
 
-- **c4**（C in four functions）编译器：Robert Swierczek 原创（public domain），本项目为其内核内移植
-- **Terminus Font**：Dimitar Zhekov 的经典终端位图字体
-- 早期学习规划与笔记见本仓库 `LEARNING_PLAN.md` / `ROADMAP.md` / `docs/`
+| Mario 标题 | Mario 游戏 |
+|---|---|
+| <img src="note/mario-title.png" width="360" alt="Mario 标题"/> | <img src="note/mario.png" width="360" alt="Mario 游戏"/> |
 
-> 本项目为个人学习项目，代码以教学可读性优先。欢迎参考、批评、交流。
+## 致谢
+
+- **c4: C in four functions**：Robert Swierczek，public domain。
+- **Terminus Font**：Dimitar Zhekov。
+- 学习规划和阶段目标见 [`ROADMAP.md`](ROADMAP.md) 与
+  [`LEARNING_PLAN.md`](LEARNING_PLAN.md)。
+
+本项目是个人学习项目，代码以教学可读性优先。欢迎参考、批评和交流。

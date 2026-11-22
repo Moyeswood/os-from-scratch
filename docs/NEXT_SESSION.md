@@ -6,10 +6,9 @@
 
 - 项目目录：`/home/mfw/Documents/claude001/NewOS`
 - 分支：`main`
-- 当前进度：里程碑 32（真实单步与断点）完成
-- 回归：汇编/DEBUG 34 项、vi 28 项、原 edit 67 项、Shell 155 项通过
-- 完整 `make test-suite` 通过；最终内核镜像 286180 字节
-- 最终内核镜像 279364 字节，低于 448KB（458752 字节）加载上限
+- 当前进度：里程碑 33（实用 Shell 命令与脚本工具）完成
+- 回归：汇编/DEBUG 34 项、vi 28 项、原 edit 67 项、Shell 224 项通过
+- 完整 `make test-suite` 通过；内核镜像 303716 字节，用户 Shell 61329 字节
 
 ## 今日完成
 
@@ -50,6 +49,8 @@
     以及 `r/d/u/e/w/g/q` DEBUG Monitor。
 20. 里程碑 32：暂停用户进程加载、TF/#DB 单步、INT3/#BP 断点、
     call step-over、断点自动重装与真实寄存器/栈/页表现场。
+21. 里程碑 33：`cp/touch/head/tail/wc/grep/printf/test/read/source`
+    等实用命令，以及 `mkdir -p`、`rm -r`、`ls -a`、`cd -`。
 
 关键文档：
 
@@ -61,6 +62,7 @@
 - `docs/MILESTONE_30_VI.md`（vi modal 编辑器设计）
 - `docs/MILESTONE_31_ASSEMBLY_DEBUG.md`（汇编器与 Monitor 设计）
 - `docs/MILESTONE_32_REAL_DEBUG.md`（真实调试设计）
+- `docs/MILESTONE_33_SHELL_UTILITIES.md`（Shell 实用命令）
 - `docs/MILESTONE_13_VM.md`
 - `docs/MILESTONE_14_EXEC.md`
 - `docs/MILESTONE_15_PROCESS_ELF.md`
@@ -174,10 +176,10 @@ make test-fs-journal
 
 ## 下次建议：DEBUG 扩展与 Shell 控制流
 
-1. `a addr` 交互式汇编、寄存器写命令与最近指令差异展示。
-2. 多目标/硬件执行断点；当前 `p` 只识别直接 `call rel32`。
-3. Shell `&&`、`||`、`!` 和括号分组。
-4. `if/for/while/case`、`test`、函数和 positional parameters。
+1. Shell `&&`、`||`、`!` 和括号分组。
+2. `if/for/while/case`、函数和 positional parameters。
+3. DEBUG `a addr`/寄存器写、多目标或硬件执行断点。
+4. `find/du/sort/uniq/tr/cut` 等目录与文本管道工具。
 
 ## 后续：Shell 控制流
 
@@ -197,6 +199,7 @@ make test-fs-journal
 - errno 当前是单翻译单元静态值；复杂文件系统失败仍常归并为 EIO。
 - 汇编器仅支持自定义指令子集，不兼容完整 NASM/GAS。
 - DEBUG 已有真实 `t/p/bp`；暂无 `a`、寄存器写和硬件断点。
+- Shell 已有实用文本工具；`grep` 尚无正则，`test` 尚无复合表达式。
 - argv 上限 16，envp 上限 8，参数文本上限 3KB。
 - 文件系统为 1MB 持久化 FS；结构上已支持一级间接块，实际单文件上限
   受磁盘容量约束。

@@ -35,9 +35,9 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 
 ### 🛡️ Ring 3 User Mode
 - **Privilege isolation**: TSS kernel-stack switch, user code/data segments (DPL3), page-table U/S protection — a user program touching kernel memory gets a #PF
-- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/link/truncate/sigaction/sigprocmask/sigreturn/setpgid/tcsetpgrp/kill; user pointers are validated page by page, failures carry negative errno values, and the user library returns `-1` with `errno` set
+- **System calls**: `int 0x80` (DPL3 gate) — putc/puts/get_ticks/clear/exit/fork/waitpid/getpid/sleep/brk/mmap/execve/open/read/write/close/lseek/chdir/getcwd/mkdir/pipe/dup/dup2/remove/readdir/rename/stat/link/truncate/sigaction/sigprocmask/sigreturn/setpgid/tcsetpgrp/kill; user pointers are validated page by page, failures carry negative errno values, and the user library returns `-1` with `errno` set
 - **User signals**: install or ignore `SIGINT/SIGTERM/SIGCONT`, with a pending bitmap, signal mask, automatic current-signal blocking, and a SysV-style user-stack return frame
-- **Default user shell 3.0**: normal boot enters a Ring 3 `sh:/>`; supports quoting, escapes, `$VAR/$?`, field splitting, `*`/`?` globbing, `$(...)` command substitution, multiline input, scripts and `sh -c`, in-line editing, Ctrl+R history search, Tab completion, persistent history, mutable environments, `;`, `2>/2>&1`, four-stage pipelines, process groups, signals, jobs, and `mv/ln/truncate/stat/ls -l`. `exit` enters the kernel recovery shell
+- **Default user shell 3.0**: normal boot enters a Ring 3 `sh:/>`; supports quoting, variables, globbing, `$(...)`, multiline scripts, four-stage pipelines, jobs, and practical `cp/head/tail/wc/grep/printf/test/read/source` commands. `exit` enters the kernel recovery shell
 - **Exception handling**: 32 exception handlers print the full fault context (EIP/CS/EFLAGS/ESP/CR2 + page-fault error code P/W/U decoding); a user-mode fault kills the process and returns to the shell, a kernel-mode fault panics
 - **23 flat programs + 1 ELF32 demo**: coverage includes the user shell, signal handling, POSIX errno, shared opens, pipes, waitpid, execve, ELF32, fork heap isolation, the free-list allocator, per-process working directories, and filesystem concurrency stress
 
@@ -52,7 +52,7 @@ NewOS is an educational 32-bit x86 operating system written from scratch in C an
 xv6-style teaching implementation (ATA PIO persistent disk, 1 MB / 256 blocks, 64 inodes):
 - Superblock + inode/block bitmaps + 64-byte inodes (12 direct blocks plus a single-indirect block, removing the 48 KB structural limit)
 - Chained directory entries, real `.`/`..` entries, unified absolute/relative path resolution
-- Shell commands: `pwd` `ls` `cd` `mkdir` `touch` `cat` `rm` `mv` `ln` `truncate` `stat` `echo >` `df` `sync`
+- Shell commands: `pwd` `ls -la` `cd -` `mkdir -p` `touch` `cat` `cp -r` `rm -rf` `mv` `ln` `truncate` `stat` `df` `sync`
 - Bounded 4 KB dirty-block cache with threshold/periodic writeback, close/reboot flushing, and explicit `sync`
 - Sleeping single-writer mutex; waiters sleep on `TASK_WAIT_FS` instead of blocking IRQs during large ATA I/O
 - Metadata redo journal: home blocks are updated only after a committed journal header; committed transactions replay at boot
@@ -108,6 +108,7 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 |---|---|
 | `help` | List all commands |
 | `history [N]` | Show the last N commands; Up/Down recalls them |
+| `history -c` | Clear in-memory history and truncate `/.sh_history` |
 | `NAME=value` / `export NAME` / `unset NAME` | Set a local variable, export it, or remove it |
 | `set` / `env` | Show all shell variables / the exported environment |
 | `clear` | Clear the screen |
@@ -117,6 +118,18 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `heap blocks` | Show heap blocks after split/coalesce |
 | `heaptest` | Run allocation/reallocation/free stress test |
 | `echo [text]` | Print text; `echo text > file` writes (overwrites) a file |
+| `touch file...` | Create empty files |
+| `cp [-r] src dest` | Copy a file or recursively copy a directory |
+| `head/tail [-n N] file` | Show the first/last N lines (default 10) |
+| `wc [-lwc] file` | Count lines, words, and bytes |
+| `grep [-in] pattern file` | Fixed-string filtering with pipe support |
+| `printf FORMAT args` | Format `%s/%d/%x/%c` output |
+| `test expr` / `[ expr ]` | File, string, and integer tests |
+| `read NAME` | Read a variable from the keyboard or `< file` |
+| `source FILE` / `. FILE` | Run a script in the current shell |
+| `which/type NAME` | Locate builtins and `/bin` programs |
+| `hexdump [file]` | Hexadecimal/ASCII file view |
+| `sleep N` / `uptime` | Sleep for N seconds / show uptime |
 | `date` | CMOS real-time clock |
 | `version` / `reboot` | Version / reboot |
 | `ps` / `start` / `stop` | Task status / start-stop the multitasking demo |
@@ -236,7 +249,7 @@ python3 tools/test-vm.py       # demand paging/COW/guard (22 checks)
 python3 tools/test-exec.py     # file loader/exec/rollback (26 checks)
 python3 tools/test-process.py  # waitpid/argv/envp/ELF32 (39 checks)
 python3 tools/test-fd.py       # fd/CWD/shared offsets/pipes/dup2/errno (63 checks)
-python3 tools/test-shell.py    # shell/pipelines/env/scripts/jobs (155 checks)
+python3 tools/test-shell.py    # shell/utilities/pipelines/scripts/jobs (224 checks)
 ```
 
 > test-preempt / test-mario are attached tests (argv[1] = monitor socket);
@@ -328,6 +341,7 @@ python3 tools/test-shell.py    # shell/pipelines/env/scripts/jobs (155 checks)
 | 30 | vi Normal/Insert/Command modes, line operations, search, and `:w/:q/:wq/:q!` |
 | 31 | Two-pass 32-bit assembler + flat output + DEBUG monitor `r/d/u/e/w/g/q` |
 | 32 | Paused user process + TF/#DB stepping + INT3 breakpoints + call step-over + live context |
+| 33 | `cp/head/tail/wc/grep/printf/test/read/source` plus file and shell options |
 
 Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
 
