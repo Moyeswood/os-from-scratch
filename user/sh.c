@@ -1,5 +1,6 @@
 #include "lib.h"
 
+
 #define LINE_MAX  256
 #define WORD_MAX  64
 #define ARGS_MAX  20
@@ -19,6 +20,12 @@
 #define COPY_DEPTH_MAX 12
 #define TAIL_RING_MAX 16
 
+/* Shell control-flow constants */
+#define CF_STACK  8          /* max nesting: ( ) / if / while / for */
+#define CF_TERM   16         /* max tokens in one control-flow operand */
+#define FOR_INIT  8          /* max tokens after "for NAME in" */
+#define LOOP_BODY 8          /* max clauses inside { } block */
+
 typedef struct {
     char* argv[ARGS_MAX];
     int argc;
@@ -30,6 +37,42 @@ typedef struct {
     int stderr_to_stdout;
     int pipe_input;         /* 修复: 标记 stdin 来自管道 (由 execute_pipeline 设置) */
 } command_t;
+
+/* Control-flow node types */
+enum cf_type {
+    CF_CMD,     /* plain command pipeline, like today */
+    CF_AND,     /* left && right */
+    CF_OR,      /* left || right */
+    CF_NOT,     /* ! operand */
+    CF_GROUP,   /* (...) grouped subshell */
+    CF_IF,      /* if cond; then body; [ elif c; then b; ]* [ else b; ] fi */
+    CF_WHILE,   /* while cond; do body; done */
+    CF_FOR      /* for var in words; do body; done */
+};
+
+typedef struct cf_node cf_node_t;
+struct cf_node {
+    enum cf_type type;
+    cf_node_t *left;
+    cf_node_t *right;
+    /* CF_CMD */
+    int ncmds;
+    command_t cmds[PIPE_MAX];
+    int background;
+    /* CF_FOR */
+    char var_name[32];
+    int nwords;
+    char *word_ptrs[CF_TERM];
+    char word_storage[CF_TERM * LINE_MAX];
+    /* CF_WHILE / CF_FOR body */
+    int nbodies;
+    cf_node_t *bodies[LOOP_BODY];
+    /* CF_IF arms */
+    int narms;
+    cf_node_t *cond_nodes[8];
+    cf_node_t *body_nodes[8];
+    cf_node_t *else_node;
+};
 
 typedef struct {
     int used;
@@ -49,6 +92,15 @@ static unsigned char shell_env_exported[ENV_MAX];
 static int shell_env_count;
 static int last_status;
 static int shell_exit_status;
+/* Positional parameters $1..$9, ${10} via indirection */
+#define PARAM_MAX 10
+static char param_storage[PARAM_MAX][LINE_MAX];
+static int param_count;
+
+/* Control-flow state */
+static cf_node_t* cf_parse(char** tokens, int ntokens, int* consumed);
+static void cf_free(cf_node_t* node);
+static int cf_execute(cf_node_t* node);
 static char history[HISTORY_MAX][LINE_MAX];
 static int history_count;
 static int history_index;
@@ -2588,6 +2640,223 @@ static void complete_line(char* line, int* len, int* cursor) {
     }
 }
 
+/* ---- Simple Shell Control Flow Implementation ---- */
+
+static void cf_free(cf_node_t* node) {
+    if (!node) return;
+    if (node->type != CF_CMD && node->type != CF_FOR) {
+        cf_free(node->left);
+        cf_free(node->right);
+    }
+}
+
+static int cf_execute(cf_node_t* node) {
+    if (!node) return 0;
+    
+    switch (node->type) {
+    case CF_CMD: {
+        int status = execute_pipeline(node->cmds, node->ncmds, node->background, "cf");
+        last_status = status < 0 ? 0 : status;
+        return last_status;
+    }
+    case CF_AND: {
+        int left = cf_execute(node->left);
+        if (left != 0) return left;
+        return cf_execute(node->right);
+    }
+    case CF_OR: {
+        int left = cf_execute(node->left);
+        if (left == 0) return 0;
+        return cf_execute(node->right);
+    }
+    case CF_NOT: {
+        int left = cf_execute(node->left);
+        return left == 0 ? 1 : 0;
+    }
+    case CF_GROUP:
+        return cf_execute(node->left);
+    case CF_IF: {
+        /* If cond_nodes[0] exists and evaluates to success (0), run body_nodes[0] */
+        if (node->cond_nodes[0]) {
+            int cond_status = cf_execute(node->cond_nodes[0]);
+            if (cond_status == 0 && node->body_nodes[0]) {
+                return cf_execute(node->body_nodes[0]);
+            }
+        }
+        /* Check for else */
+        if (node->else_node) {
+            return cf_execute(node->else_node);
+        }
+        return 0;
+    }
+    case CF_WHILE: {
+        while (1) {
+            if (!node->left || !node->right) break;
+            int cond = cf_execute(node->left);
+            if (cond != 0) break;
+            int body = cf_execute(node->right);
+            if (body != 0) return body;
+        }
+        return 0;
+    }
+    case CF_FOR: {
+        for (int wi = 0; wi < node->nwords; wi++) {
+            param_count = 1;
+            int wlen = 0;
+            for (int j = 0; node->word_ptrs[wi][j] && wlen < LINE_MAX - 1; j++, wlen++)
+                param_storage[0][wlen] = node->word_ptrs[wi][j];
+            param_storage[0][wlen] = '\\0';
+            
+            int vn_len = 0;
+            for (int j = 0; node->var_name[j] && vn_len < LINE_MAX - 1; j++, vn_len++)
+                param_storage[0][vn_len] = node->var_name[j];
+            param_storage[0][vn_len] = '\\0';
+            
+            if (node->bodies[0]) {
+                int body = cf_execute(node->bodies[0]);
+                if (body != 0) return body;
+            }
+        }
+        return 0;
+    }
+    default:
+        return 0;
+    }
+}
+
+static cf_node_t* parse_cf_command(char** words, int count, int* consumed) {
+    cf_node_t* node = calloc(1, sizeof(cf_node_t));
+    if (!node) return 0;
+    
+    /* Check for if/then/fi */
+    if (count >= 4 && scmp(words[0], "if") == 0) {
+        node->type = CF_IF;
+        int then_pos = -1, fi_pos = -1, else_pos = -1;
+        for (int i = 1; i < count; i++) {
+            if (scmp(words[i], "then") == 0 && then_pos < 0) then_pos = i;
+            else if (scmp(words[i], "fi") == 0 && fi_pos < 0) fi_pos = i;
+            else if (scmp(words[i], "else") == 0 && else_pos < 0) else_pos = i;
+        }
+        if (then_pos > 0 && fi_pos > then_pos) {
+            int cc = 0;
+            node->cond_nodes[0] = parse_cf_command(words + 1, then_pos - 1, &cc);
+            if (else_pos > 0 && else_pos < fi_pos) {
+                int bc = 0;
+                node->body_nodes[0] = parse_cf_command(words + then_pos + 1, else_pos - then_pos - 1, &bc);
+                int ec = 0;
+                node->else_node = parse_cf_command(words + else_pos + 1, fi_pos - else_pos - 1, &ec);
+            } else if (fi_pos > then_pos + 1) {
+                int bc = 0;
+                node->body_nodes[0] = parse_cf_command(words + then_pos + 1, fi_pos - then_pos - 1, &bc);
+            }
+            *consumed = fi_pos + 1;
+            return node;
+        }
+        free(node);
+    }
+    
+    /* Check for while/do/done */
+    if (count >= 4 && scmp(words[0], "while") == 0) {
+        node->type = CF_WHILE;
+        int do_pos = -1, done_pos = -1;
+        for (int i = 1; i < count; i++) {
+            if (scmp(words[i], "do") == 0 && do_pos < 0) do_pos = i;
+            else if (scmp(words[i], "done") == 0 && done_pos < 0) done_pos = i;
+        }
+        if (do_pos > 0 && done_pos > do_pos) {
+            int wc = 0, bc = 0;
+            node->left = parse_cf_command(words + 1, do_pos - 1, &wc);
+            node->right = parse_cf_command(words + do_pos + 1, done_pos - do_pos - 1, &bc);
+            *consumed = done_pos + 1;
+            return node;
+        }
+        free(node);
+    }
+    
+    /* Check for for/in/do/done */
+    if (count >= 5 && scmp(words[0], "for") == 0 && scmp(words[2], "in") == 0) {
+        node->type = CF_FOR;
+        int vn_len = 0;
+        for (int i = 0; words[1][i] && i < 31; i++) node->var_name[i++] = words[1][i];
+        node->var_name[31] = '\\0';
+        
+        int do_pos = -1, done_pos = -1;
+        for (int i = 3; i < count; i++) {
+            if (scmp(words[i], "do") == 0 && do_pos < 0) do_pos = i;
+            else if (scmp(words[i], "done") == 0 && done_pos < 0) done_pos = i;
+        }
+        if (do_pos > 2 && done_pos > do_pos) {
+            node->nwords = 0;
+            for (int i = 3; i < do_pos && node->nwords < CF_TERM; i++) {
+                int wlen = 0;
+                for (int j = 0; words[i][j] && wlen < LINE_MAX - 1; wlen++, j++)
+                    node->word_storage[node->nwords * LINE_MAX + wlen] = words[i][j];
+                node->word_storage[node->nwords * LINE_MAX + wlen] = '\\0';
+                node->word_ptrs[node->nwords++] = node->word_storage + node->nwords * LINE_MAX;
+            }
+            int bc = 0;
+            node->bodies[0] = parse_cf_command(words + do_pos + 1, done_pos - do_pos - 1, &bc);
+            node->nbodies = 1;
+            *consumed = done_pos + 1;
+            return node;
+        }
+        free(node);
+    }
+    
+    /* Check for grouping () */
+    if (count >= 2 && scmp(words[0], "(") == 0 && scmp(words[count-1], ")") == 0) {
+        node->type = CF_GROUP;
+        int ic = 0;
+        node->left = parse_cf_command(words + 1, count - 2, &ic);
+        *consumed = count;
+        return node;
+    }
+    
+    /* Check for ! prefix */
+    if (count >= 2 && scmp(words[0], "!") == 0) {
+        node->type = CF_NOT;
+        int ic = 0;
+        node->left = parse_cf_command(words + 1, count - 1, &ic);
+        *consumed = count;
+        return node;
+    }
+    
+    /* Check for && and || (right-to-left for proper precedence) */
+    for (int i = count - 1; i >= 0; i--) {
+        if (scmp(words[i], "||") == 0) {
+            node->type = CF_OR;
+            int lc = 0, rc = 0;
+            node->left = parse_cf_command(words, i, &lc);
+            node->right = parse_cf_command(words + i + 1, count - i - 1, &rc);
+            *consumed = count;
+            return node;
+        }
+    }
+    for (int i = count - 1; i >= 0; i--) {
+        if (scmp(words[i], "&&") == 0) {
+            node->type = CF_AND;
+            int lc = 0, rc = 0;
+            node->left = parse_cf_command(words, i, &lc);
+            node->right = parse_cf_command(words + i + 1, count - i - 1, &rc);
+            *consumed = count;
+            return node;
+        }
+    }
+    
+    /* Plain command */
+    node->type = CF_CMD;
+    node->ncmds = parse_commands(words, count, node->cmds, &node->ncmds, &node->background);
+    if (node->ncmds < 0) { free(node); return 0; }
+    *consumed = count;
+    return node;
+}
+
+static cf_node_t* cf_parse(char** tokens, int ntokens, int* consumed) {
+    *consumed = 0;
+    return parse_cf_command(tokens, ntokens, consumed);
+}
+
+
 static int execute_segment(char* segment) {
     char* tokens[WORD_MAX];
     unsigned char globs[WORD_MAX];
@@ -2626,6 +2895,17 @@ static int execute_segment(char* segment) {
                 swrite(2, "sh: invalid assignment\n");
                 return 1;
             }
+    }
+
+    /* Try control-flow parse first, fall back to plain pipeline */
+    int cf_consumed = 0;
+    cf_node_t* cf_tree = cf_parse(words + assignments, nwords - assignments, &cf_consumed);
+    if (cf_tree && cf_consumed > 0) {
+        int status = cf_execute(cf_tree);
+        cf_free(cf_tree);
+        if (assignments) env_restore(saved_env, saved_exports, saved_count);
+        last_status = status < 0 ? 0 : status;
+        return status;
     }
 
     command_t cmds[PIPE_MAX];
