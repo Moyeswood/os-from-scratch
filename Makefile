@@ -168,7 +168,7 @@ docs:
 clean:
 	rm -rf $(BUILD_DIR) $(KERNEL_DIR)/*.o
 
-.PHONY: all run debug docs clean test-memory test-vm test-exec test-process test-fd test-shell test-disk test-fs2 test-fs-journal test-signals test-boot-shell test-edit test-vi test-asm test-attached test-suite test-all
+.PHONY: all run debug docs clean test-memory test-vm test-exec test-process test-fd test-shell test-disk test-fs2 test-fs-journal test-signals test-boot-shell test-edit test-vi test-asm test-control test-attached test-suite test-all
 
 test-memory: $(OS_KERNEL_IMG)
 	python3 tools/test-memory.py
@@ -187,6 +187,9 @@ test-fd: $(OS_KERNEL_IMG)
 
 test-shell: $(OS_KERNEL_IMG)
 	python3 tools/test-shell.py
+
+test-control: $(OS_KERNEL_IMG)
+	python3 tools/test-control.py
 
 test-disk: $(OS_KERNEL_IMG)
 	python3 tools/test-disk.py
@@ -236,6 +239,7 @@ test-suite: $(OS_KERNEL_IMG)
 	python3 tools/test-process.py
 	python3 tools/test-fd.py
 	python3 tools/test-shell.py
+	python3 tools/test-control.py
 	python3 tools/run-attached-tests.py
 
 test-all: test-suite

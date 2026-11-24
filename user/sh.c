@@ -12,7 +12,8 @@
 #define HISTORY_FILE "/.sh_history"
 #define HISTORY_LIMIT 4096
 #define FIELD_SEP '\x1f'
-#define ENV_MAX 16
+#define ENV_MAX 32   /* 32: 交互 shell 一行行 set 变量 + for/read 循环变量
+                        * 会累计占满 16 张表, for/while-read 就静默失败 */
 #define ENV_TEXT_MAX 128
 #define ENV_NAME_MAX 48
 #define SUBST_MAX 1024
@@ -20,11 +21,21 @@
 #define COPY_DEPTH_MAX 12
 #define TAIL_RING_MAX 16
 
-/* Shell control-flow constants */
-#define CF_STACK  8          /* max nesting: ( ) / if / while / for */
-#define CF_TERM   16         /* max tokens in one control-flow operand */
-#define FOR_INIT  8          /* max tokens after "for NAME in" */
-#define LOOP_BODY 8          /* max clauses inside { } block */
+/* ---- M34 完善版: 全行控制流引擎 ---- */
+#define CF_SCAN_MAX   256         /* 一行控制流最多 token */
+#define CF_ARM        8           /* if/elif 分支上限 */
+#define CF_FOR_WORDS  16          /* for 词表上限 */
+#define CF_ITER_LIMIT 1000000     /* 循环迭代上限, 防死循环卡死 shell */
+/* 控制流节点池: 静态 BSS, 一行 (含嵌套 $() 展开) 的 AST 全部建在这里,
+ * 不碰用户堆 —— 旧实现每个节点都 calloc, 循环体反复重建时 64KB 用户堆
+ * 迅速耗尽, calloc 返回 NULL, 节点写入变成写 0x0 → #PF 杀 shell。
+ * 池按"只增不减"使用 (每行/嵌套展开各自往后追加, 绝不重置),
+ * 嵌套 $() 展开不会踩掉外层还没执行完的 AST。
+ * 注意: 节点结构含多组小数组, 池规模必须控制在 boot 载入窗口 (448KB)
+ * 之内, 否则 sh.bin BSS 膨胀会让整颗内核镜像被截断而启动循环。 */
+#define CF_NODE_POOL    128
+#define CF_FOR_WORDS    16
+#define CF_LOOP_IN_LEN  48
 
 typedef struct {
     char* argv[ARGS_MAX];
@@ -38,41 +49,89 @@ typedef struct {
     int pipe_input;         /* 修复: 标记 stdin 来自管道 (由 execute_pipeline 设置) */
 } command_t;
 
-/* Control-flow node types */
+/* 控制流 node 类型 */
 enum cf_type {
-    CF_CMD,     /* plain command pipeline, like today */
-    CF_AND,     /* left && right */
-    CF_OR,      /* left || right */
-    CF_NOT,     /* ! operand */
-    CF_GROUP,   /* (...) grouped subshell */
-    CF_IF,      /* if cond; then body; [ elif c; then b; ]* [ else b; ] fi */
+    CF_CMD,     /* 流水线: span 指向源文本, 执行时重新 tokenize + expand */
+    CF_LIST,    /* a; b 顺序列表 (右结合): a=前段, b=后段 */
+    CF_AND,     /* a && b */
+    CF_OR,      /* a || b */
+    CF_NOT,     /* ! 操作数 (可包住分组/块) */
+    CF_IF,      /* if / elif* / else / fi */
     CF_WHILE,   /* while cond; do body; done */
-    CF_FOR      /* for var in words; do body; done */
+    CF_FOR      /* for VAR in words; do body; done */
 };
+
+/* 控制流词法器 token 类型: 保留词 (then/do/...) 仍是 T_WORD, 由解析器
+ * 按上下文 (停止掩码) 决定块边界 —— 普通位置它们是普通参数 (echo in),
+ * 块终止位置才当保留字。`!` 是普通词字符 (test ! -f 不被拆坏),
+ * 流水线首词恰好是 ! 时由解析器识别为取反。 */
+enum cf_tok {
+    T_WORD = 0, T_AND, T_OR, T_PIPE, T_SEMI,
+    T_LP, T_RP, T_AMP, T_EOF
+};
+
+typedef struct {
+    int off;      /* 词在源文本中的偏移 */
+    int len;      /* 词长度 */
+    int type;     /* cf_tok */
+} cf_token_t;
+
+/* 解析上下文停止词掩码: 命中且裸写的词在当前块边界单独成 token,
+ * 不并进前一个流水线的参数。顶层 (掩码 0) 它们都是普通词。 */
+#define STOP_THEN  0x01
+#define STOP_DO    0x02
+#define STOP_DONE  0x04
+#define STOP_FI    0x08
+#define STOP_ELIF  0x10
+#define STOP_ELSE  0x20
+#define STOP_IFBODY   (STOP_FI | STOP_ELIF | STOP_ELSE | STOP_DONE)
+#define STOP_FORBODY  (STOP_DONE)
 
 typedef struct cf_node cf_node_t;
 struct cf_node {
     enum cf_type type;
-    cf_node_t *left;
-    cf_node_t *right;
-    /* CF_CMD */
-    int ncmds;
-    command_t cmds[PIPE_MAX];
-    int background;
+    cf_node_t *a;         /* 左 / 条件 / 前段 / for 的 body 之外 */
+    cf_node_t *b;         /* 右 / 主体 / 后段 */
+    int off;             /* CF_CMD 源文本 span */
+    int len;
+    int background;      /* CF_CMD 尾随 & (整段后台) */
+    int negated;         /* CF_CMD: 由 ! 前缀取反 */
+    int kw;              /* CF_CMD 关键字角色: 0=普通, 1=break, 2=continue */
     /* CF_FOR */
-    char var_name[32];
+    char var[32];
     int nwords;
-    char *word_ptrs[CF_TERM];
-    char word_storage[CF_TERM * LINE_MAX];
-    /* CF_WHILE / CF_FOR body */
-    int nbodies;
-    cf_node_t *bodies[LOOP_BODY];
-    /* CF_IF arms */
+    int w_off[CF_FOR_WORDS];
+    int w_len[CF_FOR_WORDS];
+    /* CF_IF */
     int narms;
-    cf_node_t *cond_nodes[8];
-    cf_node_t *body_nodes[8];
-    cf_node_t *else_node;
+    cf_node_t *conds[CF_ARM];
+    cf_node_t *bodies[CF_ARM];
+    cf_node_t *else_body;
+    /* CF_WHILE / CF_FOR: "done < file" 循环级输入重定向 (dup2 fd 0) */
+    char loop_input[CF_LOOP_IN_LEN];
 };
+
+/* break/continue 通过执行返回值向上传播 (负值哨兵), 只被循环消费;
+ * 顶层裸 break/continue (false; break) 由 cf_execute_line 归一为 0。 */
+#define CF_SIG_BREAK    (-200)
+#define CF_SIG_CONTINUE (-201)
+static int cf_in_loop;      /* 当前所在循环深度, >0 时 break/continue 才合法 */
+
+/* 控制流解析器上下文 */
+typedef struct {
+    const char* text;
+    cf_token_t* toks;
+    int n;
+    int i;
+    int err;
+} cf_parser;
+
+/* 控制流节点池 (BSS): 每行执行前清零重建 (cf_execute_line)。
+ * 嵌套 $() 在 fork 出的子进程里各自重建, COW 各写各的池页副本,
+ * 不会踩父进程还没执行完的 AST。 */
+static cf_node_t cf_node_pool[CF_NODE_POOL];
+static int cf_pool_used;
+
 
 typedef struct {
     int used;
@@ -98,9 +157,8 @@ static char param_storage[PARAM_MAX][LINE_MAX];
 static int param_count;
 
 /* Control-flow state */
-static cf_node_t* cf_parse(char** tokens, int ntokens, int* consumed);
-static void cf_free(cf_node_t* node);
-static int cf_execute(cf_node_t* node);
+static int cf_block_incomplete(const char* line);
+static int cf_execute_line(const char* text);
 static char history[HISTORY_MAX][LINE_MAX];
 static int history_count;
 static int history_index;
@@ -2640,234 +2698,656 @@ static void complete_line(char* line, int* len, int* cursor) {
     }
 }
 
-/* ---- Simple Shell Control Flow Implementation ---- */
+/* ------------------------------------------------------------------ */
+/* M34 完善版: 全行控制流引擎 (if/elif/else, while, for, break,       */
+/* continue, &&, ||, !, ;, 分组 ())                                    */
+/*                                                                     */
+/* 旧实现的问题 (本次重写的原因):                                      */
+/*  1. tokenize 把 && 拆成两个 & token, 解析器按 "&&" 整词匹配永远     */
+/*     失败 → &&/|| 实际是死代码, 命令直接掉进 parse_commands 报       */
+/*     syntax error;                                                   */
+/*  2. execute_line_raw 先按 ; 切段, if/while/for 永远无法作为整体     */
+/*     到达解析器;                                                     */
+/*  3. for 循环里 '\\0' 多字符字面量 (写入 \ 和 0 两个字符), 变量     */
+/*     名/词值永不终结; while 循环体一遇非零状态就整个退出。          */
+/* 新设计:                                                              */
+/*  - cf_scan: 对整行 ($() 展开后的文本) 词法分析成控制流 token, 保留  */
+/*    每个词在源文本中的偏移;                                          */
+/*  - 递归下降: list → or(→) → and(→) → 命令位置关键字 if/while/for/  */
+/*    break/continue 或 流水线 span;                                   */
+/*  - 流水线 = 源文本 span: 执行时对该 span 重新 tokenize + expand +   */
+/*    parse_commands + execute_pipeline, 完整保留 引号/重定向/管道/    */
+/*    变量展开 语义;                                                   */
+/*  - break/continue 以负值哨兵向上传播, 只被最内层循环消费;          */
+/*  - 循环有 CF_ITER_LIMIT 迭代上限, 防止 while true 卡死 shell。     */
+/* ------------------------------------------------------------------ */
 
+static const char* cf_current_line;   /* cf_execute_line 执行期的源文本 */
+
+static void cf_err(cf_parser* p);
+
+static cf_node_t* cf_alloc(cf_parser* p) {
+    cf_node_t* n;
+    if (cf_pool_used >= CF_NODE_POOL) {
+        if (p) cf_err(p);
+        return 0;
+    }
+    n = &cf_node_pool[cf_pool_used++];
+    n->type = 0;
+    n->a = 0;
+    n->b = 0;
+    n->off = 0;
+    n->len = 0;
+    n->background = 0;
+    n->negated = 0;
+    n->kw = 0;
+    n->nwords = 0;
+    n->narms = 0;
+    n->else_body = 0;
+    n->loop_input[0] = '\0';
+    n->var[0] = '\0';
+    return n;
+}
+
+/* 解析器统一走静态池 (BSS, 每行重置): 循环体内 while/for 的 cond/body
+ * 零堆分配。池耗尽时报语法错误, 绝不让分配失败造成 NULL 解引用。 */
+static cf_node_t* cf_node_new(void) {
+    return cf_alloc(0);
+}
+
+/* 池节点不回收 (cf_free 空操作); 池在每行 cf_execute_line 开头重置,
+ * 嵌套 $() 在 fork 出的子进程里各自重建自己的池页副本 (COW)。 */
 static void cf_free(cf_node_t* node) {
+    (void)node;
+}
+
+static cf_token_t* cf_peek(cf_parser* p) {
+    return p->i < p->n ? &p->toks[p->i] : 0;
+}
+
+static void cf_err(cf_parser* p) {
+    p->err = 1;
+}
+
+static int cf_is_bare_word(const char* text, int off, int len) {
+    if (len <= 0) return 0;
+    for (int i = 0; i < len; ++i) {
+        char c = text[off + i];
+        int ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                 (c >= '0' && c <= '9') || c == '_';
+        if (!ok) return 0;
+    }
+    return 1;
+}
+
+/* 限界词比较: text+off 在行中间处并非 NUL 终结, 而 scmp 是整串比较 ——
+ * 从词中点起调 scmp 会越过词尾读进后文, 永远非 0 (只有行尾最后词才
+ * 偶然命中)。关键词判定必须只比 [off,len) 内的字节。 */
+static int cf_word_eq(const char* text, int off, int len, const char* kw) {
+    if (slen(kw) != len) return 0;
+    for (int i = 0; i < len; ++i)
+        if (text[off + i] != kw[i]) return 0;
+    return 1;
+}
+
+static int cf_kw(const char* text, int off, int len, const char* kw) {
+    if (!cf_is_bare_word(text, off, len)) return 0;
+    return cf_word_eq(text, off, len, kw);
+}
+
+/* 把词法 token 的 [off,len) 精确拷进 dst (NUL 终结)。
+ * 不能直接 scopy 整行: 词边界处并非 NUL 终结, 无界拷贝会把
+ * 行内后文一起灌进去 (for 变量名 / while 输入文件名被拖长 →
+ * 变成非法名/非法路径, 静默失败)。 */
+static void cf_copy_word(char* dst, int cap, const char* text, int off, int len) {
+    if (len > cap - 1) len = cap - 1;
+    for (int i = 0; i < len; ++i) dst[i] = text[off + i];
+    dst[len] = '\0';
+}
+
+/* 块终止词掩码查询: 裸词命中则返回对应 STOP 位 (解析器按上下文掩码判停)。
+ * "in" 不进掩码 —— 它只在 for 词表这个固定位置当关键字, 由 cf_parse_for 处理。 */
+static int cf_stop_mask(const char* text, int off, int len) {
+    struct { const char* s; int m; } stops[] = {
+        { "then", STOP_THEN }, { "do", STOP_DO }, { "done", STOP_DONE },
+        { "fi", STOP_FI }, { "elif", STOP_ELIF }, { "else", STOP_ELSE },
+        { 0, 0 }
+    };
+    if (!cf_is_bare_word(text, off, len)) return 0;
+    for (int i = 0; stops[i].s; ++i)
+        if (cf_word_eq(text, off, len, stops[i].s))
+            return stops[i].m;
+    return 0;
+}
+
+/* 位置 i 处是否为控制流运算符; 是则 type + 前进长度, 否则 0 (词字符)。
+ * 边界规则: & ( ) 仅在前一字符是 空白/;/行首 时是运算符 (2>&1 / a(b) 保持词);
+ * ; | && || 永远是运算符; & 后跟 > 保持词 (2>&1), 且 & 后跟 & 是 &&。
+ * ! 是普通词字符 (test ! -f 不被拆坏): 流水线首词恰好是 ! 时由解析器识别为取反。 */
+static int cf_op_at(const char* text, int len, int i, int* adv) {
+    char c = text[i];
+    int prev = i > 0 ? text[i - 1] : '\0';
+    int boundary = (i == 0 || is_space(prev) || prev == ';');
+    int next = i + 1 < len ? text[i + 1] : '\0';
+    if (c == ';') { *adv = 1; return T_SEMI; }
+    if (c == '|') {
+        *adv = next == '|' ? 2 : 1;
+        return next == '|' ? T_OR : T_PIPE;
+    }
+    if (c == '&') {
+        if (next == '&') { *adv = 2; return T_AND; }
+        if (next == '>') { *adv = 1; return 0; }   /* 2>&1 */
+        *adv = 1;
+        return boundary ? T_AMP : 0;
+    }
+    if (c == '(') {
+        *adv = 1;
+        return boundary ? T_LP : 0;
+    }
+    if (c == ')') {
+        *adv = 1;
+        return T_RP;   /* ) 始终是分组结束符, 即使紧贴词 (POSIX: ) 是元字符) */
+    }
+    *adv = 1;
+    return 0;
+}
+
+static int cf_scan(const char* text, cf_token_t* toks, int max) {
+    int len = slen(text);
+    int i = 0, n = 0;
+    while (i < len) {
+        char c = text[i];
+        if (is_space(c)) { ++i; continue; }
+        int adv;
+        int op = (c == SUBST_LITERAL) ? 0 : cf_op_at(text, len, i, &adv);
+        if (op) {
+            if (n < max) {
+                toks[n].off = i;
+                toks[n].len = adv;
+                toks[n].type = op;
+                ++n;
+            }
+            i += adv;
+            continue;
+        }
+        /* 一个词: 源文本词 (含引号/重定向符/$展开残留), 直到空白或运算符;
+         * 整个词记为 T_WORD, 保留 [off,len) span, 执行时重新 tokenize + expand */
+        int w = i;
+        int qch = 0;
+        while (i < len) {
+            char d = text[i];
+            if (qch) {
+                if (d == qch) qch = 0;
+                ++i;
+                continue;
+            }
+            if (is_space(d)) break;
+            if (d == SUBST_LITERAL) { i += 2; continue; }
+            int a;
+            if (cf_op_at(text, len, i, &a)) break;
+            if (d == '\'' || d == '"') { qch = d; ++i; continue; }
+            ++i;
+        }
+        int wl = i - w;
+        if (wl > 0) {
+            if (n < max) {
+                toks[n].off = w;
+                toks[n].len = wl;
+                toks[n].type = T_WORD;
+                ++n;
+            }
+        } else {
+            ++i;   /* 保险: 不应发生 */
+        }
+    }
+    return n;
+}
+
+/* 交互续行判断: if/while/for 块是否未闭合 (对行文本做启发式关键字扫描)。
+ * 只数控制流关键字, 不碰括号, 避免与 $( ) 命令替换的括号计数打架。
+ * 关键词必须是一个"完整的 shell 词": 前后都得是词边界。否则
+ * "P=if-ok" 里的 if 会被误判成 if 关键字, 续行死循环吞掉后面所有命令。 */
+/* char 是否为 shell 词边界 (是 → 词在此断开); 其余 (字母/数字/-=/.//等)
+ * 都属于某个词的内部, 不算边界。 */
+static int cf_word_boundary(char c) {
+    if (!c) return 1;
+    if (is_space(c)) return 1;
+    if (c == ';' || c == '&' || c == '|' || c == '(' ||
+        c == ')' || c == '<' || c == '>') return 1;
+    if (c == '\'' || c == '"' || c == '\\') return 1;
+    return 0;
+}
+
+static int cf_block_incomplete(const char* line) {
+    int open = 0;
+    char quote = 0;
+    int escaped = 0;
+    for (int i = 0; line[i]; ++i) {
+        char c = line[i];
+        if (escaped) { escaped = 0; continue; }
+        if (c == '\\' && quote != '\'') { escaped = 1; continue; }
+        if (c == '\'' || c == '"') {
+            if (!quote) quote = c;
+            else if (quote == c) quote = 0;
+            continue;
+        }
+        if (quote) continue;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+            int j = i;
+            while (line[j] && ((line[j] >= 'a' && line[j] <= 'z') ||
+                    (line[j] >= 'A' && line[j] <= 'Z') ||
+                    (line[j] >= '0' && line[j] <= '9') || line[j] == '_'))
+                ++j;
+            /* 词内字节匹配 + 两侧必须都是词边界 (否则是 if-ok 这类普通词里的子串) */
+            if (cf_is_bare_word(line, i, j - i) &&
+                ((i == 0) || cf_word_boundary(line[i - 1])) &&
+                cf_word_boundary(line[j])) {
+                int wl = j - i;
+                if (cf_word_eq(line, i, wl, "if")) ++open;
+                else if (cf_word_eq(line, i, wl, "while")) ++open;
+                else if (cf_word_eq(line, i, wl, "for")) ++open;
+                else if (cf_word_eq(line, i, wl, "fi")) --open;
+                else if (cf_word_eq(line, i, wl, "done")) --open;
+            }
+            i = j - 1;
+        }
+    }
+    return open > 0 ? open : 0;
+}
+
+static void cf_mark_bg(cf_node_t* node) {
     if (!node) return;
-    if (node->type != CF_CMD && node->type != CF_FOR) {
-        cf_free(node->left);
-        cf_free(node->right);
-    }
-}
-
-static int cf_execute(cf_node_t* node) {
-    if (!node) return 0;
-    
     switch (node->type) {
-    case CF_CMD: {
-        int status = execute_pipeline(node->cmds, node->ncmds, node->background, "cf");
-        last_status = status < 0 ? 0 : status;
-        return last_status;
-    }
-    case CF_AND: {
-        int left = cf_execute(node->left);
-        if (left != 0) return left;
-        return cf_execute(node->right);
-    }
-    case CF_OR: {
-        int left = cf_execute(node->left);
-        if (left == 0) return 0;
-        return cf_execute(node->right);
-    }
-    case CF_NOT: {
-        int left = cf_execute(node->left);
-        return left == 0 ? 1 : 0;
-    }
-    case CF_GROUP:
-        return cf_execute(node->left);
-    case CF_IF: {
-        /* If cond_nodes[0] exists and evaluates to success (0), run body_nodes[0] */
-        if (node->cond_nodes[0]) {
-            int cond_status = cf_execute(node->cond_nodes[0]);
-            if (cond_status == 0 && node->body_nodes[0]) {
-                return cf_execute(node->body_nodes[0]);
-            }
-        }
-        /* Check for else */
-        if (node->else_node) {
-            return cf_execute(node->else_node);
-        }
-        return 0;
-    }
-    case CF_WHILE: {
-        while (1) {
-            if (!node->left || !node->right) break;
-            int cond = cf_execute(node->left);
-            if (cond != 0) break;
-            int body = cf_execute(node->right);
-            if (body != 0) return body;
-        }
-        return 0;
-    }
-    case CF_FOR: {
-        for (int wi = 0; wi < node->nwords; wi++) {
-            param_count = 1;
-            int wlen = 0;
-            for (int j = 0; node->word_ptrs[wi][j] && wlen < LINE_MAX - 1; j++, wlen++)
-                param_storage[0][wlen] = node->word_ptrs[wi][j];
-            param_storage[0][wlen] = '\\0';
-            
-            int vn_len = 0;
-            for (int j = 0; node->var_name[j] && vn_len < LINE_MAX - 1; j++, vn_len++)
-                param_storage[0][vn_len] = node->var_name[j];
-            param_storage[0][vn_len] = '\\0';
-            
-            if (node->bodies[0]) {
-                int body = cf_execute(node->bodies[0]);
-                if (body != 0) return body;
-            }
-        }
-        return 0;
-    }
+    case CF_CMD:
+        node->background = 1;
+        break;
+    case CF_AND:
+    case CF_OR:
+        cf_mark_bg(node->a);
+        cf_mark_bg(node->b);
+        break;
     default:
-        return 0;
+        break;
     }
 }
 
-static cf_node_t* parse_cf_command(char** words, int count, int* consumed) {
-    cf_node_t* node = calloc(1, sizeof(cf_node_t));
-    if (!node) return 0;
-    
-    /* Check for if/then/fi */
-    if (count >= 4 && scmp(words[0], "if") == 0) {
-        node->type = CF_IF;
-        int then_pos = -1, fi_pos = -1, else_pos = -1;
-        for (int i = 1; i < count; i++) {
-            if (scmp(words[i], "then") == 0 && then_pos < 0) then_pos = i;
-            else if (scmp(words[i], "fi") == 0 && fi_pos < 0) fi_pos = i;
-            else if (scmp(words[i], "else") == 0 && else_pos < 0) else_pos = i;
+/* 期望词: 下一词必须恰为 kw, 成功则吃掉; 失败置 err 返回 0 (必需位置) */
+static int cf_expect_word(cf_parser* p, const char* kw) {
+    cf_token_t* t = cf_peek(p);
+    if (!t || t->type != T_WORD || !cf_kw(p->text, t->off, t->len, kw)) {
+        cf_err(p);
+        return 0;
+    }
+    ++p->i;
+    return 1;
+}
+
+/* 非侵入探测: 下一词是否为 kw (可选分支 elif/else, 不置 err、不前进) */
+static int cf_peek_word(cf_parser* p, const char* kw) {
+    cf_token_t* t = cf_peek(p);
+    return t && t->type == T_WORD &&
+           cf_kw(p->text, t->off, t->len, kw);
+}
+
+static cf_node_t* cf_parse_pipeline(cf_parser* p, int stopmask);
+static cf_node_t* cf_parse_if(cf_parser* p, int neg, int stopmask);
+static cf_node_t* cf_parse_while(cf_parser* p, int stopmask);
+static cf_node_t* cf_parse_for(cf_parser* p, int stopmask);
+static cf_node_t* cf_parse_and(cf_parser* p, int stopmask);
+static cf_node_t* cf_parse_or(cf_parser* p, int stopmask);
+static cf_node_t* cf_parse_list(cf_parser* p, int stopmask);
+
+/* 当前流水线段首词是否恰为裸 "!" (取反前缀; 带引号/带参数的 "! " 不受影响) */
+static int cf_word_is_bang(cf_parser* p, cf_token_t* t) {
+    const char* w = p->text + t->off;
+    int wl = t->len;
+    return wl == 1 && w[0] == '!';
+}
+
+static cf_node_t* cf_wrap_not(cf_parser* p, cf_node_t* n) {
+    if (!n) return 0;
+    cf_node_t* nn = cf_node_new();
+    if (!nn) { cf_err(p); return 0; }
+    nn->type = CF_NOT;
+    nn->a = n;
+    return nn;
+}
+
+static cf_node_t* cf_parse_command(cf_parser* p, int stopmask) {
+    cf_token_t* t = cf_peek(p);
+    if (!t) { cf_err(p); return 0; }
+    int neg = 0;
+    /* 取反前缀: 流水线首词恰好是裸 "!" (test ! -f 里 ! 不是首词, 不受影响) */
+    if (t->type == T_WORD && cf_word_is_bang(p, t)) {
+        ++p->i;
+        neg = 1;
+        t = cf_peek(p);
+        if (!t) { cf_err(p); return 0; }
+    }
+    /* 分组 ( ... ): 内部是完整命令列表; 带 ! 前缀时整块取反 */
+    if (t->type == T_LP) {
+        ++p->i;
+        cf_node_t* inner = cf_parse_list(p, stopmask);
+        if (!inner) { cf_err(p); return 0; }
+        cf_token_t* t2 = cf_peek(p);
+        if (!t2 || t2->type != T_RP) {
+            cf_err(p);
+            ;
+            return 0;
         }
-        if (then_pos > 0 && fi_pos > then_pos) {
-            int cc = 0;
-            node->cond_nodes[0] = parse_cf_command(words + 1, then_pos - 1, &cc);
-            if (else_pos > 0 && else_pos < fi_pos) {
-                int bc = 0;
-                node->body_nodes[0] = parse_cf_command(words + then_pos + 1, else_pos - then_pos - 1, &bc);
-                int ec = 0;
-                node->else_node = parse_cf_command(words + else_pos + 1, fi_pos - else_pos - 1, &ec);
-            } else if (fi_pos > then_pos + 1) {
-                int bc = 0;
-                node->body_nodes[0] = parse_cf_command(words + then_pos + 1, fi_pos - then_pos - 1, &bc);
+        ++p->i;
+        return neg ? cf_wrap_not(p, inner) : inner;
+    }
+    if (cf_is_bare_word(p->text, t->off, t->len)) {
+        /* 裸词才当关键字 (带引号的 "if" 是普通词, span 含引号字符)。
+         * 词比较走 cf_word_eq: scmp 是整串比较, 行中间的词后还有
+         * 后文 (非 NUL 终结), 从词中点起 scmp 永远非 0。 */
+        const char* w = p->text + t->off;
+        int wl = t->len;
+        if (cf_word_eq(w, 0, wl, "if")) return cf_parse_if(p, neg, stopmask);
+        if (cf_word_eq(w, 0, wl, "while")) {
+            cf_node_t* n = cf_parse_while(p, stopmask);
+            if (n && neg) n = cf_wrap_not(p, n);
+            return n;
+        }
+        if (cf_word_eq(w, 0, wl, "for")) {
+            cf_node_t* n = cf_parse_for(p, stopmask);
+            if (n && neg) n = cf_wrap_not(p, n);
+            return n;
+        }
+        if (cf_word_eq(w, 0, wl, "break") || cf_word_eq(w, 0, wl, "continue")) {
+            cf_token_t* nx = p->i + 1 < p->n ? &p->toks[p->i + 1] : 0;
+            if (!nx || nx->type != T_WORD ||
+                (nx->type == T_WORD && cf_stop_mask(p->text, nx->off, nx->len) & stopmask)) {
+                ++p->i;
+                cf_node_t* n = cf_node_new();
+                if (!n) { cf_err(p); return 0; }
+                n->type = CF_CMD;
+                n->off = t->off;
+                n->len = wl;
+                n->kw = cf_word_eq(w, 0, wl, "break") ? 1 : 2;
+                return n;
             }
-            *consumed = fi_pos + 1;
-            return node;
-        }
-        free(node);
-    }
-    
-    /* Check for while/do/done */
-    if (count >= 4 && scmp(words[0], "while") == 0) {
-        node->type = CF_WHILE;
-        int do_pos = -1, done_pos = -1;
-        for (int i = 1; i < count; i++) {
-            if (scmp(words[i], "do") == 0 && do_pos < 0) do_pos = i;
-            else if (scmp(words[i], "done") == 0 && done_pos < 0) done_pos = i;
-        }
-        if (do_pos > 0 && done_pos > do_pos) {
-            int wc = 0, bc = 0;
-            node->left = parse_cf_command(words + 1, do_pos - 1, &wc);
-            node->right = parse_cf_command(words + do_pos + 1, done_pos - do_pos - 1, &bc);
-            *consumed = done_pos + 1;
-            return node;
-        }
-        free(node);
-    }
-    
-    /* Check for for/in/do/done */
-    if (count >= 5 && scmp(words[0], "for") == 0 && scmp(words[2], "in") == 0) {
-        node->type = CF_FOR;
-        int vn_len = 0;
-        for (int i = 0; words[1][i] && i < 31; i++) node->var_name[i++] = words[1][i];
-        node->var_name[31] = '\\0';
-        
-        int do_pos = -1, done_pos = -1;
-        for (int i = 3; i < count; i++) {
-            if (scmp(words[i], "do") == 0 && do_pos < 0) do_pos = i;
-            else if (scmp(words[i], "done") == 0 && done_pos < 0) done_pos = i;
-        }
-        if (do_pos > 2 && done_pos > do_pos) {
-            node->nwords = 0;
-            for (int i = 3; i < do_pos && node->nwords < CF_TERM; i++) {
-                int wlen = 0;
-                for (int j = 0; words[i][j] && wlen < LINE_MAX - 1; wlen++, j++)
-                    node->word_storage[node->nwords * LINE_MAX + wlen] = words[i][j];
-                node->word_storage[node->nwords * LINE_MAX + wlen] = '\\0';
-                node->word_ptrs[node->nwords++] = node->word_storage + node->nwords * LINE_MAX;
-            }
-            int bc = 0;
-            node->bodies[0] = parse_cf_command(words + do_pos + 1, done_pos - do_pos - 1, &bc);
-            node->nbodies = 1;
-            *consumed = done_pos + 1;
-            return node;
-        }
-        free(node);
-    }
-    
-    /* Check for grouping () */
-    if (count >= 2 && scmp(words[0], "(") == 0 && scmp(words[count-1], ")") == 0) {
-        node->type = CF_GROUP;
-        int ic = 0;
-        node->left = parse_cf_command(words + 1, count - 2, &ic);
-        *consumed = count;
-        return node;
-    }
-    
-    /* Check for ! prefix */
-    if (count >= 2 && scmp(words[0], "!") == 0) {
-        node->type = CF_NOT;
-        int ic = 0;
-        node->left = parse_cf_command(words + 1, count - 1, &ic);
-        *consumed = count;
-        return node;
-    }
-    
-    /* Check for && and || (right-to-left for proper precedence) */
-    for (int i = count - 1; i >= 0; i--) {
-        if (scmp(words[i], "||") == 0) {
-            node->type = CF_OR;
-            int lc = 0, rc = 0;
-            node->left = parse_cf_command(words, i, &lc);
-            node->right = parse_cf_command(words + i + 1, count - i - 1, &rc);
-            *consumed = count;
-            return node;
         }
     }
-    for (int i = count - 1; i >= 0; i--) {
-        if (scmp(words[i], "&&") == 0) {
-            node->type = CF_AND;
-            int lc = 0, rc = 0;
-            node->left = parse_cf_command(words, i, &lc);
-            node->right = parse_cf_command(words + i + 1, count - i - 1, &rc);
-            *consumed = count;
-            return node;
-        }
-    }
-    
-    /* Plain command */
-    node->type = CF_CMD;
-    node->ncmds = parse_commands(words, count, node->cmds, &node->ncmds, &node->background);
-    if (node->ncmds < 0) { free(node); return 0; }
-    *consumed = count;
+    cf_node_t* node = cf_parse_pipeline(p, stopmask);
+    if (node) node->negated = neg;
     return node;
 }
 
-static cf_node_t* cf_parse(char** tokens, int ntokens, int* consumed) {
-    *consumed = 0;
-    return parse_cf_command(tokens, ntokens, consumed);
+/* 原子命令: 一段词流 (重定向符 </> 2>&1 是普通词, 含在 span 内),
+ * 以 | 分流水线段; 遇控制流运算符 (;/&&/||/&/(/)) 或命中停止掩码的
+ * 块终止词收尾。记录源文本 span [off,len], 执行时重新 tokenize + expand。 */
+static cf_node_t* cf_parse_pipeline(cf_parser* p, int stopmask) {
+    cf_token_t* t0 = cf_peek(p);
+    if (!t0 || t0->type != T_WORD) {
+        cf_err(p);   /* 流水线必须从词开始 (| 开头 / 空段 / 只有块终止词) */
+        return 0;
+    }
+    cf_node_t* node = cf_node_new();
+    if (!node) { cf_err(p); return 0; }
+    node->type = CF_CMD;
+    node->off = t0->off;
+    int end = t0->off + t0->len;
+    ++p->i;
+    for (;;) {
+        cf_token_t* t = cf_peek(p);
+        if (!t) break;
+        if (t->type == T_WORD || t->type == T_PIPE) {
+            /* 下一词是块终止词 (then/done/fi/...) 时, 流水线到此为止,
+             * 终止词留给块解析器; 普通词/重定向符继续收进 span */
+            cf_token_t* t2 = cf_peek(p);
+            if (t2 && t2->type == T_WORD &&
+                cf_stop_mask(p->text, t2->off, t2->len) & stopmask)
+                break;
+            end = t->off + t->len;
+            ++p->i;
+            continue;
+        }
+        break;   /* ; && || & ( ) : 本流水线到此为止 */
+    }
+    node->len = end - node->off;
+    return node;
 }
 
+static cf_node_t* cf_parse_if(cf_parser* p, int neg, int stopmask) {
+    ++p->i;   /* 吃掉 if */
+    cf_node_t* node = cf_node_new();
+    if (!node) { cf_err(p); return 0; }
+    node->type = CF_IF;
+    int arms = 0;
+    /* if 内部: elif/else/fi/done 是块边界, then/do 是条件/分支的收尾词。
+     * 漏了 STOP_THEN, 条件列表会把 "then echo ..." 整个当成流水线词流吞掉。 */
+    int sm = stopmask | STOP_IFBODY | STOP_THEN | STOP_DO;
+    for (;;) {
+        cf_node_t* cond = cf_parse_list(p, sm);
+        if (!cond) { cf_err(p); return 0; }
+        if (!cf_expect_word(p, "then")) { cf_err(p); return 0; }
+        cf_node_t* body = cf_parse_list(p, sm);
+        if (!body) { cf_err(p); return 0; }
+        if (arms >= CF_ARM) {
+            swrite(2, "sh: too many elif branches\n");
+            cf_err(p);
+            ;
+            return 0;
+        }
+        node->conds[arms] = cond;
+        node->bodies[arms] = body;
+        ++arms;
+        if (cf_peek_word(p, "elif")) {
+            ++p->i;
+            continue;
+        }
+        if (cf_peek_word(p, "else")) {
+            ++p->i;
+            cf_node_t* eb = cf_parse_list(p, sm);
+            if (!eb) { cf_err(p); return 0; }
+            node->else_body = eb;
+        }
+        if (!cf_expect_word(p, "fi")) { cf_err(p); return 0; }
+        break;
+    }
+    node->narms = arms;
+    cf_node_t* result = node;
+    if (neg) result = cf_wrap_not(p, node);
+    return result;
+}
 
-static int execute_segment(char* segment) {
+static cf_node_t* cf_parse_while(cf_parser* p, int stopmask) {
+    ++p->i;   /* 吃掉 while */
+    /* 条件读到 ; 为止 (嵌套 while 的条件不会带分号) */
+    int sm = stopmask | STOP_DO;
+    cf_node_t* cond = cf_parse_list(p, sm);
+    if (!cond) { cf_err(p); return 0; }
+    if (!cf_expect_word(p, "do")) { cf_err(p); return 0; }
+    cf_node_t* body = cf_parse_list(p, stopmask | STOP_DONE);
+    if (!body) { cf_err(p); return 0; }
+    cf_token_t* done = cf_peek(p);
+    if (!done || done->type != T_WORD ||
+        !cf_kw(p->text, done->off, done->len, "done")) {
+        cf_err(p);
+        return 0;
+    }
+    ++p->i;
+    cf_node_t* node = cf_node_new();
+    if (!node) { cf_err(p); return 0; }
+    node->type = CF_WHILE;
+    node->a = cond;
+    node->b = body;
+    /* "done < file": 循环级输入重定向 (< 与文件名是独立 token) */
+    cf_token_t* t1 = cf_peek(p);
+    if (t1 && t1->type == T_WORD && t1->len == 1 &&
+        p->text[t1->off] == '<') {
+        ++p->i;
+        cf_token_t* t2 = cf_peek(p);
+        if (!t2 || t2->type != T_WORD) { cf_err(p); return 0; }
+        cf_copy_word(node->loop_input, sizeof(node->loop_input),
+                     p->text, t2->off, t2->len);
+        if (!node->loop_input[0]) { cf_err(p); return 0; }
+        ++p->i;
+    }
+    return node;
+}
+
+static cf_node_t* cf_parse_for(cf_parser* p, int stopmask) {
+    ++p->i;   /* 吃掉 for */
+    cf_token_t* vt = cf_peek(p);
+    if (!vt || vt->type != T_WORD ||
+        !cf_is_bare_word(p->text, vt->off, vt->len)) {
+        cf_err(p);
+        return 0;
+    }
+    ++p->i;
+    if (!cf_expect_word(p, "in")) { cf_err(p); return 0; }
+    cf_node_t* node = cf_node_new();
+    if (!node) { cf_err(p); return 0; }
+    node->type = CF_FOR;
+    /* 词边界: var 只取循环词本身 (vt->len), 不是从行中间起的一整串 */
+    int vcap = vt->len + 1 < (int)sizeof(node->var) ? vt->len + 1 :
+               (int)sizeof(node->var);
+    scopy(node->var, p->text + vt->off, vcap);
+    node->nwords = 0;
+    /* 词表读到 "do" 为止 (do 是终止词, 不进词表) */
+    for (;;) {
+        cf_token_t* t = cf_peek(p);
+        if (!t || t->type != T_WORD) break;
+        if (cf_kw(p->text, t->off, t->len, "do")) break;
+        if (node->nwords >= CF_FOR_WORDS) {
+            swrite(2, "sh: too many words in for\n");
+            cf_err(p);
+            ;
+            return 0;
+        }
+        node->w_off[node->nwords] = t->off;
+        node->w_len[node->nwords] = t->len;
+        ++node->nwords;
+        ++p->i;
+    }
+    /* POSIX: "for x in w1 w2; do" —— 词表后的分号可有可无,
+     * 词表读到 ; 停顿时先吃掉分号再要 do */
+    if (cf_peek(p) && cf_peek(p)->type == T_SEMI) ++p->i;
+    if (!cf_expect_word(p, "do")) { cf_err(p); return 0; }
+    cf_node_t* body = cf_parse_list(p, stopmask | STOP_DONE);
+    if (!body) { cf_err(p); return 0; }
+    cf_token_t* done = cf_peek(p);
+    if (!done || done->type != T_WORD ||
+        !cf_kw(p->text, done->off, done->len, "done")) {
+        cf_err(p);
+        ;
+        return 0;
+    }
+    ++p->i;
+    node->b = body;
+    return node;
+}
+
+static cf_node_t* cf_parse_and(cf_parser* p, int stopmask) {
+    cf_node_t* node = cf_parse_command(p, stopmask);
+    if (!node) return 0;
+    while (p->i < p->n && p->toks[p->i].type == T_AND) {
+        ++p->i;
+        cf_node_t* right = cf_parse_command(p, stopmask);
+        if (!right) { cf_err(p); return 0; }
+        cf_node_t* nn = cf_node_new();
+        if (!nn) { cf_err(p); return 0; }
+        nn->type = CF_AND;
+        nn->a = node;
+        nn->b = right;
+        node = nn;
+    }
+    return node;
+}
+
+static cf_node_t* cf_parse_or(cf_parser* p, int stopmask) {
+    cf_node_t* node = cf_parse_and(p, stopmask);
+    if (!node) return 0;
+    while (p->i < p->n && p->toks[p->i].type == T_OR) {
+        ++p->i;
+        cf_node_t* right = cf_parse_and(p, stopmask);
+        if (!right) { cf_err(p); return 0; }
+        cf_node_t* nn = cf_node_new();
+        if (!nn) { cf_err(p); return 0; }
+        nn->type = CF_OR;
+        nn->a = node;
+        nn->b = right;
+        node = nn;
+    }
+    return node;
+}
+
+/* 命令列表: a; b; c, 以 & 把前一段整体后台化 (a & b → 两段各带 & 语义)。
+ * 停止掩码 stopmask 决定块终止词何时收尾本列表。 */
+static cf_node_t* cf_parse_list(cf_parser* p, int stopmask) {
+    cf_node_t* node = cf_parse_or(p, stopmask);
+    if (!node) return 0;
+    for (;;) {
+        cf_token_t* t = cf_peek(p);
+        if (!t) break;
+        if (t->type == T_SEMI) {
+            ++p->i;
+            cf_token_t* t2 = cf_peek(p);
+            if (!t2) break;                 /* 行尾 ; */
+            /* 下一段以块终止词 (then/done/fi/...) 开头 → 本列表到此为止,
+             * 终止词留给上层解析器 (if 的 then / while 的 done ...) */
+            if (t2->type == T_WORD &&
+                cf_stop_mask(p->text, t2->off, t2->len) & stopmask)
+                break;
+            cf_node_t* next = cf_parse_or(p, stopmask);
+            if (!next) { cf_err(p); return 0; }
+            cf_node_t* nn = cf_node_new();
+            if (!nn) { cf_err(p); return 0; }
+            nn->type = CF_LIST;
+            nn->a = node;
+            nn->b = next;
+            node = nn;
+            continue;
+        }
+        if (t->type == T_AMP) {
+            /* "a & b": 把已完成段 a 标记后台; & 后的 b 是新的列表项,
+             * 只有 a 的 & 记 bg (整体后台语义: a & 成功则 b 也后台) */
+            ++p->i;
+            cf_mark_bg(node);
+            cf_token_t* t2 = cf_peek(p);
+            if (!t2) break;                 /* 行尾 & */
+            if (t2->type == T_WORD &&
+                cf_stop_mask(p->text, t2->off, t2->len) & stopmask)
+                break;
+            cf_node_t* next = cf_parse_or(p, stopmask);
+            if (!next) { cf_err(p); return 0; }
+            cf_node_t* nn = cf_node_new();
+            if (!nn) { cf_err(p); return 0; }
+            nn->type = CF_LIST;
+            nn->a = node;
+            nn->b = next;
+            node = nn;
+            continue;
+        }
+        break;   /* ; && || & ( ) ! 之外: 块终止词/行尾, 本列表到此为止 */
+    }
+    return node;
+}
+
+/* 对一个源文本 span 重新 tokenize + 展开 + 解析 + 执行。
+ * 返回值: >=0 命令状态; -1 shell 退出 (exit 内置)。out_status 同。 */
+static int cf_run_pipeline(const char* text, int off, int len,
+                          int background, int* out_status) {
+    char buf[LINE_MAX];
+    if (len > LINE_MAX - 1) len = LINE_MAX - 1;
+    for (int i = 0; i < len; ++i) buf[i] = text[off + i];
+    buf[len] = '\0';
+
     char* tokens[WORD_MAX];
     unsigned char globs[WORD_MAX];
-    int nwords = tokenize(segment, tokens, WORD_MAX, globs);
+    int nwords = tokenize(buf, tokens, WORD_MAX, globs);
     if (nwords < 0) {
         swrite(2, "sh: syntax error\n");
+        *out_status = 2;
         return 2;
     }
     char* words[WORD_MAX];
     if (expand_words(tokens, nwords, globs, words, &nwords) < 0) {
         swrite(2, "sh: expansion failed\n");
+        *out_status = 2;
         return 2;
     }
 
@@ -2878,9 +3358,11 @@ static int execute_segment(char* segment) {
         for (int i = 0; i < assignments; ++i)
             if (env_set_word(words[i], 0) < 0) {
                 swrite(2, "sh: invalid assignment\n");
+                *out_status = 1;
                 return 1;
             }
         last_status = 0;
+        *out_status = 0;
         return 0;
     }
 
@@ -2893,41 +3375,272 @@ static int execute_segment(char* segment) {
             if (env_set_word(words[i], 1) < 0) {
                 env_restore(saved_env, saved_exports, saved_count);
                 swrite(2, "sh: invalid assignment\n");
+                *out_status = 1;
                 return 1;
             }
     }
 
-    /* Try control-flow parse first, fall back to plain pipeline */
-    int cf_consumed = 0;
-    cf_node_t* cf_tree = cf_parse(words + assignments, nwords - assignments, &cf_consumed);
-    if (cf_tree && cf_consumed > 0) {
-        int status = cf_execute(cf_tree);
-        cf_free(cf_tree);
-        if (assignments) env_restore(saved_env, saved_exports, saved_count);
-        last_status = status < 0 ? 0 : status;
-        return status;
-    }
-
     command_t cmds[PIPE_MAX];
     int count = 0;
-    int background = 0;
+    int bg_flag = 0;
     int parsed = parse_commands(words + assignments, nwords - assignments,
-                                cmds, &count, &background);
+                                cmds, &count, &bg_flag);
     if (parsed < 0) {
         if (assignments) env_restore(saved_env, saved_exports, saved_count);
         swrite(2, "sh: syntax error\n");
+        *out_status = 2;
         return 2;
     }
-    if (!parsed) {
+    if (!count) {
         if (assignments) env_restore(saved_env, saved_exports, saved_count);
+        *out_status = 0;
         return 0;
     }
     char command_text[JOB_TEXT];
-    scopy(command_text, segment, sizeof(command_text));
-    int status = execute_pipeline(cmds, count, background, command_text);
+    scopy(command_text, buf, sizeof(command_text));
+    /* 后台流水线的 & 是运算符 token, 不在 span 内; 作业文本要把它补回来
+     * (旧 execute_segment 直接拷原文, [JOB] started/stopped/jobs 都打印
+     * "spinner &")。bg_flag 是 parse_commands 从词里解析出的尾随 &。 */
+    int eff_bg = background || bg_flag;
+    if (eff_bg && len < (int)sizeof(command_text) - 3) {
+        command_text[len] = ' ';
+        command_text[len + 1] = '&';
+        command_text[len + 2] = '\0';
+    }
+    int status = execute_pipeline(cmds, count, eff_bg,
+                                  command_text);
     if (assignments) env_restore(saved_env, saved_exports, saved_count);
-    last_status = status < 0 ? 0 : status;
+    if (status < 0) {
+        *out_status = -1;
+        return -1;
+    }
+    last_status = status;
+    *out_status = status;
     return status;
+}
+
+static int cf_execute(cf_node_t* node) {
+    if (!node) return 0;
+    switch (node->type) {
+    case CF_CMD: {
+        if (node->kw == 1 || node->kw == 2) {
+            if (!cf_in_loop) {
+                swrite(2, "sh: ");
+                swrite(2, node->kw == 1 ? "break outside loop\n"
+                                        : "continue outside loop\n");
+                last_status = 1;
+                return 1;
+            }
+            return node->kw == 1 ? CF_SIG_BREAK : CF_SIG_CONTINUE;
+        }
+        if (node->off < 0) { last_status = 0; return 0; }   /* 空调用列表 */
+        int out_status = 0;
+        int status = cf_run_pipeline(cf_current_line, node->off, node->len,
+                                     node->background, &out_status);
+        if (status >= 0) {
+            if (node->negated) status = status ? 0 : 1;
+            last_status = status;
+        }
+        return status;
+    }
+    case CF_LIST: {
+        int s = cf_execute(node->a);
+        if (s == CF_SIG_BREAK || s == CF_SIG_CONTINUE) return s;
+        if (s < 0) return s;
+        return cf_execute(node->b);
+    }
+    case CF_AND: {
+        int l = cf_execute(node->a);
+        if (l == CF_SIG_BREAK || l == CF_SIG_CONTINUE) return l;
+        if (l < 0) return l;
+        if (l != 0) { last_status = l; return l; }
+        return cf_execute(node->b);
+    }
+    case CF_OR: {
+        int l = cf_execute(node->a);
+        if (l == CF_SIG_BREAK || l == CF_SIG_CONTINUE) return l;
+        if (l < 0) return l;
+        if (l == 0) { last_status = 0; return 0; }
+        return cf_execute(node->b);
+    }
+    case CF_NOT: {
+        /* ! 包分组/块: 子表达式执行后反转退出状态 (短路哨兵/-1 原样上抛) */
+        int s = cf_execute(node->a);
+        if (s == CF_SIG_BREAK || s == CF_SIG_CONTINUE || s < 0) return s;
+        last_status = s ? 0 : 1;
+        return last_status;
+    }
+    case CF_IF: {
+        for (int i = 0; i < node->narms; ++i) {
+            int c = cf_execute(node->conds[i]);
+            if (c == CF_SIG_BREAK || c == CF_SIG_CONTINUE) return c;
+            if (c < 0) return c;
+            if (c == 0) return cf_execute(node->bodies[i]);
+        }
+        if (node->else_body) {
+            int e = cf_execute(node->else_body);
+            return e;
+        }
+        last_status = 0;
+        return 0;
+    }
+    case CF_WHILE: {
+        /* "done < file": 循环级输入重定向 (fd 0 指向文件, 读空后恢复) */
+        int had_loop_input = node->loop_input[0] != '\0';
+        int loop_fd = 0;
+        int saved_stdin = -1;
+        int open_failed = 0;
+        int abort_status = 0;
+        if (had_loop_input) {
+            /* 先 dup(0) 存下"重定向前"的控制台 stdin, 再 dup2 覆盖 fd 0。
+             * 顺序反了 (先 dup2 再 dup) 会把循环文件本身存进去, 循环结束后
+             * fd 0 仍指向已读到 EOF 的文件 → shell 立即读到 0 字节退出。 */
+            int saved_in = dup(0);
+            if (saved_in < 0) { open_failed = 1; }
+            else {
+                loop_fd = open(node->loop_input, O_RDONLY);
+                if (loop_fd < 0) { close(saved_in); open_failed = 1; }
+                else if (dup2(loop_fd, 0) < 0) {
+                    close(loop_fd);
+                    close(saved_in);
+                    open_failed = 1;
+                } else {
+                    saved_stdin = saved_in;
+                }
+            }
+        }
+        if (!open_failed) {
+            ++cf_in_loop;
+            int guard = CF_ITER_LIMIT;
+            for (;;) {
+                int c = cf_execute(node->a);
+                if (c == CF_SIG_BREAK || c == CF_SIG_CONTINUE)
+                    { abort_status = c; break; }
+                if (c < 0) { abort_status = c; break; }
+                if (c != 0) break;
+                int b = cf_execute(node->b);
+                if (--guard <= 0) break;   /* 迭代上限, 防 while true 卡死 */
+                if (b == CF_SIG_BREAK) break;
+                if (b == CF_SIG_CONTINUE) continue;
+                if (b < 0) { abort_status = b; break; }
+            }
+            --cf_in_loop;
+        }
+        /* fd 恢复: 单一出口, 无论 break/条件假/失败都回到原 stdin */
+        if (had_loop_input) {
+            if (saved_stdin >= 0) {
+                if (dup2(saved_stdin, 0) < 0) close(saved_stdin);
+                else close(saved_stdin);
+            }
+            if (loop_fd) close(loop_fd);
+        }
+        if (abort_status < 0) { last_status = 0; return abort_status; }
+        last_status = 0;
+        return 0;
+    }
+    case CF_FOR: {
+        char saved_env[ENV_MAX][ENV_TEXT_MAX];
+        unsigned char saved_exports[ENV_MAX];
+        int saved_count = 0;
+        env_snapshot(saved_env, saved_exports, &saved_count);
+        ++cf_in_loop;
+        int guard = CF_ITER_LIMIT;
+        int broke = 0;      /* break / 迭代上限: 正常结束, 不当致命错误 */
+        int abort_neg = 0;   /* 只有 shell 退出 (子表达式 < 0) 才向上传播 -1 */
+        for (int wi = 0; wi < node->nwords && !broke; ++wi) {
+            /* 展开该词: 变量/glob/空格分词 */
+            char buf[LINE_MAX];
+            int wlen = node->w_len[wi];
+            if (wlen > LINE_MAX - 1) wlen = LINE_MAX - 1;
+            for (int i = 0; i < wlen; ++i)
+                buf[i] = cf_current_line[node->w_off[wi] + i];
+            buf[wlen] = '\0';
+            char* toks[WORD_MAX];
+            unsigned char gl[WORD_MAX];
+            int nt = tokenize(buf, toks, WORD_MAX, gl);
+            char* expanded[WORD_MAX];
+            int nf = 0;
+            if (nt >= 0) {
+                nf = nt;
+                if (expand_words(toks, nf, gl, expanded, &nf) < 0) nf = 0;
+            }
+            if (nf == 0) {
+                env_put(node->var, slen(node->var), "", 0);
+                int b = cf_execute(node->b);
+                if (b == CF_SIG_BREAK) broke = 1;
+                else if (b == CF_SIG_CONTINUE) { if (--guard <= 0) broke = 1; }
+                else if (b < 0) { abort_neg = 1; broke = 1; }
+                else { if (--guard <= 0) broke = 1; }
+                continue;
+            }
+            for (int fi = 0; fi < nf && !broke; ++fi) {
+                if (env_put(node->var, slen(node->var), expanded[fi], 0) < 0)
+                    swrite(2, "sh: for: variable value too long\n");
+                int b = cf_execute(node->b);
+                if (b == CF_SIG_BREAK) {
+                    broke = 1;
+                } else if (b == CF_SIG_CONTINUE) {
+                    if (--guard <= 0) broke = 1;
+                    else continue;
+                } else if (b < 0) {
+                    abort_neg = 1;
+                    broke = 1;
+                } else {
+                    if (--guard <= 0) broke = 1;
+                }
+            }
+        }
+    for_done:
+        env_restore(saved_env, saved_exports, saved_count);
+        --cf_in_loop;
+        if (abort_neg) { last_status = 0; return -1; }
+        last_status = 0;
+        return 0;
+    }
+default:
+        return 0;
+    }
+}
+
+static int cf_execute_line(const char* text) {
+    cf_token_t toks[CF_SCAN_MAX];
+    /* 每行重建节点池: AST 生命周期只有一行。$() 子进程 fork COW,
+     * 子进程内的重建/追加不会碰父进程的池页; 池"只增"是错的 ——
+     * 交互 shell 跑 ~20 行就耗尽 128 节点, 之后全部命令报语法错误。 */
+    cf_pool_used = 0;
+    int n = cf_scan(text, toks, CF_SCAN_MAX);
+    cf_parser p;
+    p.text = text;
+    p.toks = toks;
+    p.n = n;
+    p.i = 0;
+    p.err = 0;
+    cf_node_t* root = cf_parse_list(&p, 0);
+    int status = 0;
+    if (p.err || !root || p.i < p.n || n >= CF_SCAN_MAX) {
+        if (root) cf_free(root);
+        /* 调试输出: 哪条失败 (bit: 1=err 2=!root 4=残留 8=token满) + 位置 */
+        swrite(2, "sh: syntax error flags=");
+        swrite_dec(2, (uint32_t)((p.err ? 1 : 0) | (root ? 0 : 2) |
+                                 (p.i < p.n ? 4 : 0) |
+                                 (n >= CF_SCAN_MAX ? 8 : 0)));
+        swrite(2, " pos=");
+        swrite_dec(2, (uint32_t)p.i);
+        swrite(2, "/");
+        swrite_dec(2, (uint32_t)p.n);
+        swrite(2, " ntok=");
+        swrite_dec(2, (uint32_t)n);
+        swrite(2, "\n");
+        status = 2;
+        last_status = 2;
+    } else {
+        cf_current_line = text;
+        status = cf_execute(root);
+        cf_free(root);
+        if (status == CF_SIG_BREAK || status == CF_SIG_CONTINUE)
+            status = 0;   /* 顶层裸 break/continue: 不当致命错误 */
+    }
+    return status < 0 ? -1 : status;
 }
 
 static int capture_command(const char* command, char* out, int cap) {
@@ -3041,45 +3754,11 @@ static char* expand_command_substitutions(char* line) {
     return substitution_storage;
 }
 
-static int execute_line_raw(char* line) {
-    char* start = line;
-    char quote = 0;
-    int escaped = 0;
-    for (char* p = line; ; ++p) {
-        char c = *p;
-        if (c == SUBST_LITERAL && p[1]) {
-            ++p;
-            continue;
-        }
-        if (escaped) {
-            escaped = 0;
-            continue;
-        }
-        if (c == '\\' && quote != '\'') {
-            escaped = 1;
-            continue;
-        }
-        if (c == '\'' || c == '"') {
-            if (!quote) quote = c;
-            else if (quote == c) quote = 0;
-            continue;
-        }
-        if ((!c || c == ';') && !quote) {
-            char saved = *p;
-            *p = '\0';
-            while (is_space(*start)) start++;
-            if (*start) {
-                int status = execute_segment(start);
-                if (status < 0) return -1;
-            }
-            if (!saved) return 0;
-            start = p + 1;
-        }
-    }
-}
-
 static int execute_line(char* line) {
-    return execute_line_raw(expand_command_substitutions(line));
+    char* text = expand_command_substitutions(line);
+    /* 整行交给控制流引擎: 普通命令/流水线也走同一套解析,
+     * ; && || ! () if/while/for 一视同仁, 不再有 "先切段再试解析" 的两层 */
+    return cf_execute_line(text);
 }
 
 static int input_incomplete(const char* line) {
@@ -3111,6 +3790,9 @@ static int input_incomplete(const char* line) {
             --subst_depth;
         }
     }
+    /* if/while/for 块未闭合 (fi/done 缺失) 也要续行:
+     * "while true; do" 按一行会报语法错误, 交互 shell 应等下一行 */
+    if (cf_block_incomplete(line)) return 1;
     return quote || escaped || subst_depth;
 }
 
