@@ -8,12 +8,18 @@
 #include "vm.h"
 
 #define EXEC_PATH_BUF 64
-#define SHELL_UTILITY_COUNT 8
+/* 修复(M34): 文件系统只有 256 个 4K 数据块, sh.bin 约 28 块; 装 8 份
+ * 工具 (224 块) 加上 /bin 里其余程序, 启动即占满块位图, 之后新建任何
+ * 文件 (echo L1 > file / touch ...) 都因 ENOSPC 静默失败 —— M34 里
+ * while-read 循环读到 0 字节、日志 [EXEC] install FAIL mv/stat 的根因。
+ * 砍到 4 份; mkdir/rm/mv/stat 在 sh 里有同名内置命令, 交互 shell 里
+ * 直接走内置, 外部二进制缺失不影响使用。 */
+#define SHELL_UTILITY_COUNT 4
 
 extern const char user_elfdemo_elf_start[], user_elfdemo_elf_end[];
 
 static const char* shell_utilities[SHELL_UTILITY_COUNT] = {
-    "echo", "cat", "ls", "pwd", "mkdir", "rm", "mv", "stat"
+    "echo", "cat", "ls", "pwd"
 };
 
 void exec_basename(char* out, uint32_t cap, const char* path) {
