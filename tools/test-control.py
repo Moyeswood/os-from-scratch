@@ -223,6 +223,186 @@ run("cat /cfloop.txt")
 s = since()
 check("file has 2 lines after loop", "L1" in s and "L2" in s)
 
+# ---- for read: one open file description shared across iterations ----
+mark()
+run("for x in a b; do read l; echo pair-$x-$l; done < /cfloop.txt")
+s = since()
+check("for read advances shared input", "pair-a-L1" in s and "pair-b-L2" in s)
+mark()
+run("echo $RW")
+check("stdin restored after for", "rw-end" in since())
+
+# break / continue must take the same fd cleanup path as normal completion.
+mark()
+run("for x in a b; do read l; echo break-$x-$l; break; done < /cfloop.txt")
+s = since()
+check("redirected for break", "break-a-L1" in s and "break-b-L2" not in s)
+mark()
+run("for x in a b; do read l; echo next-$x-$l; continue; echo skip-$x; done < /cfloop.txt")
+s = since()
+check("redirected for continue",
+      "next-a-L1" in s and "next-b-L2" in s and
+      "skip-a" not in s and "skip-b" not in s)
+mark()
+run("while read l; do echo stop-$l; break; done < /cfloop.txt")
+s = since()
+check("redirected while break", "stop-L1" in s and "stop-L2" not in s)
+mark()
+run("while read l; do echo next-$l; continue; echo skip-$l; done < /cfloop.txt")
+s = since()
+check("redirected while continue",
+      "next-L1" in s and "next-L2" in s and
+      "skip-L1" not in s and "skip-L2" not in s)
+mark()
+run("echo $RW")
+check("stdin restored after break and continue", "rw-end" in since())
+
+# Inner loops restore the outer FILE offset, not the console or the inner EOF.
+run("echo IN > /cfinner.txt")
+mark()
+run("while read l; do echo outer-$l; for x in a; do read l; echo inner-$l; done < /cfinner.txt; done < /cfloop.txt")
+s = since()
+check("nested redirects restore outer offset", "outer-L1" in s and "outer-L2" in s and s.count("inner-IN") == 2)
+mark()
+run("echo $RW")
+check("stdin restored after nested loops", "rw-end" in since())
+
+# Filenames are expanded at execution time, after preceding assignments.
+mark()
+run('P=/cfloop.txt; for x in a b; do read l; echo quoted-$l; done < "$P"')
+s = since()
+check("for input expands quoted variable", "quoted-L1" in s and "quoted-L2" in s)
+mark()
+run('P=/cfloop.txt; while read l; do echo quoted-$l; done < "$P"')
+s = since()
+check("while input expands quoted variable", "quoted-L1" in s and "quoted-L2" in s)
+mark()
+run("for x in a; do read l; echo tight-$l; done </cfloop.txt")
+check("input operator may touch filename", "tight-L1" in since())
+
+# Redirection failures return nonzero, skip the body and do not damage stdin.
+run("P=bad-body Q=redir-failed")
+for loop in ("for x in a", "while true"):
+    mark()
+    run(f"{loop}; do echo $P; break; done < /cfmissing.txt || echo $Q")
+    s = since()
+    check(f"{loop.split()[0]} missing input fails", "redir-failed" in s and "bad-body" not in s and "sh: cannot open loop input:" in s)
+mark()
+run("echo $RW")
+check("stdin survives open failures", "rw-end" in since())
+
+# Empty for loops still apply their redirection, just as a false while does.
+mark()
+run("for x in; do echo $P; done < /cfloop.txt; echo $RW")
+s = since()
+check("empty for restores stdin", "bad-body" not in s and "rw-end" in s)
+mark()
+run("for x in; do echo $P; done < /cfmissing.txt || echo $Q")
+s = since()
+check("empty for still opens input", "redir-failed" in s and "bad-body" not in s)
+mark()
+run("while false; do echo $P; done < /cfloop.txt; echo $RW")
+s = since()
+check("false while restores stdin", "bad-body" not in s and "rw-end" in s)
+
+# Both parsers reject a missing filename and leave the next prompt usable.
+for loop in ("for x in a", "while true"):
+    mark()
+    run(f"{loop}; do break; done <")
+    check(f"{loop.split()[0]} missing filename is syntax error", "sh: syntax error" in since())
+mark()
+run("echo $RW")
+check("stdin survives syntax errors", "rw-end" in since())
+
+# TASK_FD_MAX is 16. More than 16 opens catches even a one-fd-per-loop leak.
+for attempt in range(18):
+    mark()
+    run("for x in a; do read l; echo repeat-$l; done < /cfloop.txt")
+    if "repeat-L1" not in since():
+        check("repeated redirects do not leak descriptors", False)
+        break
+else:
+    check("repeated redirects do not leak descriptors", True)
+
+# Expansion must resolve to one nonempty path, before touching fd 0.
+for value in ('""', '"/cfloop.txt /cfinner.txt"', '/cf*.txt'):
+    run(f"P={value}")
+    mark()
+    run("for x in a; do echo $Q; done < $P")
+    s = since()
+    check(f"ambiguous redirect rejected: {value}", "sh: ambiguous loop input" in s and "redir-failed" not in s)
+mark()
+run("echo $RW")
+check("stdin survives ambiguous inputs", "rw-end" in since())
+
+# Span storage avoids the old silent 47-byte path truncation.
+long_dir = "/cf-long-directory-01/cf-long-directory-02/cf-long-directory-03"
+run(f"mkdir -p {long_dir}; echo LONG > {long_dir}/input.txt")
+mark()
+run(f'while read l; do echo long-$l; done < "{long_dir}/input.txt"')
+check("long quoted input path is not truncated", "long-LONG" in since())
+
+# Repeated open failures must release the saved stdin descriptor as well.
+mark()
+run("for x in a b c d e f g h i j k l m n o p; do while false; do break; done < /cfmissing.txt; done")
+mark()
+run("while read l; do echo retry-$l; done < /cfloop.txt")
+s = since()
+check("failed redirects do not leak descriptors", "retry-L1" in s and "retry-L2" in s)
+
+# Shell-exit sentinel survives both loop kinds and the redirection wrapper.
+for loop in ("for x in a", "while true"):
+    mark()
+    run(f"sh -c '{loop}; do exit 7; done < /cfloop.txt'; echo loop-exit=$?")
+    check(f"exit status propagates through {loop.split()[0]}", "loop-exit=7" in since())
+
+# ---- case: pattern matching with glob + multi-pattern (|) ----
+mark()
+run("CS=first CH=case-hit1 CM=case-miss1")
+mark()
+run("case $CS in first) echo $CH;; last) echo $CM;; esac")
+s = since()
+check("case first arm matches", "case-hit1" in s and "case-miss1" not in s)
+
+mark()
+run("CS=last")
+mark()
+run("case $CS in first) echo $CH;; last) echo $CM;; esac")
+s = since()
+check("case second arm matches", "case-miss1" in s and "case-hit1" not in s)
+
+# glob pattern: subject alpha matches a* (and the default *)
+mark()
+run("CS=alpha")
+mark()
+run("case $CS in b*) echo $CM;; a*) echo $CH;; esac")
+s = since()
+check("case glob pattern a* matches", "case-hit1" in s and "case-miss1" not in s)
+
+# multiple patterns with |: subject gamma matches gamma|delta
+mark()
+run("CS=gamma")
+mark()
+run("case $CS in alpha|beta) echo $CH;; gamma|delta) echo $CM;; esac")
+s = since()
+check("case pipe-separated patterns match", "case-miss1" in s and "case-hit1" not in s)
+
+# no arm matches -> nothing printed, fall through to following command
+mark()
+run("ZN=zn-nomatch ZD=zn-done")
+mark()
+run("case zebra in alpha) echo $ZN;; beta) echo $ZN;; esac; echo $ZD")
+s = since()
+check("case no match falls through", "zn-nomatch" not in s and "zn-done" in s)
+
+# default * arm catches an unmatched subject
+mark()
+run("CZ=catch")
+mark()
+run("case zzz in alpha) echo $ZN;; *) echo $CZ;; esac")
+s = since()
+check("case default * arm catches", "catch" in s and "zn-nomatch" not in s)
+
 # ---- regression: shell still alive and responsive ----
 mark()
 run("AL=still-alive")

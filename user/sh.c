@@ -25,17 +25,17 @@
 #define CF_SCAN_MAX   256         /* 一行控制流最多 token */
 #define CF_ARM        8           /* if/elif 分支上限 */
 #define CF_FOR_WORDS  16          /* for 词表上限 */
+#define CF_CASE_PAT   4           /* case 单支 pattern 上限 (| 分隔) */
+#define CF_CASE_ARM   8           /* case 分支上限 */
 #define CF_ITER_LIMIT 1000000     /* 循环迭代上限, 防死循环卡死 shell */
 /* 控制流节点池: 静态 BSS, 一行 (含嵌套 $() 展开) 的 AST 全部建在这里,
  * 不碰用户堆 —— 旧实现每个节点都 calloc, 循环体反复重建时 64KB 用户堆
  * 迅速耗尽, calloc 返回 NULL, 节点写入变成写 0x0 → #PF 杀 shell。
- * 池按"只增不减"使用 (每行/嵌套展开各自往后追加, 绝不重置),
- * 嵌套 $() 展开不会踩掉外层还没执行完的 AST。
- * 注意: 节点结构含多组小数组, 池规模必须控制在 boot 载入窗口 (448KB)
- * 之内, 否则 sh.bin BSS 膨胀会让整颗内核镜像被截断而启动循环。 */
+ * 每行 cf_execute_line 重置池游标, 只在本行内递增; 嵌套 $() 在 fork
+ * 子进程内重建, COW 隔离池页, 不会踩掉父进程仍在执行的 AST。
+ * user/linker.ld 的 .image 哨兵会把 BSS 也填进 flat binary;
+ * 池规模因此还受 boot 载入窗口 (448KB) 和可用物理页约束。 */
 #define CF_NODE_POOL    128
-#define CF_FOR_WORDS    16
-#define CF_LOOP_IN_LEN  48
 
 typedef struct {
     char* argv[ARGS_MAX];
@@ -58,7 +58,8 @@ enum cf_type {
     CF_NOT,     /* ! 操作数 (可包住分组/块) */
     CF_IF,      /* if / elif* / else / fi */
     CF_WHILE,   /* while cond; do body; done */
-    CF_FOR      /* for VAR in words; do body; done */
+    CF_FOR,     /* for VAR in words; do body; done */
+    CF_CASE     /* case WORD in PATTERN) cmds ;; ... esac */
 };
 
 /* 控制流词法器 token 类型: 保留词 (then/do/...) 仍是 T_WORD, 由解析器
@@ -78,12 +79,13 @@ typedef struct {
 
 /* 解析上下文停止词掩码: 命中且裸写的词在当前块边界单独成 token,
  * 不并进前一个流水线的参数。顶层 (掩码 0) 它们都是普通词。 */
-#define STOP_THEN  0x01
-#define STOP_DO    0x02
-#define STOP_DONE  0x04
-#define STOP_FI    0x08
-#define STOP_ELIF  0x10
-#define STOP_ELSE  0x20
+#define STOP_THEN   0x01
+#define STOP_DO     0x02
+#define STOP_DONE   0x04
+#define STOP_FI     0x08
+#define STOP_ELIF   0x10
+#define STOP_ELSE   0x20
+#define STOP_CASEEND 0x40  /* case 支主体里裸 "esac" 终止流水线 (仅 case 体传入该位) */
 #define STOP_IFBODY   (STOP_FI | STOP_ELIF | STOP_ELSE | STOP_DONE)
 #define STOP_FORBODY  (STOP_DONE)
 
@@ -107,8 +109,14 @@ struct cf_node {
     cf_node_t *conds[CF_ARM];
     cf_node_t *bodies[CF_ARM];
     cf_node_t *else_body;
-    /* CF_WHILE / CF_FOR: "done < file" 循环级输入重定向 (dup2 fd 0) */
-    char loop_input[CF_LOOP_IN_LEN];
+    /* CF_WHILE / CF_FOR: "done < file" 文件名源 span, 执行时展开 */
+    int input_off;
+    int input_len;        /* 0 = 无循环级输入重定向 */
+    /* CF_CASE: 分支数与每支 pattern (源 span, | 分隔). 复用 narms 记分支数,
+     * 复用 bodies[i] 存各支主体; 下方只存 pattern 列表。subject 用 off/len。 */
+    int c_patn[CF_CASE_ARM];
+    int c_pato[CF_CASE_ARM][CF_CASE_PAT];
+    int c_patl[CF_CASE_ARM][CF_CASE_PAT];
 };
 
 /* break/continue 通过执行返回值向上传播 (负值哨兵), 只被循环消费;
@@ -2744,8 +2752,10 @@ static cf_node_t* cf_alloc(cf_parser* p) {
     n->nwords = 0;
     n->narms = 0;
     n->else_body = 0;
-    n->loop_input[0] = '\0';
+    n->input_off = 0;
+    n->input_len = 0;
     n->var[0] = '\0';
+    /* c_* 数组按字面量 0 初值使用, 逐支填充, 无需整体清零 */
     return n;
 }
 
@@ -2811,6 +2821,7 @@ static int cf_stop_mask(const char* text, int off, int len) {
     struct { const char* s; int m; } stops[] = {
         { "then", STOP_THEN }, { "do", STOP_DO }, { "done", STOP_DONE },
         { "fi", STOP_FI }, { "elif", STOP_ELIF }, { "else", STOP_ELSE },
+        { "esac", STOP_CASEEND },
         { 0, 0 }
     };
     if (!cf_is_bare_word(text, off, len)) return 0;
@@ -2946,8 +2957,10 @@ static int cf_block_incomplete(const char* line) {
                 if (cf_word_eq(line, i, wl, "if")) ++open;
                 else if (cf_word_eq(line, i, wl, "while")) ++open;
                 else if (cf_word_eq(line, i, wl, "for")) ++open;
+                else if (cf_word_eq(line, i, wl, "case")) ++open;
                 else if (cf_word_eq(line, i, wl, "fi")) --open;
                 else if (cf_word_eq(line, i, wl, "done")) --open;
+                else if (cf_word_eq(line, i, wl, "esac")) --open;
             }
             i = j - 1;
         }
@@ -2993,6 +3006,7 @@ static cf_node_t* cf_parse_pipeline(cf_parser* p, int stopmask);
 static cf_node_t* cf_parse_if(cf_parser* p, int neg, int stopmask);
 static cf_node_t* cf_parse_while(cf_parser* p, int stopmask);
 static cf_node_t* cf_parse_for(cf_parser* p, int stopmask);
+static cf_node_t* cf_parse_case(cf_parser* p, int stopmask);
 static cf_node_t* cf_parse_and(cf_parser* p, int stopmask);
 static cf_node_t* cf_parse_or(cf_parser* p, int stopmask);
 static cf_node_t* cf_parse_list(cf_parser* p, int stopmask);
@@ -3032,7 +3046,6 @@ static cf_node_t* cf_parse_command(cf_parser* p, int stopmask) {
         cf_token_t* t2 = cf_peek(p);
         if (!t2 || t2->type != T_RP) {
             cf_err(p);
-            ;
             return 0;
         }
         ++p->i;
@@ -3052,6 +3065,11 @@ static cf_node_t* cf_parse_command(cf_parser* p, int stopmask) {
         }
         if (cf_word_eq(w, 0, wl, "for")) {
             cf_node_t* n = cf_parse_for(p, stopmask);
+            if (n && neg) n = cf_wrap_not(p, n);
+            return n;
+        }
+        if (cf_word_eq(w, 0, wl, "case")) {
+            cf_node_t* n = cf_parse_case(p, stopmask);
             if (n && neg) n = cf_wrap_not(p, n);
             return n;
         }
@@ -3128,7 +3146,6 @@ static cf_node_t* cf_parse_if(cf_parser* p, int neg, int stopmask) {
         if (arms >= CF_ARM) {
             swrite(2, "sh: too many elif branches\n");
             cf_err(p);
-            ;
             return 0;
         }
         node->conds[arms] = cond;
@@ -3153,6 +3170,31 @@ static cf_node_t* cf_parse_if(cf_parser* p, int neg, int stopmask) {
     return result;
 }
 
+/* while/for 共用的循环尾输入重定向。cf_scan 把 < 当词字符,
+ * 因而同时接受 "< file" 和 "<file"。保留文件名原文, 不在解析阶段
+ * 展开变量/引号 (前面的赋值可能还没执行)。 */
+static int cf_parse_loop_input(cf_parser* p, cf_node_t* node) {
+    cf_token_t* t = cf_peek(p);
+    if (!t || t->type != T_WORD || p->text[t->off] != '<') return 1;
+    ++p->i;
+    int off = t->off + 1;
+    int len = t->len - 1;
+    if (!len) {
+        t = cf_peek(p);
+        if (!t || t->type != T_WORD) { cf_err(p); return 0; }
+        off = t->off;
+        len = t->len;
+        ++p->i;
+    }
+    if (!len || p->text[off] == '<' || p->text[off] == '>') {
+        cf_err(p);
+        return 0;
+    }
+    node->input_off = off;
+    node->input_len = len;
+    return 1;
+}
+
 static cf_node_t* cf_parse_while(cf_parser* p, int stopmask) {
     ++p->i;   /* 吃掉 while */
     /* 条件读到 ; 为止 (嵌套 while 的条件不会带分号) */
@@ -3174,18 +3216,7 @@ static cf_node_t* cf_parse_while(cf_parser* p, int stopmask) {
     node->type = CF_WHILE;
     node->a = cond;
     node->b = body;
-    /* "done < file": 循环级输入重定向 (< 与文件名是独立 token) */
-    cf_token_t* t1 = cf_peek(p);
-    if (t1 && t1->type == T_WORD && t1->len == 1 &&
-        p->text[t1->off] == '<') {
-        ++p->i;
-        cf_token_t* t2 = cf_peek(p);
-        if (!t2 || t2->type != T_WORD) { cf_err(p); return 0; }
-        cf_copy_word(node->loop_input, sizeof(node->loop_input),
-                     p->text, t2->off, t2->len);
-        if (!node->loop_input[0]) { cf_err(p); return 0; }
-        ++p->i;
-    }
+    if (!cf_parse_loop_input(p, node)) return 0;
     return node;
 }
 
@@ -3215,7 +3246,6 @@ static cf_node_t* cf_parse_for(cf_parser* p, int stopmask) {
         if (node->nwords >= CF_FOR_WORDS) {
             swrite(2, "sh: too many words in for\n");
             cf_err(p);
-            ;
             return 0;
         }
         node->w_off[node->nwords] = t->off;
@@ -3233,11 +3263,127 @@ static cf_node_t* cf_parse_for(cf_parser* p, int stopmask) {
     if (!done || done->type != T_WORD ||
         !cf_kw(p->text, done->off, done->len, "done")) {
         cf_err(p);
-        ;
         return 0;
     }
     ++p->i;
     node->b = body;
+    if (!cf_parse_loop_input(p, node)) return 0;
+    return node;
+}
+
+/* 展开一个源 span 成单值, 写入 out (NUL 终结, 限 LINE_MAX)。
+ * 只做变量/引号/转义展开 (tokenize), **不做**文件名 glob 或字段拆分 ——
+ * pattern 里的 "*" / "?" 必须原样保留给 glob_match, subject 保持完整值。
+ * 结果必须恰为一个词, 否则返回 -1。 */
+static int cf_expand_value(int off, int len, char* out) {
+    char buf[LINE_MAX];
+    cf_copy_word(buf, sizeof(buf), cf_current_line, off, len);
+    char* toks[WORD_MAX];
+    unsigned char gl[WORD_MAX];
+    int nt = tokenize(buf, toks, WORD_MAX, gl);
+    if (nt != 1) return -1;
+    scopy(out, toks[0], LINE_MAX);
+    return 0;
+}
+
+/* 单个 case 支的主体: 命令列表, 到 ";;" (双分号) / 裸 "esac" / 行尾为止。
+ * 单个 ";" 只是命令分隔 (继续本支), ";;" 或裸 "esac" 才结束本支。
+ * 空支 (pat) ;;) 返回 off<0 的空调用列表哨兵。 */
+static cf_node_t* cf_parse_case_body(cf_parser* p, int stopmask) {
+    cf_node_t* node = 0;
+    for (;;) {
+        cf_token_t* t = cf_peek(p);
+        if (!t) break;
+        if (t->type == T_WORD && cf_kw(p->text, t->off, t->len, "esac")) break;
+        if (t->type == T_SEMI) {
+            /* 支体开头的 ";;" (空支): 吃掉双分号后结束本支 */
+            ++p->i;
+            cf_token_t* s2 = cf_peek(p);
+            if (s2 && s2->type == T_SEMI) ++p->i;
+            break;
+        }
+        cf_node_t* stmt = cf_parse_or(p, stopmask | STOP_CASEEND);
+        if (!stmt) { cf_err(p); return 0; }
+        if (node) {
+            cf_node_t* nn = cf_node_new();
+            if (!nn) { cf_err(p); return 0; }
+            nn->type = CF_LIST;
+            nn->a = node;
+            nn->b = stmt;
+            node = nn;
+        } else {
+            node = stmt;
+        }
+        cf_token_t* s = cf_peek(p);
+        if (!s || s->type != T_SEMI) break;      /* 命令后无 ";" → 本支结束 */
+        ++p->i;                                   /* 吃掉一个 ";" */
+        cf_token_t* s2 = cf_peek(p);
+        if (s2 && s2->type == T_SEMI) { ++p->i; break; }   /* ";;" → 双分号结束本支 */
+        /* 单 ";": 继续解析下一条命令 */
+    }
+    if (!node) {
+        node = cf_node_new();
+        if (!node) { cf_err(p); return 0; }
+        node->type = CF_CMD;
+        node->off = -1;          /* 空调用列表: cf_execute_node 识别 off<0 → 状态 0 */
+        node->len = 0;
+    }
+    return node;
+}
+
+/* case WORD in PATTERN|PATTERN) body ;; PATTERN) body ... esac
+ * 主体词与 pattern 都保留 [off,len) 源 span, 执行时展开。pattern 支持
+ * "|" 多模式 (扫描器归为 T_PIPE) 与 glob "*" / "?" (复用 glob_match, 不做
+ * 文件名展开, 符合 [[ == ]] 直觉)。 */
+static cf_node_t* cf_parse_case(cf_parser* p, int stopmask) {
+    ++p->i;   /* 吃掉 case */
+    cf_token_t* st = cf_peek(p);
+    if (!st || st->type != T_WORD) { cf_err(p); return 0; }
+    ++p->i;
+    if (!cf_expect_word(p, "in")) { cf_err(p); return 0; }
+    cf_node_t* node = cf_node_new();
+    if (!node) { cf_err(p); return 0; }
+    node->type = CF_CASE;
+    node->off = st->off;        /* 主体词 span */
+    node->len = st->len;
+    int arms = 0;
+    for (;;) {
+        cf_token_t* t = cf_peek(p);
+        if (!t || t->type != T_WORD) { cf_err(p); return 0; }
+        /* 裸 "esac" → 没有更多支, 收尾 */
+        if (cf_kw(p->text, t->off, t->len, "esac")) break;
+        int npat = 0;
+        for (;;) {
+            cf_token_t* pt = cf_peek(p);
+            if (!pt || pt->type != T_WORD) { cf_err(p); return 0; }
+            if (npat >= CF_CASE_PAT) {
+                swrite(2, "sh: too many case patterns\n");
+                cf_err(p);
+                return 0;
+            }
+            node->c_pato[arms][npat] = pt->off;
+            node->c_patl[arms][npat] = pt->len;
+            ++npat;
+            ++p->i;
+            cf_token_t* nx = cf_peek(p);
+            if (nx && nx->type == T_PIPE) { ++p->i; continue; }  /* "|" 下一个 pattern */
+            if (nx && nx->type == T_RP) { ++p->i; break; }       /* ")" 结束 pattern */
+            cf_err(p);
+            return 0;
+        }
+        node->c_patn[arms] = npat;
+        cf_node_t* body = cf_parse_case_body(p, stopmask);
+        if (!body) { cf_err(p); return 0; }
+        node->bodies[arms] = body;
+        ++arms;
+        if (arms >= CF_CASE_ARM) {
+            swrite(2, "sh: too many case arms\n");
+            cf_err(p);
+            return 0;
+        }
+    }
+    if (!cf_expect_word(p, "esac")) { cf_err(p); return 0; }
+    node->narms = arms;
     return node;
 }
 
@@ -3419,8 +3565,68 @@ static int cf_run_pipeline(const char* text, int off, int len,
     return status;
 }
 
+static int cf_execute_node(cf_node_t* node);
+
+/* 输入重定向包住整个循环, 而非每次迭代重新 open。内层循环的 saved_in
+ * 与外层文件共享偏移, 所以恢复时既不会回到文件开头, 也不会误回控制台。
+ * 独立函数避免每个普通 AST 节点都为展开数组预留栈空间。 */
+static int cf_execute_with_input(cf_node_t* node) {
+    char buf[LINE_MAX];
+    char* tokens[WORD_MAX];
+    char* words[WORD_MAX];
+    unsigned char globs[WORD_MAX];
+    cf_copy_word(buf, sizeof(buf), cf_current_line,
+                 node->input_off, node->input_len);
+    int count = tokenize(buf, tokens, WORD_MAX, globs);
+    if (count != 1 ||
+        expand_words(tokens, count, globs, words, &count) < 0 ||
+        count != 1 || !words[0][0]) {
+        swrite(2, "sh: ambiguous loop input\n");
+        last_status = 1;
+        return 1;
+    }
+    /* 必须先保存旧 fd 0, 再覆盖; 否则循环结束后 shell 会在文件 EOF 退出。 */
+    int saved_in = dup(0);
+    if (saved_in < 0) {
+        swrite(2, "sh: cannot save loop input\n");
+        last_status = 1;
+        return 1;
+    }
+    int fd = open(words[0], O_RDONLY);
+    if (fd < 0) {
+        swrite(2, "sh: cannot open loop input: ");
+        swrite(2, words[0]);
+        swrite(2, "\n");
+        close(saved_in);
+        last_status = 1;
+        return 1;
+    }
+    int redirected = dup2(fd, 0);
+    close(fd);   /* fd 0 已持有文件引用, 循环期间不额外占一个描述符 */
+    if (redirected < 0) {
+        close(saved_in);
+        swrite(2, "sh: cannot redirect loop input\n");
+        last_status = 1;
+        return 1;
+    }
+    int status = cf_execute_node(node);
+    /* 正常结束 / break / continue / exit 都只走这一处恢复。 */
+    if (dup2(saved_in, 0) < 0) {
+        swrite(2, "sh: cannot restore loop input\n");
+        if (status >= 0) status = 1;
+    }
+    close(saved_in);
+    if (status >= 0) last_status = status;
+    return status;
+}
+
 static int cf_execute(cf_node_t* node) {
     if (!node) return 0;
+    if (node->input_len) return cf_execute_with_input(node);
+    return cf_execute_node(node);
+}
+
+static int cf_execute_node(cf_node_t* node) {
     switch (node->type) {
     case CF_CMD: {
         if (node->kw == 1 || node->kw == 2) {
@@ -3485,56 +3691,52 @@ static int cf_execute(cf_node_t* node) {
         return 0;
     }
     case CF_WHILE: {
-        /* "done < file": 循环级输入重定向 (fd 0 指向文件, 读空后恢复) */
-        int had_loop_input = node->loop_input[0] != '\0';
-        int loop_fd = 0;
-        int saved_stdin = -1;
-        int open_failed = 0;
         int abort_status = 0;
-        if (had_loop_input) {
-            /* 先 dup(0) 存下"重定向前"的控制台 stdin, 再 dup2 覆盖 fd 0。
-             * 顺序反了 (先 dup2 再 dup) 会把循环文件本身存进去, 循环结束后
-             * fd 0 仍指向已读到 EOF 的文件 → shell 立即读到 0 字节退出。 */
-            int saved_in = dup(0);
-            if (saved_in < 0) { open_failed = 1; }
-            else {
-                loop_fd = open(node->loop_input, O_RDONLY);
-                if (loop_fd < 0) { close(saved_in); open_failed = 1; }
-                else if (dup2(loop_fd, 0) < 0) {
-                    close(loop_fd);
-                    close(saved_in);
-                    open_failed = 1;
-                } else {
-                    saved_stdin = saved_in;
+        ++cf_in_loop;
+        int guard = CF_ITER_LIMIT;
+        for (;;) {
+            int c = cf_execute(node->a);
+            if (c == CF_SIG_BREAK || c == CF_SIG_CONTINUE)
+                { abort_status = c; break; }
+            if (c < 0) { abort_status = c; break; }
+            if (c != 0) break;
+            int b = cf_execute(node->b);
+            if (--guard <= 0) break;   /* 迭代上限, 防 while true 卡死 */
+            if (b == CF_SIG_BREAK) break;
+            if (b == CF_SIG_CONTINUE) continue;
+            if (b < 0) { abort_status = b; break; }
+        }
+        --cf_in_loop;
+        if (abort_status < 0) { last_status = 0; return abort_status; }
+        last_status = 0;
+        return 0;
+    }
+    case CF_CASE: {
+        /* 展开主体词为待匹配串 (只做变量/引号, 不做文件名 glob)。 */
+        char subject[LINE_MAX];
+        if (cf_expand_value(node->off, node->len, subject) < 0) {
+            swrite(2, "sh: case: bad subject\n");
+            last_status = 1;
+            return 1;
+        }
+        for (int arm = 0; arm < node->narms; ++arm) {
+            for (int k = 0; k < node->c_patn[arm]; ++k) {
+                char pat[LINE_MAX];
+                if (cf_expand_value(node->c_pato[arm][k],
+                                    node->c_patl[arm][k], pat) < 0)
+                    continue;
+                if (glob_match(pat, subject)) {
+                    int st = cf_execute(node->bodies[arm]);
+                    /* break/continue 或 shell 退出 (子表达式 <0) 原样上抛;
+                     * 正常完成 case → 0 (POSIX: case 无 else 分支时未命中状态 0) */
+                    if (st == CF_SIG_BREAK || st == CF_SIG_CONTINUE || st < 0)
+                        return st;
+                    last_status = st ? st : 0;
+                    return last_status;
                 }
             }
         }
-        if (!open_failed) {
-            ++cf_in_loop;
-            int guard = CF_ITER_LIMIT;
-            for (;;) {
-                int c = cf_execute(node->a);
-                if (c == CF_SIG_BREAK || c == CF_SIG_CONTINUE)
-                    { abort_status = c; break; }
-                if (c < 0) { abort_status = c; break; }
-                if (c != 0) break;
-                int b = cf_execute(node->b);
-                if (--guard <= 0) break;   /* 迭代上限, 防 while true 卡死 */
-                if (b == CF_SIG_BREAK) break;
-                if (b == CF_SIG_CONTINUE) continue;
-                if (b < 0) { abort_status = b; break; }
-            }
-            --cf_in_loop;
-        }
-        /* fd 恢复: 单一出口, 无论 break/条件假/失败都回到原 stdin */
-        if (had_loop_input) {
-            if (saved_stdin >= 0) {
-                if (dup2(saved_stdin, 0) < 0) close(saved_stdin);
-                else close(saved_stdin);
-            }
-            if (loop_fd) close(loop_fd);
-        }
-        if (abort_status < 0) { last_status = 0; return abort_status; }
+        /* 无支命中: 状态 0 (与 if 无 else 分支一致) */
         last_status = 0;
         return 0;
     }
@@ -3590,7 +3792,6 @@ static int cf_execute(cf_node_t* node) {
                 }
             }
         }
-    for_done:
         env_restore(saved_env, saved_exports, saved_count);
         --cf_in_loop;
         if (abort_neg) { last_status = 0; return -1; }

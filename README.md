@@ -397,7 +397,31 @@ read ANSWER < /answer.txt
 echo "answer=$ANSWER"
 ```
 
-当前还没有 `if/for/while/case` Shell 控制流；`test` 已经提供了基础条件判断。
+已支持 `&&`、`||`、`!`、括号分组、`if/elif/else/fi`、`while`、`for`、`case`
+以及循环中的 `break` / `continue`。`while` 和 `for` 都支持循环级输入重定向：
+
+```sh
+echo first > /lines.txt
+echo second >> /lines.txt
+INPUT=/lines.txt
+while read LINE; do echo "line=$LINE"; done < "$INPUT"
+for LABEL in a b; do read LINE; echo "$LABEL=$LINE"; done < /lines.txt
+```
+
+输入文件只在进入循环时打开一次，迭代间共享读取偏移；循环退出后恢复原 stdin。
+文件不存在时报告错误并返回非零状态，支持 `||` 错误分支。
+
+```sh
+case "$MODE" in
+  dev|staging) echo build;;
+  prod)        echo release;;
+  *)           echo unknown;;
+esac
+```
+
+`case` 支持 `|` 多模式与 `*`/`?` glob 匹配（不做文件名展开）；尚未实现函数
+和 positional parameters；更多设计与限制见
+[`docs/MILESTONE_34_SHELL_CONTROL_FLOW.md`](docs/MILESTONE_34_SHELL_CONTROL_FLOW.md)。
 
 ### `/bin` 中的用户程序
 
@@ -888,7 +912,7 @@ python3 tools/run-attached-tests.py
 
 ### Shell
 
-- 还没有 `if/for/while/case`。
+- 已有 `if/elif/else`、`while`、`for`、`case`；无函数。
 - 没有函数、positional parameters、alias 和完整 POSIX 展开规则。
 - `grep` 不支持正则表达式。
 - `test` 不支持完整 `-a/-o` 优先级。

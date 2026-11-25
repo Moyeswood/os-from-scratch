@@ -159,6 +159,36 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 | `sh FILE` / `sh -c CMD` | Run a script or command string in a separate user shell |
 | `splash` | Replay the boot screen |
 
+### Shell control flow
+
+The Ring 3 shell supports `&&`, `||`, `!`, grouped lists, `if/elif/else/fi`,
+`while`, `for`, `case`, `break`, and `continue`. Both loop types accept a
+single loop-level input redirect (`done < file` or `done <file`):
+
+```sh
+echo first > /lines.txt
+echo second >> /lines.txt
+INPUT=/lines.txt
+while read LINE; do echo "line=$LINE"; done < "$INPUT"
+for LABEL in a b; do read LINE; echo "$LABEL=$LINE"; done < /lines.txt
+```
+
+Each loop opens its input once, shares the file offset across iterations, and
+restores the previous stdin on exit, including nested loops and early exits.
+Input-open failures report an error and return a nonzero status.
+
+```sh
+case "$MODE" in
+  dev|staging) echo build;;
+  prod)        echo release;;
+  *)           echo unknown;;
+esac
+```
+
+`case` supports `|`-separated patterns and `*`/`?` glob matching without
+filename expansion. Shell functions, positional parameters, and full POSIX
+semantics are not implemented. See [the M34 notes](docs/MILESTONE_34_SHELL_CONTROL_FLOW.md).
+
 ## 🚀 Quick Start
 
 **Requirements** (Arch Linux): `nasm`, `gcc` (32-bit support), `ld`, `objcopy`, `qemu-system-i386`
