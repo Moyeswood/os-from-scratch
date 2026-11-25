@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 重新生成 note/ 截图 (渲染修复后), README 截图廊 + 字体记录用
+# 重新生成 assets/ 截图 (渲染修复后), README 截图廊 + 字体记录用
 import socket, subprocess, time, os, re, threading, sys
 from PIL import Image
 

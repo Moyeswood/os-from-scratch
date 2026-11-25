@@ -91,7 +91,7 @@ send("screendump /tmp/mario-game.ppm", 1.0)
 qemu.terminate()
 qemu.wait(timeout=5)
 
-subprocess.run(["magick", "/tmp/mario-title.ppm", "note/mario-title.png"],
+subprocess.run(["magick", "/tmp/mario-title.ppm", "assets/mario-title.png"],
                check=True)
-subprocess.run(["magick", "/tmp/mario-game.ppm", "note/mario.png"], check=True)
-print("captured note/mario-title.png and note/mario.png")
+subprocess.run(["magick", "/tmp/mario-game.ppm", "assets/mario.png"], check=True)
+print("captured assets/mario-title.png and assets/mario.png")

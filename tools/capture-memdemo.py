@@ -10,7 +10,7 @@ IMG = "build/os-kernel.img"
 MON = "/tmp/newos-memdemo-shot.sock"
 SERIAL = "/tmp/newos-memdemo-shot.log"
 PPM = "/tmp/newos-memdemo.ppm"
-OUT = "note/memdemo.png"
+OUT = "assets/memdemo.png"
 
 for path in (MON, SERIAL, PPM):
     try:
