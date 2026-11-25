@@ -4,8 +4,10 @@
 // c4 迷你 C 编译器移植 (C in four functions, Robert Swierczek)
 // 支持的 C 子集: char/int/指针类型, if/while/return, 函数调用,
 // 递归, 一维数组, enum, sizeof, 字符串, // 和 /* */ 注释,
+// switch/case/default (整型常量标签, 保留 fall-through, case 体内 break
+// 支持; 循环+switch 嵌套时 break 归最内层 breakable),
 // 内建: open/read/close/printf/malloc/free/memset/memcmp/exit
-// 不支持: struct/union/float/for/do/switch/break/continue/宏
+// 不支持: struct/union/float/宏
 //
 // path: 源文件路径 (作为 argv[0] 传给 main)
 // argc/argv: 传给程序 main 的参数 (argv[0] = 源文件路径)

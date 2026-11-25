@@ -236,6 +236,87 @@ check("write wbrk.c", write_source("/wbrk.c", [
 ]))
 check("cc wbrk.c (while+break)", run_cc("/wbrk.c", "wbrk=4", name="cc-wbrk"))
 
+# ---------- switch / case / default ----------
+check("write sw.c", write_source("/sw.c", [
+    "int main() {",
+    "  int i, s;",
+    "  s = 0;",
+    "  for (i = 0; i < 4; i = i + 1) {",
+    "    switch (i) {",
+    "      case 0: s = s + 1; break;",
+    "      case 1: s = s + 10; break;",
+    "      default: s = s + 100;",
+    "    }",
+    "  }",
+    "  printf(\"sw=%d\\n\", s);",
+    "  return 0;",
+    "}"]))
+check("cc sw.c (switch+default+break in loop)",
+      run_cc("/sw.c", "sw=211", name="cc-sw"))
+
+check("write swfall.c", write_source("/swfall.c", [
+    "int main() {",
+    "  int s;",
+    "  s = 0;",
+    "  switch (1) {",
+    "    case 1: s = s + 1;",
+    "    case 2: s = s + 10;",
+    "    case 3: s = s + 100;",
+    "  }",
+    "  printf(\"fall=%d\\n\", s);",
+    "  switch (9) {",
+    "    case 1: s = 0;",
+    "    default: printf(\"nomatch ok\\n\");",
+    "  }",
+    "  return 0;",
+    "}"]))
+check("cc swfall.c (fall-through)",
+      run_cc("/swfall.c", "fall=111", name="cc-swfall"))
+check("cc swfall.c (no-match default)",
+      run_cc("/swfall.c", "nomatch ok", name="cc-swfall-nomatch"))
+
+check("write swnest.c", write_source("/swnest.c", [
+    "int main() {",
+    "  int i, s;",
+    "  s = 0;",
+    "  for (i = 0; i < 3; i = i + 1) {",
+    "    switch (i) {",
+    "      case 1:",
+    "        while (1) { s = s + 5; break; }",
+    "        break;",
+    "      case 2:",
+    "        while (1) { s = s + 7; break; }",
+    "    }",
+    "  }",
+    "  printf(\"nest=%d\\n\", s);",
+    "  return 0;",
+    "}"]))
+check("cc swnest.c (break innermost wins)",
+      run_cc("/swnest.c", "nest=12", name="cc-swnest"))
+
+check("write swnum.c", write_source("/swnum.c", [
+    "enum { A = 1, B = 2 };",
+    "int main() {",
+    "  int s;",
+    "  s = 0;",
+    "  switch (B) {",
+    "    case A: s = s + 1; break;",
+    "    case B: s = s + 10; break;",
+    "    case -3: s = s + 1000; break;",
+    "  }",
+    "  switch (0) { case -3: s = s + 5; break; }",
+    '  printf("enum=%d\\n", s);',
+    "  return 0;",
+    "}"]))
+check("cc swnum.c (enum + negative labels)",
+      run_cc("/swnum.c", "enum=10", name="cc-swnum"))
+
+check("write swbad.c", write_source("/swbad.c", [
+    'int main() { int x; switch (x) { case y: break; } return 0; }']))
+check("cc swbad.c → case constant error",
+      run_cc("/swbad.c", "case label must be an integer constant",
+             name="cc-swbad"))
+
 # ---------- 5. 指针 + malloc + 字符串 + sizeof ----------
 check("write str.c", write_source("/str.c", [
     "int main() { char *s; s = malloc(16);",

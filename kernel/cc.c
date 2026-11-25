@@ -172,6 +172,7 @@ int *e, *le,       // current position in emitted code
 enum {
   Num = 128, Fun, Sys, Glo, Loc, Id,
   Char, Else, Enum, If, Int, Return, Sizeof, While, Do, For, Break, Continue,
+  Switch, Case, Default,
   Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Mod, Inc, Dec, Brak
 };
 
@@ -418,12 +419,100 @@ void expr(int lev)
 // 教学版约定: for 增量表达式里不要用 && || ?:。
 static int cc_scratch[32][256];
 static int cc_scratch_depth;
-// break/continue 的 JMP 操作数补丁槽 (循环嵌套用计数保存/恢复)
+// break/continue 的 JMP 操作数补丁槽 (循环嵌套用计数保存/恢复; switch 也复用
+// cc_brk: case 体里的裸 break 在 switch 闭合时按 LIFO 基线回填到 switch 尾,
+// 最内层 breakable 优先, 正是 C 语义)
 static int cc_brk[32], cc_brk_n;
 static int cc_cnt[32], cc_cnt_n;
 // 全局初始化代码 (编译期累积, 解析完后拷到代码流末尾作为执行入口)
 static int cc_ginit[512];
 static int cc_ginit_n;
+
+static void sw();
+void stmt();
+
+// switch ( expr ) { case 常量: 语句... case 常量: ... default: 语句... }
+// 分发在体后: 入口先一条 JMP 跳过整个体区, 体区按源码顺序连续编译
+// (体与体之间直接落空, 天然保留 C 的 fall-through), 每个 case 记一个
+// (常量, 体入口) 对; 体区之后生成分发链, 依次比对槽值, 命中则 BNZ 跳回
+// 该体入口, 全不中跳 default 体 (无 default 则落到 switch 尾)。
+// 值存进一个专属 data 槽 (与全局同段, 每层 switch 一个)。
+// case 体里的 break 复用 cc_brk 的 LIFO 槽位: switch 开时记基线, 分发链
+// 之后把基线以上的槽全回填到 switch 尾 —— 内层循环自己会先排干它们的槽,
+// 所以"最内层 breakable 优先"的 C 语义自动成立。
+// 标签必须是整型常量: 十进制字面量 (可带负号) 或 enum 常量。
+#define CC_CASE_MAX 32
+static int cc_case_val[CC_CASE_MAX];   // 各 case 常量
+static int cc_case_at[CC_CASE_MAX];    // 各 case 体入口 (代码地址)
+static int cc_case_n;
+
+static void sw()
+{
+  int *djump, *tjmp;
+  int slot, c, brkbase, casebase, default_at;
+
+  next();                                    // 'switch'
+  if (tk != '(') { printf("%d: open paren expected in switch\n", line); exit(-1); }
+  next();
+  data = (char *)((int)data + sizeof(int) & -sizeof(int));
+  slot = (int)data; data = data + sizeof(int);
+  *++e = IMM; *++e = slot; *++e = PSH;       // 槽地址压栈
+  expr(Assign);                              // a = 表达式值
+  *++e = SI;                                 // *slot = a
+  if (tk != ')') { printf("%d: close paren expected in switch\n", line); exit(-1); }
+  next();
+  if (tk != '{') { printf("%d: open brace expected in switch\n", line); exit(-1); }
+  next();
+  brkbase = cc_brk_n;
+  casebase = cc_case_n;                      // 嵌套 switch: 本层 case 从这往后记,
+  cc_case_n = casebase;                      // 内层收尾时回退自己的部分 (同 cc_brk 思路)
+  default_at = 0;
+  *++e = JMP; djump = ++e; *++e = 0;         // 入口跳过分发到链头
+  while (tk != '}') {
+    if (tk == Case) {
+      next();
+      // 标签 = 整型常量: 字面量 (可带负号) 或 enum 常量
+      if (tk == Sub) {
+        next();
+        if (tk != Num) { printf("%d: bad negative case constant\n", line); exit(-1); }
+        c = -ival; next();
+      }
+      else if (tk == Num) { c = ival; next(); }
+      else if (tk == Id && id[Class] == Num) { c = id[Val]; next(); }
+      else { printf("%d: case label must be an integer constant\n", line); exit(-1); }
+      if (tk != ':') { printf("%d: colon expected after case\n", line); exit(-1); }
+      next();
+      if (cc_case_n - casebase >= CC_CASE_MAX) { printf("%d: too many cases in switch\n", line); exit(-1); }
+      cc_case_val[cc_case_n] = c;
+      cc_case_at[cc_case_n] = (int)(e + 1);   // 体入口
+      ++cc_case_n;
+    }
+    else if (tk == Default) {
+      next();
+      if (tk != ':') { printf("%d: colon expected after default\n", line); exit(-1); }
+      next();
+      default_at = (int)(e + 1);
+    }
+    else { printf("%d: expected case or default in switch\n", line); exit(-1); }
+    // 体区: 语句直到下一个 case/default/'}' (无标签前导语句不支持)
+    while (tk != Case && tk != Default && tk != '}') stmt();
+  }
+  next();                                     // '}'
+  // 末体落空必须先跳回 switch 尾: 否则直接掉进后面的分发链, 重比一次会跳回
+  // 体内形成死循环 (分发链本身只在入口 JMP 之后被走到一次)
+  *++e = JMP; tjmp = ++e; *++e = 0;
+  *djump = (int)(e + 1);                      // 分发链头
+  for (int i = casebase; i < cc_case_n; i++) {
+    *++e = IMM; *++e = cc_case_val[i]; *++e = PSH;
+    *++e = IMM; *++e = slot; *++e = LI;        // a = *slot
+    *++e = EQ;                                // a = (常量 == 槽值)
+    *++e = BNZ; *++e = cc_case_at[i];
+  }
+  if (default_at) { *++e = JMP; *++e = default_at; }
+  *tjmp = (int)(e + 1);                       // switch 尾
+  while (cc_brk_n > brkbase) { cc_brk_n--; *(int *)cc_brk[cc_brk_n] = (int)(e + 1); }
+  cc_case_n = casebase;                       // 回退本层的 case 记录
+}
 
 void stmt()
 {
@@ -509,6 +598,9 @@ void stmt()
         while (cc_cnt_n > save_cnt) { cc_cnt_n--; *(int *)cc_cnt[cc_cnt_n] = (int)incr; }
       }
     }
+  }
+  else if (tk == Switch) {
+    sw();
   }
   else if (tk == Break) {
     next();
@@ -596,8 +688,9 @@ int cc_run(const char* path, int argc, char** argv)
   }
 
   p = "char else enum if int return sizeof while do for break continue "
-      "open read close printf malloc free memset memcmp exit void main";
-  i = Char; while (i <= Continue) { next(); id[Tk] = i++; } // add keywords to symbol table
+      "switch case default open read close printf malloc free memset "
+      "memcmp exit void main";
+  i = Char; while (i <= Default) { next(); id[Tk] = i++; } // add keywords to symbol table
   i = OPEN; while (i <= EXIT) { next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++; } // add library to symbol table
   next(); id[Tk] = Char; // handle void type
   next(); idmain = id; // keep track of main
