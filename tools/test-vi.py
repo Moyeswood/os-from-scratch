@@ -235,6 +235,60 @@ try:
     check("vi dd applied", run_command(
         "cat /vi.txt", "[SH] cat: heXllo vi", "vi-dd-cat"))
 
+    check("vi reopens for count", run_vi("/vi.txt"))
+    # 数字前缀 + G: 跳行
+    mark()
+    type_text("5G")
+    check("vi 5G goto line", wait_since("[VI] goto", 5, "vi-goto"))
+
+    # r 替换当前字符 (然后 u 撤销, 不污染)
+    press("home")
+    mark()
+    type_text("rZ")
+    check("vi r replaces char", wait_since("[VI] r", 5, "vi-r"))
+    mark()
+    press("u")
+    wait_since("[ED] undo", 5, "vi-r-undo")
+
+    # 数字前缀 + x: 连删 2 个字符 (然后 u 撤销)
+    press("home")
+    mark()
+    type_text("2x")
+    check("vi 2x deletes two", wait_since("[VI] x", 5, "vi-2x"))
+    mark()
+    press("u")
+    wait_since("[ED] undo", 5, "vi-2x-undo")
+
+    # 搜索 + N 反向搜索
+    press("slash")
+    type_text("vi")
+    press("ret")
+    check("vi search finds", wait_since("[VI] search hit", 5, "vi-search-2"))
+    mark()
+    press("shift-n")
+    check("vi N reverse search", wait_since("[VI] search hit", 5, "vi-nsearch"))
+
+    # 数字前缀 + dd: 一次删多行。先补两行让缓冲有 3 行, 再 3dd
+    press("home")
+    type_text("o")
+    type_text("second")
+    press("esc")
+    type_text("o")
+    type_text("third")
+    press("esc")
+    press("home")
+    mark()
+    type_text("3dd")
+    s = since()
+    check("vi 3dd deletes 3 lines", s.count("[VI] dd") >= 3,
+          f"count={s.count('[VI] dd')}")
+
+    # 全部丢弃, 不污染磁盘
+    colon("q!")
+    check("vi count-tests discarded", wait_since("[VI] exit forced", 6,
+                                                 "vi-count-q"))
+    time.sleep(0.8)
+
     check("vi reopens for q guard", run_vi("/vi.txt"))
     type_text("i")
     type_text("X")

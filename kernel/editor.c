@@ -360,7 +360,7 @@ static void ed_render(void) {
     if (ed_vi_active)
         s = ed_vi_mode == ED_VI_INSERT ? "-- INSERT --" :
             ed_vi_mode == ED_VI_COMMAND ? "-- COMMAND --" :
-            "-- NORMAL -- i/a/o insert :w :q / search";
+            "-- NORMAL -- i/a/o/A/I/O x/r/N dd yy nG :w :q";
     else
         s = " ^S Save ^X Exit ^Z Undo ^F Find ^G Goto | L";
     while (*s && pos < ED_COLS - 4) status[pos++] = *s++;
@@ -609,10 +609,11 @@ static void ed_vi_paste(void) {
     serial_puts("[VI] paste\n\r");
 }
 
-static int ed_vi_find(const char* query, uint32_t start) {
+static int ed_vi_find(const char* query, int start) {
     uint32_t qlen = k_strlen(query);
     if (!qlen || qlen > ed_len) return 0;
-    if (start >= ed_len) start = 0;
+    // 允许 start >= ed_len (n 反复到文件尾后 = ed_len+1): 从 0 重扫
+    if ((uint32_t)start >= ed_len) start = 0;
     for (uint32_t delta = 0; delta < ed_len; delta++) {
         uint32_t at = (start + delta) % ed_len;
         if (at + qlen > ed_len) continue;
@@ -632,6 +633,57 @@ static int ed_vi_find(const char* query, uint32_t start) {
     k_strcpy(ed_msg, "Pattern not found");
     serial_puts("[VI] search miss\n\r");
     return 0;
+}
+
+// ---------- vi 扩展动作 ----------
+// 屏幕第一/最后一行 (H/L): 把当前行号钳到可视区再跳转
+static void ed_vi_screen_line(int bottom) {
+    int line, col;
+    ed_pos(ed_cur, &line, &col);
+    int top = ed_top_line;
+    if (top < 0) top = 0;
+    int target = bottom ? top + ed_view_rows - 1 : top;
+    int total = ed_total_lines();
+    if (target > total - 1) target = total - 1;
+    if (target < 0) target = 0;
+    ed_cur = ed_line_start(target);
+}
+
+// 反向搜索 (N): 从 start 向前找最后一个匹配 (环形)。start<0 表示从头开始
+static int ed_vi_find_prev(const char* query, int start) {
+    uint32_t qlen = k_strlen(query);
+    if (!qlen || qlen > ed_len) return 0;
+    uint32_t begin = ((uint32_t)start >= ed_len) ? ed_len - 1 : (uint32_t)start;
+    for (uint32_t delta = 0; delta < ed_len; delta++) {
+        uint32_t at = (begin + ed_len - delta) % ed_len;
+        if (at + qlen > ed_len) continue;
+        int match = 1;
+        for (uint32_t i = 0; i < qlen; i++) {
+            if (ed_buf[at + i] != query[i]) { match = 0; break; }
+        }
+        if (match) {
+            ed_cur = at;
+            ed_last_match = at;
+            k_strcpy(ed_last_query, query);
+            k_strcpy(ed_msg, "Search hit");
+            serial_puts("[VI] search hit\n\r");
+            return 1;
+        }
+    }
+    k_strcpy(ed_msg, "Pattern not found");
+    serial_puts("[VI] search miss\n\r");
+    return 0;
+}
+
+// 替换当前字符 (r): 删一个再插一个, 保持组内单操作语义
+static void ed_vi_replace(char c) {
+    if (ed_cur >= ed_len) return;
+    ed_break_group();
+    ed_delete_action(ed_cur);
+    ed_insert_action(c);
+    ed_break_group();
+    k_strcpy(ed_msg, "Replaced");
+    serial_puts("[VI] r\n\r");
 }
 
 static void ed_vi_set_mode(int mode) {
@@ -684,6 +736,7 @@ static int ed_vi_run_command(int* shift, int* ctrl, int* caps, int* e0) {
 static void ed_vi_loop(void) {
     int shift = 0, ctrl = 0, caps = 0, e0 = 0;
     int pending = 0;
+    int count = 0;      // 数字前缀 (重复次数/跳行), 上限 999
     int running = 1;
     ed_vi_mode = ED_VI_NORMAL;
     ed_render();
@@ -756,6 +809,7 @@ static void ed_vi_loop(void) {
 
         if (k == SC_ESC) {
             pending = 0;
+            count = 0;
             k_strcpy(ed_msg, "");
             ed_render();
             continue;
@@ -775,18 +829,43 @@ static void ed_vi_loop(void) {
         }
 
         char c = (shift ^ caps) ? keymap_shift[k] : keymap_normal[k];
+        // r 待命时下一字符就是替换内容 (含数字): 必须在数字前缀判断之前
+        if (pending == 'r') {
+            pending = 0;
+            ed_break_group();
+            // 数字前缀 = 连续替换 n 个字符 (5rX → XXXXX), 与 vim 一致
+            for (int i = 0; i < (count ? count : 1); i++)
+                ed_vi_replace(c);
+            count = 0;
+            ed_render();
+            continue;
+        }
+        // 数字前缀: 累积重复次数 (上限 999 防溢出)。行首 0 只在"还没开始计数"
+        // 时当行首 (vi 习惯), 已计数时当数字的一部分 (10 → 跳第 10 行)。
+        // d/y 待命时数字是 motion 的重复数 (5dd 删 5 行)。
+        if (c >= '0' && c <= '9' && (count > 0 || c != '0')) {
+            count = count * 10 + (c - '0');
+            if (count > 999) count = 999;
+            k_strcpy(ed_msg, "N");
+            ed_uint_to_str((uint32_t)count, ed_msg + k_strlen(ed_msg));
+            ed_render();
+            continue;
+        }
         if (pending == 'd') {
             pending = 0;
             ed_break_group();
             if (c == 'd') {
-                ed_vi_delete_line();
+                for (int i = 0; i < (count ? count : 1); i++)
+                    ed_vi_delete_line();
             } else if (c == 'w') {
-                uint32_t start = ed_cur;
-                ed_next_word();
-                uint32_t end = ed_cur;
-                ed_cur = start;
-                ed_vi_copy(start, end, 0);
-                ed_delete_range(start, end);
+                for (int i = 0; i < (count ? count : 1); i++) {
+                    uint32_t start = ed_cur;
+                    ed_next_word();
+                    uint32_t end = ed_cur;
+                    ed_cur = start;
+                    ed_vi_copy(start, end, 0);
+                    ed_delete_range(start, end);
+                }
                 k_strcpy(ed_msg, "Word deleted");
                 serial_puts("[VI] dw\n\r");
             } else if (c == '$') {
@@ -800,40 +879,89 @@ static void ed_vi_loop(void) {
             } else {
                 k_strcpy(ed_msg, "Unsupported delete motion");
             }
+            count = 0;
             ed_break_group();
             ed_render();
             continue;
         }
         if (pending == 'y') {
             pending = 0;
-            if (c == 'y') ed_vi_yank_line();
+            if (c == 'y') {
+                for (int i = 0; i < (count ? count : 1); i++)
+                    ed_vi_yank_line();
+            }
             else k_strcpy(ed_msg, "Unsupported yank motion");
+            count = 0;
             ed_render();
             continue;
         }
 
         switch (c) {
-        case 'h': ed_left(); break;
-        case 'l': ed_right(); break;
-        case 'j': ed_down(); break;
-        case 'k': ed_up(); break;
+        case 'h': for (int i = 0; i < (count ? count : 1); i++) ed_left(); break;
+        case 'l': for (int i = 0; i < (count ? count : 1); i++) ed_right(); break;
+        case 'j': for (int i = 0; i < (count ? count : 1); i++) ed_down(); break;
+        case 'k': for (int i = 0; i < (count ? count : 1); i++) ed_up(); break;
         case '0': ed_home(); break;
         case '$': ed_end(); break;
-        case 'w': ed_next_word(); break;
-        case 'b': ed_prev_word(); break;
-        case 'G':
-            ed_cur = ed_len ? ed_len - 1 : 0;
-            ed_home();
-            for (int i = 0; i < ed_rows * 4; i++) ed_down();
+        case 'w': for (int i = 0; i < (count ? count : 1); i++) ed_next_word(); break;
+        case 'b': for (int i = 0; i < (count ? count : 1); i++) ed_prev_word(); break;
+        case 'G': {
+            // 数字前缀 = 跳行 (33G → 第 33 行); 无前缀 = 文件尾
+            if (count) {
+                int lines = ed_total_lines();
+                uint32_t target = (uint32_t)count;
+                if (target > (uint32_t)lines) target = (uint32_t)lines;
+                ed_cur = ed_line_start((int)target - 1);
+                k_strcpy(ed_msg, "Line ");
+                ed_uint_to_str(target, ed_msg + k_strlen(ed_msg));
+                serial_puts("[VI] goto\n\r");
+            } else {
+                ed_cur = ed_len ? ed_len - 1 : 0;
+                ed_home();
+                for (int i = 0; i < ed_rows * 4; i++) ed_down();
+            }
             break;
+        }
+        case 'H': ed_vi_screen_line(0); break;
+        case 'L': ed_vi_screen_line(1); break;
+        case '~': {
+            // 反转当前字符大小写 (字母才动)
+            if (ed_cur < ed_len) {
+                char ch = ed_buf[ed_cur];
+                char nu = 0;
+                if (ch >= 'a' && ch <= 'z') nu = (char)(ch - 32);
+                else if (ch >= 'A' && ch <= 'Z') nu = (char)(ch + 32);
+                if (nu) {
+                    ed_break_group();
+                    ed_delete_action(ed_cur);
+                    ed_insert_action(nu);
+                    ed_break_group();
+                }
+            }
+            break;
+        }
         case 'i':
             serial_puts("[VI] insert mode\n\r");
             ed_vi_set_mode(ED_VI_INSERT);
+            count = 0;
             continue;
         case 'a':
             if (ed_cur < ed_len && ed_buf[ed_cur] != '\n') ed_cur++;
             serial_puts("[VI] insert mode append\n\r");
             ed_vi_set_mode(ED_VI_INSERT);
+            count = 0;
+            continue;
+        case 'A':
+            ed_end();
+            serial_puts("[VI] insert mode append\n\r");
+            ed_vi_set_mode(ED_VI_INSERT);
+            count = 0;
+            continue;
+        case 'I':
+            ed_home();
+            serial_puts("[VI] insert mode\n\r");
+            ed_vi_set_mode(ED_VI_INSERT);
+            count = 0;
             continue;
         case 'o':
             ed_end();
@@ -842,17 +970,38 @@ static void ed_vi_loop(void) {
             ed_break_group();
             serial_puts("[VI] insert mode open line\n\r");
             ed_vi_set_mode(ED_VI_INSERT);
+            count = 0;
             continue;
+        case 'O': {
+            // 在上一行插行
+            int line, col;
+            ed_pos(ed_cur, &line, &col);
+            ed_cur = ed_line_start(line);
+            ed_break_group();
+            if (ed_insert_action('\n') < 0) break;
+            ed_cur = ed_line_start(line);
+            ed_break_group();
+            serial_puts("[VI] insert mode open line\n\r");
+            ed_vi_set_mode(ED_VI_INSERT);
+            count = 0;
+            continue;
+        }
         case 'x':
             ed_break_group();
-            ed_delete_action(ed_cur);
+            for (int i = 0; i < (count ? count : 1); i++)
+                ed_delete_action(ed_cur);
             ed_break_group();
             serial_puts("[VI] x\n\r");
             break;
-        case 'd': pending = 'd'; k_strcpy(ed_msg, "d"); break;
-        case 'y': pending = 'y'; k_strcpy(ed_msg, "y"); break;
+        case 'd': pending = 'd'; k_strcpy(ed_msg, "d"); ed_render(); continue;
+        case 'y': pending = 'y'; k_strcpy(ed_msg, "y"); ed_render(); continue;
         case 'p': ed_vi_paste(); break;
         case 'u': ed_undo(); break;
+        case 'r':
+            pending = 'r';
+            k_strcpy(ed_msg, "r");
+            ed_render();
+            continue;   // 保留 count: 5rX = 连续替换 5 个字符
         case '/': {
             char query[ED_QUERY];
             query[0] = '\0';
@@ -866,7 +1015,12 @@ static void ed_vi_loop(void) {
         }
         case 'n':
             if (ed_last_query[0])
-                ed_vi_find(ed_last_query, ed_last_match + 1);
+                ed_vi_find(ed_last_query, (int)ed_last_match + 1);
+            else k_strcpy(ed_msg, "No previous search");
+            break;
+        case 'N':
+            if (ed_last_query[0])
+                ed_vi_find_prev(ed_last_query, (int)ed_last_match - 1);
             else k_strcpy(ed_msg, "No previous search");
             break;
         case ':':
@@ -875,6 +1029,7 @@ static void ed_vi_loop(void) {
         default:
             break;
         }
+        count = 0;
         ed_render();
     }
 }
