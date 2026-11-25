@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="note/splash-mid.png" width="480" alt="boot screen"/>
+  <img src="assets/splash-mid.png" width="480" alt="boot screen"/>
 </p>
 
 NewOS is an educational 32-bit x86 operating system written from scratch in C and a bit of assembly, running in QEMU. It covers the full OS learning path: **booting → protected mode → interrupts → memory management → multitasking → graphics → persistent filesystem → editor → C compiler → Ring 3 user mode → user-mode shell** — so that in the end you can write and compile C programs, load flat or ELF32 executables from `/bin`, manage processes with `fork/waitpid/execve`, and use pipes, redirection, and background jobs. Files, directories, and `/bin` survive reboots.
@@ -69,9 +69,10 @@ A nano-style `edit` command:
 
 A vi-style `vi` command reuses the same text buffer:
 
-- Normal/Insert/Command modes, `i/a/o`, `h/j/k/l`, `0/$`, `w/b`
-- `x`, `dd`, `yy`, `p`, `dw`, `d$`
-- `/`/`n` search, `u`/Ctrl+R undo/redo
+- Normal/Insert/Command modes, `i/a/o`, `I/A/O`, `h/j/k/l`, `0/$`, `w/b`, `H/L`
+- `x`, `dd`, `yy`, `p`, `dw`, `d$`, `r` (replace char), `~` (toggle case)
+- Numeric prefixes: `5j`, `3dd`, `2w`, `5x`, `33G` (goto line), `5rX` (up to 999)
+- `/`/`n`/`N` (reverse search), `u`/Ctrl+R undo/redo
 - `:w`, `:q`, `:q!`, `:wq`/`:x`
 
 ### ⚙️ C Compiler (c4 port)
@@ -81,10 +82,12 @@ The `cc` command — a port of **C in four functions** (by Robert Swierczek), co
 |---|---|
 | Types | `char`, `int`, pointers, 1-D arrays, `enum`, `sizeof` |
 | Declarations | May have initializers: `int a = 5;` (global & local; globals run before `main`) |
-| Statements | `if/else`, `while`, `do/while`, `for`, `break/continue`, `return`, expressions, function calls (incl. recursion) |
+| Statements | `if/else`, `while`, `do/while`, `for`, `switch/case/default`, `break/continue`, `return`, expressions, function calls (incl. recursion) |
 | Comments | `//` and `/* */` |
 | Builtins | `printf` `open` `read` `close` `malloc` `free` `memset` `memcmp` `exit` |
-| Not supported | struct/union, float, switch, goto, preprocessor; avoid `&&` `\|\|` `?:` in for-increment / global-initializer expressions (deferred-codegen limitation) |
+| Not supported | struct/union, float, goto, preprocessor; `switch` labels must be integer constants (decimal, possibly negative, or `enum`); avoid `&&` `\|\|` `?:` in for-increment / global-initializer expressions (deferred-codegen limitation) |
+
+`switch` keeps C's fall-through (bodies compile in source order), a `break` inside a `case` body jumps to the end of the `switch`, and when a `switch` nests inside a loop the `break` belongs to the innermost breakable — correct C semantics.
 
 **`open/read` talk to the OS's own filesystem** — C programs can read files inside the OS! Compile errors include line numbers; runaway loops can be interrupted with ESC.
 
@@ -187,7 +190,7 @@ esac
 
 `case` supports `|`-separated patterns and `*`/`?` glob matching without
 filename expansion. Shell functions, positional parameters, and full POSIX
-semantics are not implemented. See [the M34 notes](docs/MILESTONE_34_SHELL_CONTROL_FLOW.md).
+semantics are not implemented.
 
 ## 🚀 Quick Start
 
@@ -232,23 +235,23 @@ printf("read %d: %s\n", n, buf); return 0; }
 
 | Filesystem operations | Built-in editor | C compile & run |
 |---|---|---|
-| <img src="note/shell-fs.png" width="240" alt="filesystem ops"/> | <img src="note/editor.png" width="240" alt="editor"/> | <img src="note/cc-demo.png" width="240" alt="cc"/> |
+| <img src="assets/shell-fs.png" width="240" alt="filesystem ops"/> | <img src="assets/editor.png" width="240" alt="editor"/> | <img src="assets/cc-demo.png" width="240" alt="cc"/> |
 
 | Default Ring 3 shell | Kernel recovery shell |
 |---|---|
-| <img src="note/splash-shell.png" width="360" alt="default Ring 3 shell"/> | <img src="note/recovery-shell.png" width="360" alt="kernel recovery shell"/> |
+| <img src="assets/splash-shell.png" width="360" alt="default Ring 3 shell"/> | <img src="assets/recovery-shell.png" width="360" alt="kernel recovery shell"/> |
 
 | Ring 3 user mode | User fault caught by the kernel |
 |---|---|
-| <img src="note/ring3-hello.png" width="360" alt="ring 3 user mode"/> | <img src="note/ring3-crash.png" width="360" alt="page fault"/> |
+| <img src="assets/ring3-hello.png" width="360" alt="ring 3 user mode"/> | <img src="assets/ring3-crash.png" width="360" alt="page fault"/> |
 
 | User heap + fork heap isolation + waitpid |
 |---|
-| <img src="note/memdemo.png" width="480" alt="user heap, fork heap isolation and waitpid"/> |
+| <img src="assets/memdemo.png" width="480" alt="user heap, fork heap isolation and waitpid"/> |
 
 | Super Mario title | Super Mario gameplay |
 |---|---|
-| <img src="note/mario-title.png" width="360" alt="Super Mario title"/> | <img src="note/mario.png" width="360" alt="Super Mario gameplay"/> |
+| <img src="assets/mario-title.png" width="360" alt="Super Mario title"/> | <img src="assets/mario.png" width="360" alt="Super Mario gameplay"/> |
 
 ## 🧪 Automated Tests
 
@@ -265,9 +268,9 @@ python3 tools/test-fs-journal.py # committed-journal power-loss replay
 python3 tools/test-signals.py  # user handler/mask/pending/sigreturn
 python3 tools/test-boot-shell.py # normal Ring 3 boot / recovery kernel shell
 python3 tools/test-edit.py     # editor/undo/find/caret (67 checks)
-python3 tools/test-vi.py       # vi modes/motions/yank/search/commands (28 checks)
+python3 tools/test-vi.py       # vi modes/motions/yank/search/commands (36 checks)
 python3 tools/test-asm.py      # assembler/flat program/real stepping & breakpoints (34 checks)
-python3 tools/test-cc.py       # C compiler   (41 checks)
+python3 tools/test-cc.py       # C compiler   (51 checks)
 python3 tools/test-preempt.py  # preemption   (7 checks)
 python3 tools/test-mario.py    # Mario/powerups/UI/two themes (18 checks)
 python3 tools/test-user.py     # Ring 3 user  (36 checks)
@@ -329,7 +332,7 @@ python3 tools/test-shell.py    # shell/utilities/pipelines/scripts/jobs (224 che
 │       filedemo.c fdstdin.c sh.c fdpipe.c fscheck.c
 ├── tetris/             # original real-mode assembly version (port reference)
 ├── tools/              # font converter + 25 test suites
-├── note/               # development notes + screenshots
+├── assets/             # screenshots
 └── Makefile
 ```
 
@@ -373,20 +376,13 @@ python3 tools/test-shell.py    # shell/utilities/pipelines/scripts/jobs (224 che
 | 32 | Paused user process + TF/#DB stepping + INT3 breakpoints + call step-over + live context |
 | 33 | `cp/head/tail/wc/grep/printf/test/read/source` plus file and shell options |
 
-Detailed development notes, pitfalls and fixes for every milestone live in the `note/` directory (in Chinese).
-
-The step-by-step Chinese guides for the latest phases are
-[`docs/MILESTONE_12_E820_HEAP.md`](docs/MILESTONE_12_E820_HEAP.md) and
-[`docs/MILESTONE_13_VM.md`](docs/MILESTONE_13_VM.md),
-[`docs/MILESTONE_14_EXEC.md`](docs/MILESTONE_14_EXEC.md),
-[`docs/MILESTONE_15_PROCESS_ELF.md`](docs/MILESTONE_15_PROCESS_ELF.md),
-[`docs/MILESTONE_23_DISK_FS.md`](docs/MILESTONE_23_DISK_FS.md),
-[`docs/MILESTONE_24_FS_V2.md`](docs/MILESTONE_24_FS_V2.md).
+Design records, pitfalls and fixes for each milestone are maintained as local
+development notes (in Chinese) and are not shipped with the repository.
 
 ## 📄 Credits
 
 - **c4** (C in four functions) compiler: originally by Robert Swierczek (public domain); ported here into the kernel
 - **Terminus Font**: the classic terminal bitmap font by Dimitar Zhekov
-- Early learning plans and notes: `LEARNING_PLAN.md` / `ROADMAP.md` / `docs/` in this repository
+- Early learning plans: `LEARNING_PLAN.md` / `ROADMAP.md` in this repository
 
 > This is a personal learning project; code readability for teaching comes first. Feedback and discussion welcome.

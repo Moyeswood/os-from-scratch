@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="note/splash-mid.png" width="480" alt="NewOS 开机画面"/>
+  <img src="assets/splash-mid.png" width="480" alt="NewOS 开机画面"/>
 </p>
 
 NewOS 是一个以学习和可读性为优先的 32 位 x86 操作系统。它使用 C 和少量
@@ -420,8 +420,7 @@ esac
 ```
 
 `case` 支持 `|` 多模式与 `*`/`?` glob 匹配（不做文件名展开）；尚未实现函数
-和 positional parameters；更多设计与限制见
-[`docs/MILESTONE_34_SHELL_CONTROL_FLOW.md`](docs/MILESTONE_34_SHELL_CONTROL_FLOW.md)。
+和 positional parameters。
 
 ### `/bin` 中的用户程序
 
@@ -500,6 +499,9 @@ C 源码
 - `&`、`*`、指针加减和 `ptr[i]`。
 - 类型转换和 `sizeof(int/char/pointer)`。
 - `if/else`、`while`、`do/while`、`for`。
+- `switch/case/default`：标签支持十进制字面量（可带负号）和 `enum` 常量；
+  保留 C 的 fall-through；`case` 体里的 `break` 跳到 `switch` 尾；与循环嵌套时
+  `break` 归最内层 `breakable`（循环/`switch` 混合嵌套语义正确）。
 - `break`、`continue`、`return`。
 - 自定义函数、参数、递归。
 - `int main(argc, argv)`。
@@ -544,7 +546,8 @@ int main() {
 - 不支持 `struct/union/typedef`。
 - 不支持 `float/double`。
 - 不支持 `unsigned/short/long`。
-- 不支持 `switch/case`、`goto`。
+- 不支持 `goto`。
+- `switch` 不支持非整型常量标签（如字符串、表达式）；`case` 前无标签前导语句。
 - 不支持 `/* ... */` 块注释。
 - 不支持宏和真正的预处理器；`#` 开头的行会被跳过。
 - 不支持真正的 `int a[N]` 数组声明；可用 `ptr[i]` 模拟一维数组。
@@ -624,10 +627,12 @@ debug /bin/program
 ### vi 风格 `vi`
 
 - Normal/Insert/Command 模式。
-- `i/a/o`、Esc。
-- `h/j/k/l`、`0/$`、`w/b`。
-- `x/dd/yy/p/dw/d$`。
-- `/`、`n`、`u`、Ctrl+R。
+- `i/a/o`、`I/A/O`（行首/行尾/上方插行）、Esc。
+- `h/j/k/l`、`0/$`、`w/b`、`H/L`（屏幕首/末行）。
+- 数字前缀：`5j` 下移 5 行、`3dd` 删 3 行、`2w` 跳 2 词、`5x` 连删 5 字符、
+  `33G` 跳第 33 行、`5rX` 连替换 5 个字符（上限 999）。
+- `x/dd/yy/p/dw/d$`、`r` 替换字符、`~` 反转大小写。
+- `/`、`n`、`N`（反向搜索）、`u`、Ctrl+R。
 - `:w`、`:q`、`:q!`、`:wq`、`:x`。
 
 ### 字体
@@ -820,9 +825,9 @@ make test-fd
 | `test-signals` | handler、mask、pending、sigreturn，17 项 |
 | `test-boot-shell` | 两种启动模式及恢复工具入口 |
 | `test-edit` | nano 编辑器，67 项 |
-| `test-vi` | vi 模式与行操作，28 项 |
+| `test-vi` | vi 模式与行操作，36 项 |
 | `test-asm` | 汇编器和 DEBUG，34 项 |
-| `test-cc` | C 编译器，41 项 |
+| `test-cc` | C 编译器，51 项 |
 | attached tests | 抢占调度和 Mario 界面 |
 | `test-user` | Ring 3 基础行为，36 项 |
 | `test-sched` | PCB 调度与键盘，15 项 |
@@ -883,13 +888,8 @@ python3 tools/run-attached-tests.py
 ├── tools/
 │   ├── test-*.py             # 无头回归测试
 │   └── run-attached-tests.py # 附着式测试
-├── docs/
-│   ├── MILESTONE_*.md        # 里程碑设计记录
-│   └── source/               # 逐文件源码解析文档
-├── note/
-│   ├── *.md                  # 开发踩坑记录
-│   └── *.png                 # 运行截图
 ├── assets/
+│   └── *.png                 # 运行截图
 ├── Makefile
 ├── ROADMAP.md
 ├── LEARNING_PLAN.md
@@ -997,42 +997,10 @@ make run
 
 `cc` 源文件上限约 16KB。可以拆分逻辑，但目前没有跨文件链接。
 
-## 源码逐文件文档
-
-完整源码解析集中在 [`docs/source/`](docs/source/README.md)，当前包含 184 份
-Markdown 文档，覆盖 33,744 行源码。每份文档包含文件职责、关键符号、易错点
-以及源文件逐行解析。
-
-重新生成：
-
-```bash
-make docs
-```
-
 ## 开发记录
 
-关键设计文档：
-
-- [文档索引与当前状态](docs/NEXT_SESSION.md)
-- [虚拟内存](docs/MILESTONE_13_VM.md)
-- [exec 与文件加载](docs/MILESTONE_14_EXEC.md)
-- [进程、ELF 与 waitpid](docs/MILESTONE_15_PROCESS_ELF.md)
-- [用户 Shell](docs/MILESTONE_20_USER_SHELL.md)
-- [作业控制](docs/MILESTONE_21_JOBS.md)
-- [停止与恢复](docs/MILESTONE_22_STOP_RESUME.md)
-- [磁盘文件系统](docs/MILESTONE_23_DISK_FS.md)
-- [文件系统 V2](docs/MILESTONE_24_FS_V2.md)
-- [崩溃一致性](docs/MILESTONE_25_CRASH_CONSISTENCY.md)
-- [用户态信号](docs/MILESTONE_26_SIGNALS.md)
-- [Shell 2.0](docs/MILESTONE_27_SHELL_V2.md)
-- [Shell 3.0](docs/MILESTONE_28_SHELL_V3.md)
-- [errno 与脚本状态](docs/MILESTONE_29_ERRORS.md)
-- [vi 编辑器](docs/MILESTONE_30_VI.md)
-- [汇编器与 DEBUG](docs/MILESTONE_31_ASSEMBLY_DEBUG.md)
-- [真实单步与断点](docs/MILESTONE_32_REAL_DEBUG.md)
-- [实用 Shell 命令](docs/MILESTONE_33_SHELL_UTILITIES.md)
-
-更多开发踩坑记录和截图位于 [`note/`](note/)。
+各里程碑的设计记录、踩坑与修复过程以本地开发笔记形式维护，不随仓库分发。
+运行截图见上方[截图](#截图)一节。
 
 ## 项目历程
 
@@ -1076,23 +1044,23 @@ make docs
 
 | 用户 Shell | 内核恢复 Shell |
 |---|---|
-| <img src="note/splash-shell.png" width="360" alt="Ring 3 用户 Shell"/> | <img src="note/recovery-shell.png" width="360" alt="内核恢复 Shell"/> |
+| <img src="assets/splash-shell.png" width="360" alt="Ring 3 用户 Shell"/> | <img src="assets/recovery-shell.png" width="360" alt="内核恢复 Shell"/> |
 
 | 文件系统 | 编辑器 |
 |---|---|
-| <img src="note/shell-fs.png" width="360" alt="文件系统操作"/> | <img src="note/editor.png" width="360" alt="内置编辑器"/> |
+| <img src="assets/shell-fs.png" width="360" alt="文件系统操作"/> | <img src="assets/editor.png" width="360" alt="内置编辑器"/> |
 
 | C 编译运行 | 页错误现场 |
 |---|---|
-| <img src="note/cc-demo.png" width="360" alt="C 编译运行"/> | <img src="note/ring3-crash.png" width="360" alt="页错误现场"/> |
+| <img src="assets/cc-demo.png" width="360" alt="C 编译运行"/> | <img src="assets/ring3-crash.png" width="360" alt="页错误现场"/> |
 
 | fork 地址空间 | 进程表 |
 |---|---|
-| <img src="note/proc-forkdemo.png" width="360" alt="fork 地址空间"/> | <img src="note/proc-ps.png" width="360" alt="进程表"/> |
+| <img src="assets/proc-forkdemo.png" width="360" alt="fork 地址空间"/> | <img src="assets/proc-ps.png" width="360" alt="进程表"/> |
 
 | Mario 标题 | Mario 游戏 |
 |---|---|
-| <img src="note/mario-title.png" width="360" alt="Mario 标题"/> | <img src="note/mario.png" width="360" alt="Mario 游戏"/> |
+| <img src="assets/mario-title.png" width="360" alt="Mario 标题"/> | <img src="assets/mario.png" width="360" alt="Mario 游戏"/> |
 
 ## 致谢
 

@@ -24,3 +24,7 @@ Thumbs.db
 tools/generate-source-docs.py
 docs/source/
 __pycache__/
+
+# 文档体系（里程碑设计记录/交接/开发笔记）：仅本地保留，不随仓库分发
+docs/
+note/
